@@ -4,6 +4,7 @@
 #include <functional>
 
 #include "SIMD.h"
+#include <bit>
 
 namespace swr {
 

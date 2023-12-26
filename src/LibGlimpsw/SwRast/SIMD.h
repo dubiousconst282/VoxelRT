@@ -4,9 +4,10 @@
 
 #include <cassert>
 #include <cstdint>
+#include <bit>
 #include <glm/mat4x4.hpp>
 
-namespace swr {
+namespace swr::simd {
 
 struct VInt {
     static const uint32_t Length = sizeof(__m512i) / sizeof(int32_t);
@@ -136,7 +137,7 @@ inline VFloat4 operator-(VFloat4 a, VFloat4 b) { return { a.x - b.x, a.y - b.y, 
 inline VFloat4 operator*(VFloat4 a, VFloat4 b) { return { a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w }; }
 inline VFloat4 operator/(VFloat4 a, VFloat4 b) { return { a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w }; }
 
-namespace simd {
+// Math ops
 
 inline VInt round2i(VFloat x) { return _mm512_cvtps_epi32(x.reg); }
 inline VInt trunc2i(VFloat x) { return _mm512_cvttps_epi32(x.reg); }
@@ -322,7 +323,13 @@ inline VFloat4 PerspectiveDiv(const VFloat4& v) {
     return { v.x * rw, v.y * rw, v.z * rw, rw };
 }
 
-};  // namespace simd
+};  // namespace swr::simd
+
+// Miscellaneous
+namespace swr {
+
+using simd::VInt, simd::VFloat, simd::VMask;
+using simd::VFloat2, simd::VFloat3, simd::VFloat4;
 
 template<typename T>
 struct DeleteAligned {
@@ -337,5 +344,22 @@ AlignedBuffer<T> alloc_buffer(size_t count, size_t align = 64) {
     T* ptr = (T*)_mm_malloc(count * sizeof(T), align);
     return AlignedBuffer<T>(ptr);
 }
+
+class BitIter {
+    uint32_t _mask;
+
+public:
+    BitIter(uint32_t mask) : _mask(mask) {}
+
+    BitIter& operator++() {
+        _mask &= (_mask - 1);
+        return *this;
+    }
+    uint32_t operator*() const { return (uint32_t)std::countr_zero(_mask); }
+    friend bool operator!=(const BitIter& a, const BitIter& b) { return a._mask != b._mask; }
+
+    BitIter begin() const { return *this; }
+    BitIter end() const { return BitIter(0); }
+};
 
 }; // namespace swr

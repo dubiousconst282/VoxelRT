@@ -3,8 +3,8 @@
 #include <vector>
 #include <filesystem>
 
-#include "SwRast.h"
-#include "Texture.h"
+#include <SwRast/Rasterizer.h>
+#include <SwRast/Texture.h>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -14,13 +14,14 @@
 #include <imgui_impl_opengl3.h>
 #include <ImGuizmo.h>
 
-#include "Camera.h"
+#include <Common/Camera.h>
+#include <Common/Scene.h>
+#include <OGL/QuickGL.h>
 
-#include "Scene.h"
-#include "QuickGL.h"
-#include "RendererShaders.h"
+#include "Rendering/DepthPyramid.h"
+#include "Rendering/RendererShaders.h"
 
-class SwRenderer {
+class ModelRenderer {
     std::shared_ptr<swr::Framebuffer> _fb;
     std::shared_ptr<swr::Framebuffer> _prevFb;
     std::unique_ptr<swr::Rasterizer> _rast;
@@ -28,7 +29,7 @@ class SwRenderer {
     std::unique_ptr<renderer::DefaultShader> _shader;
 
     Camera _cam;
-    scene::DepthPyramid _depthPyramid;
+    DepthPyramid _depthPyramid;
 
     std::unique_ptr<ogl::Texture2D> _frontTex;
     std::unique_ptr<ogl::Texture2D> _shadowDebugTex;
@@ -47,7 +48,7 @@ class SwRenderer {
     renderer::SSAO _ssao;
 
 public:
-    SwRenderer() {
+    ModelRenderer() {
         std::vector<std::string_view> modelExts = { ".gltf", ".glb", ".fbx", ".obj" };
         SearchFiles("assets/", _scenePaths, modelExts);
         SearchFiles("logs/assets/", _scenePaths, modelExts);  // git ignored
@@ -218,7 +219,7 @@ public:
             for (uint32_t meshId : node.Meshes) {
                 scene::Mesh& mesh = _scene->Meshes[meshId];
 
-                if (s_HzbOcclusion && !_depthPyramid.IsVisible(mesh, modelMat)) continue;
+                if (s_HzbOcclusion && !_depthPyramid.IsVisible(mesh.Bounds, modelMat)) continue;
 
                 _shader->ProjMat = projViewMat * modelMat;
                 _shader->ModelMat = modelMat;
@@ -414,7 +415,7 @@ int main(int argc, char** args) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init();
 
-    SwRenderer renderer;
+    ModelRenderer renderer;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();

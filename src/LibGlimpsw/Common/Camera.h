@@ -1,13 +1,12 @@
 #pragma once
 
-#include "SwRast.h"
 #include <glm/gtx/euler_angles.hpp>
 
 struct Camera {
     enum class InputMode { FirstPerson, Arcball };
 
     glm::vec3 Position;
-    glm::vec2 Euler; //yaw, pitch
+    glm::vec2 Euler;  // yaw, pitch
     float ArcDistance = 5.0f;
 
     InputMode Mode = InputMode::FirstPerson;
@@ -20,7 +19,6 @@ struct Camera {
     // Smoothed values
     glm::vec3 _ViewPosition;
     glm::quat _ViewRotation;
-    float _ViewArcDistance = 5.0f;
 
     glm::mat4 GetViewMatrix() {
         if (Mode == InputMode::Arcball) {
@@ -31,10 +29,11 @@ struct Camera {
     glm::mat4 GetProjMatrix() { return glm::perspective(glm::radians(FieldOfView), AspectRatio, NearZ, FarZ); }
 
     void Update() {
+        // TODO: decouple Camera from ImGui
         ImGuiIO& io = ImGui::GetIO();
         float sensitivity = 0.008f;
         float speed = io.DeltaTime * MoveSpeed;
-        float pitchRange = glm::pi<float>() / 2.01f; // a bit less than 90deg to prevent issues with LookAt()
+        float pitchRange = glm::pi<float>() / 2.01f;         // a bit less than 90deg to prevent issues with LookAt()
         float blend = 1.0f - powf(0.7f, io.DeltaTime * 60);  // https://gamedev.stackexchange.com/a/149106
         glm::quat destRotation = glm::eulerAngleXY(-Euler.y, -Euler.x);
 
@@ -51,7 +50,7 @@ struct Camera {
 
             if (Mode == InputMode::FirstPerson) {
                 glm::vec3 mv(0.0f);
-                
+
                 if (ImGui::IsKeyDown(ImGuiKey_W)) mv.z--;
                 if (ImGui::IsKeyDown(ImGuiKey_S)) mv.z++;
                 if (ImGui::IsKeyDown(ImGuiKey_A)) mv.x--;
@@ -64,8 +63,6 @@ struct Camera {
                 if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
                     ArcDistance = std::clamp(ArcDistance - io.MouseWheel * 0.5f, NearZ, FarZ * 0.8f);
                 }
-                _ViewArcDistance = glm::lerp(_ViewArcDistance, ArcDistance, blend);
-
                 Position = glm::vec3(0, 0, ArcDistance) * destRotation;
                 // TODO: implement panning for arcball camera
             }
@@ -77,7 +74,7 @@ struct Camera {
     }
 
     static float NormalizeRadians(float ang) {
-        const float tau = 6.28318530717958f;
+        const float tau = glm::two_pi<float>();
         float r = glm::round(ang * (1.0f / tau));
         return ang - (r * tau);
     }

@@ -4,6 +4,7 @@
 #include <memory>
 #include <string_view>
 #include <vector>
+#include <bit>
 
 #include "SIMD.h"
 #include "ProfilerStats.h"

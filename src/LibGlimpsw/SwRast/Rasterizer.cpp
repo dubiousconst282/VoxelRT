@@ -4,8 +4,7 @@
 #include <execution>
 #include <ranges>
 
-#include "Misc.h"
-#include "SwRast.h"
+#include "Rasterizer.h"
 
 namespace swr {
 

@@ -1,4 +1,4 @@
-#include "SwRast.h"
+#include "Rasterizer.h"
 
 namespace swr {
 

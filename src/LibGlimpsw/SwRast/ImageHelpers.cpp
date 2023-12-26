@@ -1,4 +1,4 @@
-#include "SwRast.h"
+#include "Rasterizer.h"
 #include "Texture.h"
 
 #define STB_IMAGE_IMPLEMENTATION
