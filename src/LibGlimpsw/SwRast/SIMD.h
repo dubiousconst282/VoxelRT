@@ -131,6 +131,8 @@ inline VFloat3 operator+(VFloat3 a, VFloat3 b) { return { a.x + b.x, a.y + b.y, 
 inline VFloat3 operator-(VFloat3 a, VFloat3 b) { return { a.x - b.x, a.y - b.y, a.z - b.z }; }
 inline VFloat3 operator*(VFloat3 a, VFloat3 b) { return { a.x * b.x, a.y * b.y, a.z * b.z }; }
 inline VFloat3 operator/(VFloat3 a, VFloat3 b) { return { a.x / b.x, a.y / b.y, a.z / b.z }; }
+inline VFloat3 operator+=(VFloat3& a, VFloat3 b) { return a = (a + b); }
+inline VFloat3 operator*=(VFloat3& a, VFloat3 b) { return a = (a * b); }
 
 inline VFloat4 operator+(VFloat4 a, VFloat4 b) { return { a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w }; }
 inline VFloat4 operator-(VFloat4 a, VFloat4 b) { return { a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w }; }
@@ -141,7 +143,11 @@ inline VFloat4 operator/(VFloat4 a, VFloat4 b) { return { a.x / b.x, a.y / b.y, 
 
 inline VInt round2i(VFloat x) { return _mm512_cvtps_epi32(x.reg); }
 inline VInt trunc2i(VFloat x) { return _mm512_cvttps_epi32(x.reg); }
+inline VInt floor2i(VFloat x) { return _mm512_cvt_roundps_epi32(x.reg, _MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC); }
 inline VFloat conv2f(VInt x) { return _mm512_cvtepi32_ps(x.reg); }
+
+inline VFloat floor(VFloat x) { return _mm512_floor_ps(x); }
+inline VFloat fract(VFloat x) { return _mm512_reduce_ps(x, _MM_FROUND_TO_NEG_INF); }
 
 inline VInt re2i(VFloat x) { return _mm512_castps_si512(x); }  // reinterpret float bits to int
 inline VFloat re2f(VInt x) { return _mm512_castsi512_ps(x); }  // reinterpret int to float bits
@@ -175,6 +181,10 @@ inline VInt abs(VInt x) { return _mm512_abs_epi32(x); }
 // lanewise: cond ? a : b
 inline VFloat csel(VMask cond, VFloat a, VFloat b) { return _mm512_mask_mov_ps(b, cond, a); }
 inline VInt csel(VMask cond, VInt a, VInt b) { return _mm512_mask_mov_epi32(b, cond, a); }
+
+// if (cond) dest = x
+inline void set_if(VMask cond, VFloat& dest, VFloat x) { dest = csel(cond, x, dest); }
+inline void set_if(VMask cond, VInt& dest, VInt x) { dest = csel(cond, x, dest); }
 
 inline bool any(VMask cond) { return cond != 0; }
 inline bool all(VMask cond) { return cond == 0xFFFF; }
@@ -249,6 +259,21 @@ inline void sincos(VFloat a, VFloat& rs, VFloat& rc) {
     VFloat qs = re2f(q << 31);
     rs = u ^ qs;  // if ((q & 1) != 0) u = -u;
     rc = sqrt14(1.0f - rs * rs) ^ qs;
+}
+
+// Approximates sin(2πx) and cos(2πx)
+// Max relative error: sin=0.00721228 cos=0.000597186
+// https://publik-void.github.io/sin-cos-approximations
+inline void approx_sincos_2pi(VFloat x, VFloat& s, VFloat& c) {
+    // Reduce range to -1/4..1/4
+    //   x = x + 0.25
+    //   x = abs(x - floor(x + 0.5)) - 0.25
+    VFloat xr = _mm512_reduce_ps(x + 0.25f, _MM_FROUND_TO_NEAREST_INT);
+    VFloat x1 = abs(xr) - 0.25f;
+    VFloat x2 = x1 * x1;
+
+    s = x1 * fma(x2, -36.26749369f, 6.23786927f);
+    c = fma(x2, fma(x2, 57.34151006f, -19.56474772f), 0.99940322f) | (xr & -0.0f);
 }
 
 // https://github.com/romeric/fastapprox/blob/master/fastapprox/src/fastlog.h
@@ -343,6 +368,76 @@ public:
 
     BitIter begin() const { return *this; }
     BitIter end() const { return BitIter(0); }
+};
+
+// Parallel PRNG
+// https://prng.di.unimi.it/xoroshiro64star.c
+struct VRandom {
+    VRandom(uint64_t seed) {
+        for (uint32_t i = 0; i < sizeof(s); i += 8) {
+            uint64_t state = SplitMix64(seed);
+            memcpy((uint8_t*)&s + i, &state, 8);
+        }
+    }
+
+    // Returns a vector of random uniformly distributed floats in range [0..1)
+    VFloat NextUnsignedFloat() {
+        VFloat frac = re2f(shrl(NextU32(), 9));
+        return (1.0f | frac) - 1.0f;
+    }
+
+    // Returns a vector of random uniformly distributed floats in range [-1..1)
+    VFloat NextSignedFloat() {
+        VFloat frac = re2f(shrl(NextU32(), 9));
+        return (2.0f | frac) - 3.0f;
+    }
+
+    // Returns a random spherical direction
+    VFloat3 NextDirection() {
+        // azimuth = rand() * PI * 2
+        // y = rand() * 2 - 1
+        // sin_elevation = sqrt(1 - y * y)
+        // x = sin_elevation * cos(azimuth);
+        // z = sin_elevation * sin(azimuth);
+        VInt rand = NextU32();
+
+        const float randScale = (1.0f / (1 << 15));
+        VFloat y = conv2f(rand >> 16) * randScale;  // signed
+        VFloat a = conv2f(rand & 0x7FFF) * randScale;
+
+        VFloat x, z;
+        approx_sincos_2pi(a, x, z);
+        VFloat sy = sqrt14(1.0f - y * y);
+
+        return { x * sy, y, z * sy };
+    }
+
+    VFloat3 NextHemisphereDirection(const VFloat3& normal) {
+        VFloat3 dir = NextDirection();
+        VFloat sign = dot(dir, normal) & -0.0f;
+        return { dir.x ^ sign, dir.y ^ sign, dir.z ^ sign };
+    }
+
+    VInt NextU32() {
+        VInt s0 = s[0];
+        VInt s1 = s[1] ^ s0;
+        // VInt result = s0 * (int32_t)0x9E3779BB;
+
+        s[0] = _mm512_rol_epi32(s0, 26) ^ s1 ^ (s1 << 9);  // a, b
+        s[1] = _mm512_rol_epi32(s1, 13);                   // c
+
+        return s0;
+    }
+
+private:
+    VInt s[2];
+
+    static uint64_t SplitMix64(uint64_t& x) {
+        uint64_t z = (x += 0x9e3779b97f4a7c15);
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111eb;
+        return z ^ (z >> 31);
+    }
 };
 
 }; // namespace swr

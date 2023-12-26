@@ -23,3 +23,4 @@ add_compile_options("-march=native" "-ffast-math" "-Wno-unused" "-Wsign-conversi
 
 add_subdirectory("LibGlimpsw/")
 add_subdirectory("CpuModelViewer/")
+add_subdirectory("CpuVoxelRT/")
