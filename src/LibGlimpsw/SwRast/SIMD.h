@@ -281,28 +281,6 @@ inline VFloat dFdy(VFloat p) {
     return _mm512_sub_ps(b, a);
 }
 
-inline VInt PackRGBA(const VFloat4& color) {
-    auto ri = _mm512_cvtps_epi32(color.x * 255.0f);
-    auto gi = _mm512_cvtps_epi32(color.y * 255.0f);
-    auto bi = _mm512_cvtps_epi32(color.z * 255.0f);
-    auto ai = _mm512_cvtps_epi32(color.w * 255.0f);
-
-    auto rg = _mm512_packs_epi32(ri, gi);
-    auto ba = _mm512_packs_epi32(bi, ai);
-    auto cb = _mm512_packus_epi16(rg, ba);
-
-    auto shuffMask = _mm512_setr4_epi32(0x0C'08'04'00, 0x0D'09'05'01, 0x0E'0A'06'02, 0x0F'0B'07'03);  // 0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15
-    return _mm512_shuffle_epi8(cb, shuffMask);
-}
-inline VFloat4 UnpackRGBA(VInt packed) {
-    return {
-        conv2f((packed >> 0) & 255) * (1.0f / 255),
-        conv2f((packed >> 8) & 255) * (1.0f / 255),
-        conv2f((packed >> 16) & 255) * (1.0f / 255),
-        conv2f((packed >> 24) & 255) * (1.0f / 255),
-    };
-}
-
 inline VFloat4 TransformVector(const glm::mat4& m, const VFloat4& v) {
     return {
         m[0][0] * v.x + m[1][0] * v.y + m[2][0] * v.z + m[3][0] * v.w,
@@ -330,6 +308,11 @@ namespace swr {
 
 using simd::VInt, simd::VFloat, simd::VMask;
 using simd::VFloat2, simd::VFloat3, simd::VFloat4;
+
+// Pixel offsets within a 4x4 tile/fragment
+//   X: [0,1,2,3, 0,1,2,3, ...]
+//   Y: [0,0,0,0, 1,1,1,1, ...]
+inline const VInt FragPixelOffsetsX = VInt::ramp() & 3, FragPixelOffsetsY = VInt::ramp() >> 2;
 
 template<typename T>
 struct DeleteAligned {

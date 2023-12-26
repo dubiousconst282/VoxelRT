@@ -78,7 +78,7 @@ struct DefaultShader {
         VFloat roughness = 0.5f;
 
         if (MaterialTex->NumLayers >= 2) [[likely]] {
-            VFloat4 SN = UnpackRGBA(MaterialTex->Sample<SurfaceSampler>(u, v, 1));
+            VFloat4 SN = swr::pixfmt::RGBA8u::Unpack(MaterialTex->Sample<SurfaceSampler>(u, v, 1));
             VFloat3 T = vars.GetSmooth<VFloat3>(5);
 
             // Gram-schmidt process (produces higher-quality normal mapping on large meshes)
@@ -147,7 +147,7 @@ struct DefaultShader {
 
             if (!all(skyMask)) {
                 // Unpack G-Buffer
-                VFloat4 G1 = UnpackRGBA(VInt::load(&fb.ColorBuffer[tileOffset]));
+                VFloat4 G1 = swr::pixfmt::RGBA8u::Unpack(VInt::load(&fb.ColorBuffer[tileOffset]));
                 VInt G2r = VInt::load(fb.GetAttachmentBuffer<uint32_t>(0, tileOffset));
                 VMask emissiveMask = (G2r & 2) != 0;
                 VFloat4 G2 = utils::SignedOctDecode(G2r);
@@ -215,7 +215,7 @@ struct DefaultShader {
                     VInt G3r = VInt::load(fb.GetAttachmentBuffer<uint32_t>(4, tileOffset));
                     G3r = csel(emissiveMask, G3r, 0);
 
-                    VFloat3 emissiveColor = VFloat3(UnpackRGBA(G3r));
+                    VFloat3 emissiveColor = VFloat3(swr::pixfmt::RGBA8u::Unpack(G3r));
                     finalColor = finalColor + utils::SrgbToLinear(emissiveColor);
                 }
             }
@@ -231,7 +231,7 @@ struct DefaultShader {
 
             finalColor = utils::Tonemap_Unreal(finalColor * Exposure);
 
-            VInt packedColor = PackRGBA({ finalColor, 1.0f });
+            VInt packedColor = swr::pixfmt::RGBA8u::Pack({ finalColor, 1.0f });
             packedColor.store(&fb.ColorBuffer[tileOffset]);
 
             if (EnableTAA && FrameNo != 0) {
@@ -275,10 +275,10 @@ struct DefaultShader {
                 }
                 prevColor = _mm512_min_epu8(_mm512_max_epu8(prevColor, minColor), maxColor);
 
-                //VFloat3 currColorF = VFloat3(UnpackRGBA(currColor));
-                //VFloat3 prevColorF = VFloat3(UnpackRGBA(prevColor));
+                //VFloat3 currColorF = VFloat3(swr::pixfmt::RGBA8u::Unpack(currColor));
+                //VFloat3 prevColorF = VFloat3(swr::pixfmt::RGBA8u::Unpack(prevColor));
                 //VFloat3 resolvedColor = prevColorF + (currColorF - prevColorF) * 0.1f;
-                //VInt finalColor = PackRGBA({ resolvedColor, 1.0f });
+                //VInt finalColor = swr::pixfmt::RGBA8u::Pack({ resolvedColor, 1.0f });
 
                 // Fixed-point is a smidge faster
                 VInt alpha = _mm512_set1_epi16(0.1f * ((1 << 15) - 1));
@@ -324,7 +324,7 @@ struct DefaultShader {
 
             VFloat3 finalColor = 0.0f;
 
-            VFloat4 G1 = UnpackRGBA(VInt::load(&fb.ColorBuffer[tileOffset]));
+            VFloat4 G1 = swr::pixfmt::RGBA8u::Unpack(VInt::load(&fb.ColorBuffer[tileOffset]));
             VInt G2r = VInt::load(fb.GetAttachmentBuffer<uint32_t>(0, tileOffset));
             VFloat4 G2 = utils::SignedOctDecode(G2r);
 
@@ -341,7 +341,7 @@ struct DefaultShader {
             }
 
             uint32_t backgroundRGB = (x / 4 + y / 4) % 2 ? 0xFF'A0A0A0 : 0xFF'FFFFFF;
-            VInt finalRGB = csel(skyMask, (int32_t)backgroundRGB, PackRGBA({ finalColor, 1.0f }));
+            VInt finalRGB = csel(skyMask, (int32_t)backgroundRGB, swr::pixfmt::RGBA8u::Pack({ finalColor, 1.0f }));
 
             finalRGB.store(&fb.ColorBuffer[tileOffset]);
         });

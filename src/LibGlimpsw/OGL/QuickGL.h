@@ -75,13 +75,13 @@ struct Texture2D : public Object {
     GLuint Handle;
     uint32_t Width, Height, MipLevels;
 
-    Texture2D(uint32_t width, uint32_t height, uint32_t mipLevels, GLuint fmt) {
+    Texture2D(uint32_t width, uint32_t height, uint32_t mipLevels, GLuint internalFmt) {
         Width = width;
         Height = height;
         MipLevels = mipLevels;
 
         glCreateTextures(GL_TEXTURE_2D, 1, &Handle);
-        glTextureStorage2D(Handle, mipLevels, fmt, width, height);
+        glTextureStorage2D(Handle, mipLevels, internalFmt, width, height);
 
         SetMipMode(GL_LINEAR, GL_LINEAR_MIPMAP_LINEAR);
         SetWrapMode(GL_REPEAT);
@@ -97,10 +97,10 @@ struct Texture2D : public Object {
         glTextureParameteri(Handle, GL_TEXTURE_WRAP_T, mode);
     }
 
-    void SetPixels(uint32_t* pixels, uint32_t stride) {
+    void SetPixels(GLenum format, GLenum type, const void* pixels, uint32_t stride) {
         glPixelStorei(GL_UNPACK_ROW_LENGTH, stride);
 
-        glTextureSubImage2D(Handle, 0, 0, 0, Width, Height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        glTextureSubImage2D(Handle, 0, 0, 0, Width, Height, format, type, pixels);
         glGenerateTextureMipmap(Handle);
 
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);

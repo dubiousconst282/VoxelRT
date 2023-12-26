@@ -261,7 +261,7 @@ public:
         STAT_TIME_END(Compose);
 
         _fb->GetPixels(_tempPixels.get(), _fb->Width);
-        _frontTex->SetPixels(_tempPixels.get(), _fb->Width);
+        _frontTex->SetPixels(GL_RGBA, GL_UNSIGNED_BYTE, _tempPixels.get(), _fb->Width);
 
         STAT_TIME_END(Frame);
 
@@ -323,7 +323,7 @@ public:
                     buf[i] = c * 0x01'01'01 | 0xFF'000000;
                 }
             }
-            _shadowDebugTex->SetPixels(buf.get(), _shadowFb->Width);
+            _shadowDebugTex->SetPixels(GL_RGBA, GL_UNSIGNED_BYTE, buf.get(), _shadowFb->Width);
 
             ImGui::Image((ImTextureID)(uintptr_t)_shadowDebugTex->Handle, ImGui::GetContentRegionAvail(), ImVec2(0, 1), ImVec2(1, 0));
         }
@@ -348,7 +348,7 @@ public:
                     buf[x + y * w] = c * 0x01'01'01 | 0xFF'000000;
                 }
             }
-            _shadowDebugTex->SetPixels(buf.get(), w);
+            _shadowDebugTex->SetPixels(GL_RGBA, GL_UNSIGNED_BYTE, buf.get(), w);
 
             ImGui::Image((ImTextureID)(uintptr_t)_shadowDebugTex->Handle, ImGui::GetContentRegionAvail(), ImVec2(0, 1), ImVec2(1, 0));
         }

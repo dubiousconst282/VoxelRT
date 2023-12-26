@@ -11,11 +11,6 @@
 
 namespace swr {
 
-// Pixel offsets within a 4x4 tile/fragment
-//   X: [0,1,2,3, 0,1,2,3, ...]
-//   Y: [0,0,0,0, 1,1,1,1, ...]
-inline const VInt FragPixelOffsetsX = VInt::ramp() & 3, FragPixelOffsetsY = VInt::ramp() >> 2;
-
 struct Framebuffer {
     //Data is stored in tiles of 4x4 so that rasterizer writes are cheap.
     static const uint32_t TileSize = 4, TileShift = 2, TileMask = TileSize - 1, TileNumPixels = TileSize * TileSize;

@@ -7,6 +7,8 @@ add_library(
     SwRast/ImageHelpers.cpp
 
     Common/Scene.cpp
+
+    OGL/ShaderLib.cpp
 )
 target_include_directories(
     libglimpsw PUBLIC

@@ -16,11 +16,11 @@ concept IsAnyOf = (std::same_as<T, U> || ...);
 // Represents a SIMD pixel packet in storage form, where the unpacked form consists of floats.
 // NOTE: Packed size is currently restricted to 32-bits as that's the only element size texture sampling supports gathering.
 template<typename T>
-concept Texel = requires(const T& s, const T::UnpackedTy& u) {
+concept Texel = requires(const T& s, const T::UnpackedTy& u, VInt p) {
     IsAnyOf<typename T::UnpackedTy, VInt, VFloat, VFloat2, VFloat3, VFloat4>;
     IsAnyOf<typename T::LerpedTy, VInt, typename T::UnpackedTy>;
-    { s.Unpack() } -> std::same_as<typename T::UnpackedTy>;
-    { T::Pack(u) } -> std::same_as<T>;
+    { T::Unpack(p) } -> std::same_as<typename T::UnpackedTy>;
+    { T::Pack(u) } -> std::same_as<VInt>;
 };
 
 // RGBA x 8-bit unorm
@@ -28,10 +28,54 @@ struct RGBA8u {
     using UnpackedTy = VFloat4;
     using LerpedTy = VInt;
 
-    VInt Packed;
+    static VFloat4 Unpack(VInt packed) {
+        const float scale = 1.0f / 255;
+        return {
+            simd::conv2f((packed >> 0) & 255) * scale,
+            simd::conv2f((packed >> 8) & 255) * scale,
+            simd::conv2f((packed >> 16) & 255) * scale,
+            simd::conv2f((packed >> 24) & 255) * scale,
+        };
+    }
+    static VInt Pack(const VFloat4& value) {
+        auto ri = _mm512_cvtps_epi32(value.x * 255.0f);
+        auto gi = _mm512_cvtps_epi32(value.y * 255.0f);
+        auto bi = _mm512_cvtps_epi32(value.z * 255.0f);
+        auto ai = _mm512_cvtps_epi32(value.w * 255.0f);
 
-    VFloat4 Unpack() const { return simd::UnpackRGBA(Packed); }
-    static RGBA8u Pack(const VFloat4& value) { return { simd::PackRGBA(value) }; }
+        auto rg = _mm512_packs_epi32(ri, gi);
+        auto ba = _mm512_packs_epi32(bi, ai);
+        auto cb = _mm512_packus_epi16(rg, ba);
+
+        const auto shuffMask = _mm_setr_epi8(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
+        return _mm512_shuffle_epi8(cb, _mm512_broadcast_i32x4(shuffMask));
+    }
+};
+
+// RGB x 10-bit unorm + opaque x 2-bit
+struct RGB10u {
+    using UnpackedTy = VFloat3;
+    using LerpedTy = UnpackedTy;
+
+    static VFloat3 Unpack(VInt packed) {
+        const float scale = 1.0f / 1023;
+        return {
+            simd::conv2f(packed >> 22 & 1023) * scale,
+            simd::conv2f(packed >> 12 & 1023) * scale,
+            simd::conv2f(packed >> 2 & 1023) * scale,
+        };
+    }
+    static VInt Pack(const VFloat3& value) {
+        VInt ri = simd::round2i(value.x * 1023.0f);
+        VInt gi = simd::round2i(value.y * 1023.0f);
+        VInt bi = simd::round2i(value.z * 1023.0f);
+
+        ri = simd::min(simd::max(ri, 0), 1023);
+        gi = simd::min(simd::max(gi, 0), 1023);
+        bi = simd::min(simd::max(bi, 0), 1023);
+
+        return ri << 22 | gi << 12 | bi << 2 | 0b11;
+    }
 };
 
 // R x 32-bit float
@@ -39,10 +83,8 @@ struct R32f {
     using UnpackedTy = VFloat;
     using LerpedTy = UnpackedTy;
 
-    VFloat Packed;
-
-    VFloat Unpack() const { return Packed; }
-    static R32f Pack(const VFloat& value) { return { value }; }
+    static VFloat Unpack(VInt packed) { return simd::re2f(packed); }
+    static VInt Pack(const VFloat& value) { return simd::re2i(value); }
 };
 
 // RG x 16-bit float
@@ -50,18 +92,16 @@ struct RG16f {
     using UnpackedTy = VFloat2;
     using LerpedTy = UnpackedTy;
 
-    VInt Packed;
-
-    UnpackedTy Unpack() const {
+    static VFloat2 Unpack(VInt packed) {
         return {
-            _mm512_cvtph_ps(_mm512_cvtepi32_epi16(Packed)),
-            _mm512_cvtph_ps(_mm512_cvtepi32_epi16(Packed >> 16)),
+            _mm512_cvtph_ps(_mm512_cvtepi32_epi16(packed)),
+            _mm512_cvtph_ps(_mm512_cvtepi32_epi16(packed >> 16)),
         };
     }
-    static RG16f Pack(const UnpackedTy& value) {
+    static VInt Pack(const VFloat2& value) {
         VInt r = _mm512_cvtepi16_epi32(_mm512_cvtps_ph(value.x, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
         VInt g = _mm512_cvtepi16_epi32(_mm512_cvtps_ph(value.y, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
-        return { r | (g << 16) };
+        return r | (g << 16);
     }
 };
 
@@ -70,21 +110,18 @@ struct R11G11B10f {
     using UnpackedTy = VFloat3;
     using LerpedTy = UnpackedTy;
 
-    VInt Packed;
-
-    UnpackedTy Unpack() const {
+    static VFloat3 Unpack(VInt packed) {
         return {
-            UnpackF11(Packed >> 21),
-            UnpackF11(Packed >> 10),
-            UnpackF10(Packed >> 0),
+            UnpackF11(packed >> 21),
+            UnpackF11(packed >> 10),
+            UnpackF10(packed >> 0),
         };
     }
-    static R11G11B10f Pack(const UnpackedTy& value) {
-        return {
+    static VInt Pack(const VFloat3& value) {
+        return
             PackF11(value.x) << 21 |
             PackF11(value.y) << 10 |
-            PackF10(value.z),
-        };
+            PackF10(value.z);
     }
 
 private:
@@ -313,8 +350,6 @@ struct SamplerDesc {
 
 template<pixfmt::Texel Texel>
 struct Texture2D {
-    static_assert(sizeof(Texel) == sizeof(VInt));
-
     static const int LerpFracBits = 8;  // Number of fractional bits in pixel coords for bilinear interpolation
     static const int LerpFracMask = (1 << LerpFracBits) - 1;
 
@@ -373,8 +408,8 @@ struct Texture2D {
         }
     }
 
-    // Writes a 4x4 tile of texels to the texture buffer. Coords are in pixel space.
-    void WriteTile(Texel value, uint32_t x, uint32_t y, uint32_t layer = 0, uint32_t mipLevel = 0) {
+    // Writes a 4x4 tile of packed texels to the texture buffer. Coords are in pixel space.
+    void WriteTile(VInt packed, uint32_t x, uint32_t y, uint32_t layer = 0, uint32_t mipLevel = 0) {
         assert(x + 3 < Width && y + 3 < Height);
         assert(x % 4 == 0 && y % 4 == 0);
         assert(layer < NumLayers && mipLevel < MipLevels);
@@ -382,7 +417,6 @@ struct Texture2D {
         uint32_t* dst = &Data[(layer << LayerShift) + (uint32_t)_mipOffsets[mipLevel]];
         uint32_t stride = RowShift - mipLevel;
 
-        __m512i packed = value.Packed;
         _mm_storeu_epi32(&dst[x + ((y + 0) << stride)], _mm512_extracti32x4_epi32(packed, 0));
         _mm_storeu_epi32(&dst[x + ((y + 1) << stride)], _mm512_extracti32x4_epi32(packed, 1));
         _mm_storeu_epi32(&dst[x + ((y + 2) << stride)], _mm512_extracti32x4_epi32(packed, 2));
@@ -440,12 +474,12 @@ struct Texture2D {
         if (filter == FilterMode::Nearest) [[likely]] {
             ix = ix >> LerpFracBits;
             iy = iy >> LerpFracBits;
-            Texel res = GatherTexels<Texel>(offset + ix + (iy << stride));
+            VInt res = GatherTexels(offset + ix + (iy << stride));
 
             if constexpr (std::is_same<typename Texel::LerpedTy, VInt>()) {
-                return res.Packed;
+                return res;
             } else {
-                return res.Unpack();
+                return Texel::Unpack(res);
             }
         }
         if constexpr (IsCubeSample_) {
@@ -508,14 +542,14 @@ private:
 
             // Lerp 2 channels at the same time (RGBA -> R0B0, 0G0A)
             // Row 1
-            VInt colors00 = GatherTexels<VInt>(indices00);
-            VInt colors10 = GatherTexels<VInt>(indices10);
+            VInt colors00 = GatherTexels(indices00);
+            VInt colors10 = GatherTexels(indices10);
             VInt rbRow1 = simd::lerp16((colors00 >> 0) & 0x00FF00FF, (colors10 >> 0) & 0x00FF00FF, fx);
             VInt gaRow1 = simd::lerp16((colors00 >> 8) & 0x00FF00FF, (colors10 >> 8) & 0x00FF00FF, fx);
 
             // Row 2
-            VInt colors01 = GatherTexels<VInt>(indices00 + rowOffset);
-            VInt colors11 = GatherTexels<VInt>(indices10 + rowOffset);
+            VInt colors01 = GatherTexels(indices00 + rowOffset);
+            VInt colors11 = GatherTexels(indices10 + rowOffset);
             VInt rbRow2 = simd::lerp16((colors01 >> 0) & 0x00FF00FF, (colors11 >> 0) & 0x00FF00FF, fx);
             VInt gaRow2 = simd::lerp16((colors01 >> 8) & 0x00FF00FF, (colors11 >> 8) & 0x00FF00FF, fx);
 
@@ -531,12 +565,12 @@ private:
             VFloat fx = simd::conv2f(ixf & LerpFracMask) * fracScale;
             VFloat fy = simd::conv2f(iyf & LerpFracMask) * fracScale;
 
-            R colors00 = GatherTexels<Texel>(indices00).Unpack();
-            R colors10 = GatherTexels<Texel>(indices10).Unpack();
+            R colors00 = Texel::Unpack(GatherTexels(indices00));
+            R colors10 = Texel::Unpack(GatherTexels(indices10));
             R rowA = colors00 + (colors10 - colors00) * fx;
 
-            R colors01 = GatherTexels<Texel>(indices00 + rowOffset).Unpack();
-            R colors11 = GatherTexels<Texel>(indices10 + rowOffset).Unpack();
+            R colors01 = Texel::Unpack(GatherTexels(indices00 + rowOffset));
+            R colors11 = Texel::Unpack(GatherTexels(indices10 + rowOffset));
             R rowB = colors01 + (colors11 - colors01) * fx;
 
             return rowA + (rowB - rowA) * fy;
@@ -568,13 +602,11 @@ private:
         return rowA + (rowB - rowA) * fy;
     }
 
-    template<typename T>
-    T GatherTexels(VInt indices) const {
-        VInt v = VInt::gather<4>(Data.get(), indices);
-        return std::bit_cast<T>(v);
+    VInt GatherTexels(VInt indices) const {
+        return VInt::gather<4>(Data.get(), indices);
     }
     Texel::UnpackedTy GatherTexels(int32_t offset, uint32_t stride, VInt ix, VInt iy) const {
-        return GatherTexels<Texel>(offset + ix + (iy << stride)).Unpack();
+        return Texel::Unpack(GatherTexels(offset + ix + (iy << stride)));
     }
     Texel::UnpackedTy GatherTexelsNearCubeEdge(VInt offset, VInt stride, VInt mipLevel, VInt faceIdx, VInt ix, VInt iy) const {
         VInt scaleU = _maskU >> mipLevel, scaleV = _maskV >> mipLevel;
@@ -590,7 +622,7 @@ private:
             iy = simd::min(simd::max(iy, 0), scaleV);
             offset += simd::csel(fallMask, (adjFace - faceIdx) << LayerShift, 0);
         }
-        return GatherTexels<Texel>(offset + ix + (iy << stride)).Unpack();
+        return Texel::Unpack(GatherTexels(offset + ix + (iy << stride)));
     }
 
     void GenerateMip(uint32_t level, uint32_t layer) {
