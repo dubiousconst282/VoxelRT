@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
 
-  <Type Name="swr::VInt">
+  <Type Name="swr::simd::VInt">
     <DisplayString>{{[ {(int)reg[0]}, {(int)(reg[0] >> 32)}, {(int)reg[1]}, {(int)(reg[1] >> 32)}, ... ]}}</DisplayString>
     <Expand>
       <ArrayItems>
@@ -11,7 +11,7 @@
     </Expand>
   </Type>
 
-  <Type Name="swr::VFloat">
+  <Type Name="swr::simd::VFloat">
     <DisplayString>{{[ {reg[0]}, {reg[1]}, {reg[2]}, {reg[3]}, ... ]}}</DisplayString>
     <Expand>
       <ArrayItems>

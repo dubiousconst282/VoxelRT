@@ -2,6 +2,7 @@ add_executable(
     CpuVoxelRT
 
     Main.cpp
+    Voxelize.cpp
 )
 
 target_link_libraries(CpuVoxelRT PRIVATE

@@ -55,7 +55,10 @@ public:
 
     Model(std::string_view path);
 
-    void Traverse(std::function<bool(Node&, const glm::mat4&)> visitor, const glm::mat4& _parentMat = glm::mat4(1.0f), Node* _node = nullptr) {
+    void Traverse(
+        std::function<bool(const Node&, const glm::mat4&)> visitor, 
+        const glm::mat4& _parentMat = glm::mat4(1.0f), const Node* _node = nullptr
+    ) const {
         if (_node == nullptr) {
             _node = &RootNode;
         }
@@ -65,7 +68,7 @@ public:
         if (_node->Meshes.size() > 0 && !visitor(*_node, localMat)) {
             return;
         }
-        for (Node& child : _node->Children) {
+        for (const Node& child : _node->Children) {
             Traverse(visitor, localMat, &child);
         }
     }

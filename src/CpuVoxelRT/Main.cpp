@@ -17,6 +17,7 @@
 #include <Common/Camera.h>
 #include <OGL/QuickGL.h>
 #include <OGL/ShaderLib.h>
+#include <Common/Scene.h>
 
 #include "RayMarching.h"
 
@@ -35,37 +36,38 @@ public:
     VoxelTracer() {
         ogl::EnableDebugCallback();
 
-        _map.Palette[0].SetColor({ 1, 1, 1 });
-        _map.Palette[0].SetEmissionStrength(1.0f);
-        _map.Palette[1].SetColor({ 1, 0, 0 });
-        _map.Palette[2].SetColor({ 0, 1, 0 });
-        _map.Palette[3].SetColor({ 0, 0, 1 });
-        _map.Palette[4].SetColor({ 1, 1, 0 });
-        _map.Palette[5].SetColor({ 1, 1, 1 });
+        _map.Palette[120] = cvox::Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
+        _map.Palette[121] = cvox::Material::CreateDiffuse({ 0.2, 1, 0.2 }, 0.9f);
+        _map.Palette[122] = cvox::Material::CreateDiffuse({ 0.2, 0.2, 1 }, 0.9f);
+        _map.Palette[123] = cvox::Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
+
+        auto model = scene::Model("assets/models/Sponza/Sponza.gltf");
+        //auto model = scene::Model("logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf");
+        //auto model = scene::Model("logs/assets/models/DamagedHelmet/DamagedHelmet.gltf");
+        _map.VoxelizeModel(model);
 
         auto rng = swr::VRandom(1234);
 
-        _map.ForEach([&](uint32_t x, uint32_t y, uint32_t z) {
-            int32_t sx = (int32_t)x - 64, sy = (int32_t)y - 64, sz = (int32_t)z - 64;
-            float dist = sqrtf(sx * sx + sy * sy + sz * sz);
+        for (uint32_t x = 0; x < 512; x++) {
+            for (uint32_t z = 0; z < 32; z++) {
+                _map.At(x, 16, 240 + z) = cvox::Voxel::Create(123);
+                _map.At(x, 150, 240 + z) = cvox::Voxel::Create(123);
 
-            if (dist <= 8){
-                _map.At(x, y, z).SetMaterialId(5);
+                // uint32_t rand = rng.NextU32()[0];
+                // if ((rand & 63) == 0) {
+                //     _map.At(x, 20 + (rand >> 20) % 50, 240 + z) = cvox::Voxel::Create(120 + (rand >> 10) % 4);
+                // }
             }
-            else if (dist > 56 && dist < 58) {
-                uint32_t random = rng.NextU32()[0];
-                _map.At(x, y, z).SetMaterialId(random % 5);
-            }
-            else {
-                _map.At(x, y, z).SetEmpty(0);
-            }
-        });
+        }
 
         _map.UpdateDistanceField();
 
-        _cam.Position = glm::vec3(50.5, 50.5, 50.5);
-        _cam.Euler = glm::vec2(-2.3, -0.5);
+       // _cam.Position = glm::vec3(50.5, 50.5, 50.5);
+        _cam.Position = glm::vec3(36, 9, 32);
+        _cam.MoveSpeed = 10;
+        _cam.Euler = glm::vec2(1.52, -0.5);
     }
+
 
     void Render(uint32_t vpWidth, uint32_t vpHeight) {
         ImGui::ShowMetricsWindow();
@@ -78,9 +80,10 @@ public:
         }
 
         ImGui::Begin("Info");
+
         glm::ivec3 gridPos = glm::floor(_cam.Position);
 
-        ImGui::Text("DistField: %.1f", _map.At(gridPos.x, gridPos.y, gridPos.z).GetDistToNearest());
+        //ImGui::Text("DistField: %.1f", _map.At(gridPos.x, gridPos.y, gridPos.z).GetDistToNearest());
         ImGui::Text("Cam: %.2f %.2f %.2f, %.2f %.2f", _cam.Position.x, _cam.Position.y, _cam.Position.z, _cam.Euler.x, _cam.Euler.y);
 
         if (_tex == nullptr || _tex->Width != vpWidth || _tex->Height != vpHeight) {
@@ -92,7 +95,7 @@ public:
         uint32_t width = _fb->Width;
         uint32_t height = _fb->Height;
 
-        glm::mat4 invProj = glm::inverse(_cam.GetProjMatrix() * _cam.GetViewMatrix());
+        glm::mat4 invProj = glm::inverse(_cam.GetProjMatrix() * glm::scale(_cam.GetViewMatrix(), glm::vec3(0.125f)));
         // Bias matrix to take UVs in range [0..screen] rather than [-1..1]
         invProj = glm::translate(invProj, glm::vec3(-1.0f, -1.0f, 0.0f));
         invProj = glm::scale(invProj, glm::vec3(2.0f / _fb->Width, 2.0f / _fb->Height, 1.0f));
@@ -116,7 +119,7 @@ public:
                 swr::VMask mask = (swr::VMask)~0u;
 
                 for (uint32_t i = 0; i < 3; i++) {
-                    auto hit = cvox::RayMarch(_map, origin, dir);
+                    auto hit = cvox::RayMarch(_map, origin, dir, mask);
                     auto mat = _map.GetMaterial(hit.Voxels);
 
                     attenuation *= mat.GetColor();
@@ -126,7 +129,7 @@ public:
                     origin = origin + dir * (hit.Dist - 1.0f / 128);
                     swr::VFloat3 normal = hit.GetNormal(dir);
 
-                    dir = swr::simd::normalize(normal + rng.NextHemisphereDirection(normal));
+                    dir = swr::simd::normalize(normal + rng.NextDirection()); // lambertian
                 }
 
                 uint32_t* tilePtr = &_fb->ColorBuffer[_fb->GetPixelOffset(x, y)];
@@ -141,7 +144,7 @@ public:
             }
         });
         numAccumFrames++;
-        
+
         auto endTs = std::chrono::high_resolution_clock::now();
         auto elapsed = (endTs - startTs).count() / 1000000.0;
         ImGui::Text("Time: %.1fms", elapsed);
@@ -153,7 +156,7 @@ public:
 
         auto texId = (ImTextureID)(uintptr_t)_tex->Handle;
         drawList->AddImage(texId, drawList->GetClipRectMin(), drawList->GetClipRectMax(), ImVec2(0, 1), ImVec2(1, 0));
-
+        
         ImGui::End();
     }
 };

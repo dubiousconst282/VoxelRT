@@ -39,18 +39,21 @@ inline VFloat GetSideDist(VFloat x, VFloat sign) {
 
 // https://medium.com/@calebleak/raymarching-voxel-rendering-58018201d9d6
 // Plane ray-marching is less accurate than DDA, but apparently easier to accelerate with distance fields.
-HitInfo RayMarch(const VoxelMap& map, VFloat3 origin, VFloat3 dir) {
+HitInfo RayMarch(const VoxelMap& map, VFloat3 origin, VFloat3 dir, VMask activeMask) {
     VFloat3 delta = { abs(rcp14(dir.x)), abs(rcp14(dir.y)), abs(rcp14(dir.z)) };
     VFloat3 sideDist;
 
     VoxelPack voxels;
 
-    VMask activeMask = (VMask)(~0u);
     VFloat dist = 0.0f;
 
     for (uint32_t i = 0; i < 128; i++) {
         VFloat3 pos = origin + dir * dist;
-        VoxelPack currVoxels = map.GetPack(floor2i(pos.x), floor2i(pos.y), floor2i(pos.z));
+
+        VInt vx = floor2i(pos.x), vy = floor2i(pos.y), vz = floor2i(pos.z);
+
+        activeMask &= _mm512_cmplt_epu32_mask(vx | vy | vz, _mm512_set1_epi32(VoxelMap::Size));
+        VoxelPack currVoxels = map.GetPack(vx, vy, vz, activeMask);
 
         set_if(activeMask, voxels.Packed, currVoxels.Packed);
         activeMask &= voxels.IsEmpty();
