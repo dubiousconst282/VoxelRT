@@ -22,7 +22,7 @@ struct Voxel {
         return { .Packed = (uint8_t)scaledDist };
     }
     static Voxel Create(uint32_t materialId) {
-        assert(id < 128);
+        assert(materialId < 128);
         return { .Packed = (uint8_t)(materialId | 0x80) };
     }
 };

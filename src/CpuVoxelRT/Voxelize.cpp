@@ -92,10 +92,10 @@ void VoxelMap::VoxelizeModel(const scene::Model& model) {
         swr::texutil::IterateTiles(tex.Width / 4, tex.Height / 4, processTile);
     }
 
-    std::vector<uint32_t> paletteColors = palette.Build(120);
+    palette.Build(120); // Can go up to 128, but we'll reserve a few slots for debug materials
 
-    for (uint32_t i = 0; i < paletteColors.size(); i++) {
-        glm::vec3 color = glm::vec3((paletteColors[i] >> 0) & 255, (paletteColors[i] >> 8) & 255, (paletteColors[i] >> 16) & 255);
+    for (uint32_t i = 0; i < palette.NumColors; i++) {
+        glm::vec3 color = glm::vec3(palette.ColorR[i], palette.ColorG[i], palette.ColorB[i]);
         Palette[i] = Material::CreateDiffuse(color * (1.0f / 255));
     }
 
