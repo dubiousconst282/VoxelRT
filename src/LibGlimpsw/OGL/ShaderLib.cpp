@@ -4,21 +4,25 @@
 namespace ogl {
 
 void ShaderLib::AttachStages(ShaderCompilation& comp) {
-    for (ShaderStageDesc& stage : comp.Sources) {
+    for (auto& stage : comp.LoadParams.Stages) {
         std::string source = "#version " + DefaultVersion + "\n";
-        ReadSource(source, stage.Filename, &comp.RelatedSourceFiles);
+
+        for (auto& def : comp.LoadParams.Defines) {
+            source += "#define " + def.Name + " " + def.Value + "\n";
+        }
+        ReadSource(source, stage.Filename, comp.IncludedFiles);
 
         comp.Instance->Attach(stage.Type, source);
     }
     comp.Instance->Link();
 }
 
-std::shared_ptr<Shader> ShaderLib::Load(const ShaderStageDesc* stages, uint32_t numStages) {
+std::shared_ptr<Shader> ShaderLib::Load(ShaderLoadParams pars) {
     auto shader = std::make_shared<Shader>();
 
     ShaderCompilation comp = {
         .Instance = shader,
-        .Sources = std::vector<ShaderStageDesc>(&stages[0], &stages[numStages]),
+        .LoadParams = std::move(pars)
     };
     AttachStages(comp);
 
@@ -28,16 +32,52 @@ std::shared_ptr<Shader> ShaderLib::Load(const ShaderStageDesc* stages, uint32_t 
     return shader;
 }
 
-void ShaderLib::ReadSource(std::string& source, std::string_view filename, std::unordered_set<std::filesystem::path>* relatedSources) {
-    auto stream = std::ifstream(BasePath / filename);
+static const char* g_BuiltinShaders[][2] = {
+    {
+        "_builtin/fullscreen_triangle.vert",
 
-    if (!stream.is_open()) {
-        throw std::ios_base::failure("Could not open source file for reading");
+        // Drawing a single triangle instead of a quad will avoid helper fragment invocations
+        // around the diagonals, assuming the hardware uses guard-band clipping.
+        // See https://stackoverflow.com/a/59739538
+        //     https://wallisc.github.io/rendering/2021/04/18/Fullscreen-Pass.html
+        "out vec2 v_FragCoord;\n"
+        "void main() {\n"
+        "    const vec2 vertices[3] = vec2[](vec2(-1, -1), vec2(3, -1), vec2(-1, 3));\n"
+        "    gl_Position = vec4(vertices[gl_VertexID], 0, 1);\n"
+        "    v_FragCoord = gl_Position.xy * 0.5 + 0.5;\n"
+        "}\n",
+    },
+};
+
+static std::unique_ptr<std::istream> OpenFileStream(const std::filesystem::path& basePath, std::string_view filename) {
+    for (auto& entry : g_BuiltinShaders) {
+        if (filename.compare(entry[0]) == 0) {
+            return std::make_unique<std::stringstream>(std::string(entry[1]));
+        }
     }
 
-    std::string line;
+    auto stream = std::make_unique<std::ifstream>(basePath / filename);
 
-    while (std::getline(stream, line)) {
+    if (!stream->is_open()) {
+        throw std::ios_base::failure("Could not open source file for reading");
+    }
+    return stream;
+}
+static std::string GetRelativePath(const std::filesystem::path& basePath, std::string_view filename) {
+    auto baseDir = basePath.parent_path();
+    return std::filesystem::relative(baseDir / filename, baseDir).string();
+}
+
+void ShaderLib::ReadSource(std::string& source, std::string_view filename, std::unordered_set<std::string>& includedFiles) {
+    auto stream = OpenFileStream(BasePath, filename);
+    std::string line;
+    uint32_t lineNo = 1;
+
+    includedFiles.emplace(GetRelativePath(BasePath, filename));
+
+    source += "#line 1 // begin of " + std::string(filename) + "\n";
+
+    while (std::getline(*stream, line)) {
         // Expand `#include "fn"` directives
         if (line.starts_with("#include")) {
             size_t pathStart = line.find('"', 9);
@@ -46,19 +86,18 @@ void ShaderLib::ReadSource(std::string& source, std::string_view filename, std::
             if (pathStart == std::string::npos || pathEnd == std::string::npos) {
                 throw std::format_error("Malformed include directive");
             }
-            std::string_view includedFile = std::string_view(&line[pathStart + 1], &line[pathEnd]);
 
-            source += "// " + line + " ---- begin \n";
-            ReadSource(source, includedFile, relatedSources);
-            source += "// " + line + " ---- end\n";
+            auto includeName = GetRelativePath(BasePath / filename, std::string_view(&line[pathStart + 1], &line[pathEnd]));
+
+            if (includedFiles.insert(includeName).second) {
+                ReadSource(source, includeName, includedFiles);
+                source += "#line " + std::to_string(lineNo) + " // end of " + includeName + "\n";
+            }
         } else {
             source += line;
             source += '\n';
         }
-    }
-
-    if (relatedSources != nullptr) {
-        relatedSources->insert(filename);
+        lineNo++;
     }
 }
 
@@ -68,9 +107,18 @@ void ShaderLib::Refresh() {
     std::vector<std::filesystem::path> changedFiles;
     _watcher->PollChanges(changedFiles);
 
-    for (auto& filePath : changedFiles) {
-        for (auto& shader : _compiledShaders) {
-            if (shader.RelatedSourceFiles.contains(filePath)) {
+    for (uint32_t i = 0; i < _compiledShaders.size(); i++) {
+        ShaderCompilation& shader = _compiledShaders[i];
+        
+        if (shader.Instance.use_count() < 2) {
+            DebugMessage(GL_DEBUG_TYPE_MARKER, GL_DEBUG_SEVERITY_NOTIFICATION, "Deleting unused shader '%s'", shader.GetLogName());
+            _compiledShaders.erase(_compiledShaders.begin() + i);
+            i--;
+            continue;
+        }
+
+        for (auto& filePath : changedFiles) {
+            if (shader.IncludedFiles.contains(filePath.string())) {
                 Recompile(shader);
                 break;
             }
@@ -82,11 +130,14 @@ void ShaderLib::Recompile(ShaderCompilation& shader) {
 
     try {
         shader.Instance->Handle = glCreateProgram();
+        shader.IncludedFiles.clear();
+        
         AttachStages(shader);
+        glDeleteProgram(oldHandle);
 
         DebugMessage(
             GL_DEBUG_TYPE_MARKER, GL_DEBUG_SEVERITY_NOTIFICATION, 
-            "Successfully recompiled shader '%s'.", shader.Sources[0].Filename.c_str());
+            "Successfully recompiled shader '%s'.", shader.GetLogName());
     } catch (std::exception& ex) {
         // This is kinda hacky, but whatever.
         glDeleteProgram(shader.Instance->Handle);
@@ -94,19 +145,19 @@ void ShaderLib::Recompile(ShaderCompilation& shader) {
 
         DebugMessage(
             GL_DEBUG_TYPE_ERROR, GL_DEBUG_SEVERITY_MEDIUM, 
-            "Failed to recompile shader '%s'.\n\n%s", shader.Sources[0].Filename.c_str(), ex.what());
+            "Failed to recompile shader '%s'.\n\n%s", shader.GetLogName(), ex.what());
     }
 }
 
 };  // namespace ogl
+
+namespace ogl::detail {
 
 #ifdef _WIN32
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
-
-namespace ogl::detail {
 
 struct FileWatcher::ImplData {
     HANDLE _fileHandle;
@@ -137,22 +188,34 @@ FileWatcher::~FileWatcher() {
 
 void FileWatcher::PollChanges(std::vector<std::filesystem::path>& changedFiles) {
     DWORD numBytesReceived;
-    if (!GetOverlappedResult(_data->_fileHandle, &_data->_overlapped, &numBytesReceived, false)) return;
+    while (GetOverlappedResult(_data->_fileHandle, &_data->_overlapped, &numBytesReceived, false)) {
+        uint8_t* eventPtr = _data->_eventBuffer;
+        while (true) {
+            auto event = (FILE_NOTIFY_INFORMATION*)eventPtr;
+            auto fileName = std::filesystem::path(event->FileName, event->FileName + event->FileNameLength / 2);
 
-    uint8_t* eventPtr = _data->_eventBuffer;
-    while (true) {
-        auto event = (FILE_NOTIFY_INFORMATION*)eventPtr;
+            if (event->Action == FILE_ACTION_MODIFIED &&
+                // Some apps (VSCode) will cause multiple events to be fired for the same file.
+                (changedFiles.size() == 0 || changedFiles[changedFiles.size() - 1] != fileName)) {
+                changedFiles.push_back(fileName);
+            }
 
-        if (event->Action == FILE_ACTION_MODIFIED) {
-            changedFiles.push_back(std::wstring_view(event->FileName, event->FileNameLength / 2));
+            if (event->NextEntryOffset == 0) break;
+            eventPtr += event->NextEntryOffset;
         }
-
-        if (event->NextEntryOffset == 0) break;
-        eventPtr += event->NextEntryOffset;
+        _data->ReadChangesAsync();
     }
-    _data->ReadChangesAsync();
+}
+#else // !_WIN32
+
+#warning "ShaderLib::FileWatcher is not implemented for this platform"
+
+FileWatcher::FileWatcher(const std::filesystem::path& path) {
+};
+FileWatcher::~FileWatcher() {
 }
 
-};  // namespace ogl::detail
-
 #endif
+
+
+};  // namespace ogl::detail

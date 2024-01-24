@@ -74,7 +74,7 @@ static glm::vec3 ProjectPointOnTriangle(const glm::vec3& p, const glm::vec3 vtx[
     return { alpha, beta, gamma };
 }
 
-void VoxelMap::VoxelizeModel(const scene::Model& model) {
+void VoxelMap::VoxelizeModel(const scene::Model& model, glm::uvec3 pos, glm::uvec3 size) {
     PaletteBuilder palette;
 
     for (auto& [name, tex] : model.Textures) {
@@ -92,7 +92,7 @@ void VoxelMap::VoxelizeModel(const scene::Model& model) {
         swr::texutil::IterateTiles(tex.Width / 4, tex.Height / 4, processTile);
     }
 
-    palette.Build(120); // Can go up to 128, but we'll reserve a few slots for debug materials
+    palette.Build(210); // Can go up to 224, but we'll reserve a few slots for debug materials
 
     for (uint32_t i = 0; i < palette.NumColors; i++) {
         glm::vec3 color = glm::vec3(palette.ColorR[i], palette.ColorG[i], palette.ColorB[i]);
@@ -111,8 +111,8 @@ void VoxelMap::VoxelizeModel(const scene::Model& model) {
     });
 
     glm::vec3 boundRange = boundMax - boundMin;
-    float scale = (cvox::VoxelMap::Size - 4.0f) / glm::max(glm::max(boundRange.x, boundRange.y), boundRange.z);
-    glm::vec3 center = ((float)cvox::VoxelMap::Size - (boundRange * scale)) * 0.5f;
+    glm::vec3 scale = glm::vec3(size) / glm::max(glm::max(boundRange.x, boundRange.y), boundRange.z);
+    glm::vec3 center = glm::vec3(pos) + (glm::vec3(size) - (boundRange * scale)) * 0.5f;
     center.y = 0;
 
     glm::vec3 verts[3];
@@ -131,18 +131,19 @@ void VoxelMap::VoxelizeModel(const scene::Model& model) {
                     texV[(int32_t)j] = vtx.v;
                 }
 
-                cvox::VoxelizeTriangleSurface(verts, [&](glm::ivec3 pos) {
-                    if ((uint32_t)(pos.x | pos.y | pos.z) < cvox::VoxelMap::Size) {
-                        auto bary = cvox::ProjectPointOnTriangle(glm::vec3(pos), verts);
-                        float u = glm::dot(texU, bary);
-                        float v = glm::dot(texV, bary);
+                cvox::VoxelizeTriangleSurface(verts, [&](glm::ivec3 ipos) {
+                    glm::uvec3 pos = ipos;
+                    if ((pos.x | pos.y | pos.z) >= NumVoxelsPerAxis) return;
 
-                        constexpr swr::SamplerDesc SD = { .MinFilter = swr::FilterMode::Nearest, .EnableMips = true };
-                        auto colors = mesh.Material->Texture->Sample<SD>(u, v, 0, 2);
-                        uint32_t paletteIdx = palette.FindIndex((uint32_t)colors[0]);
+                    auto bary = cvox::ProjectPointOnTriangle(glm::vec3(pos), verts);
+                    float u = glm::dot(texU, bary);
+                    float v = glm::dot(texV, bary);
 
-                        At((uint32_t)pos.x, (uint32_t)pos.y, (uint32_t)pos.z) = Voxel::Create(paletteIdx);
-                    }
+                    constexpr swr::SamplerDesc SD = { .MinFilter = swr::FilterMode::Nearest, .EnableMips = true };
+                    auto colors = mesh.Material->Texture->Sample<SD>(u, v, 0, 2);
+                    uint32_t paletteIdx = palette.FindIndex((uint32_t)colors[0]);
+
+                    Set(pos, Voxel::Create(paletteIdx));
                 });
             }
         }

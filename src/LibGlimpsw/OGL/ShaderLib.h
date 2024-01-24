@@ -22,9 +22,18 @@ private:
 
 };  // namespace detail
 
-struct ShaderStageDesc {
-    GLenum Type;
-    std::string Filename;
+
+struct ShaderLoadParams {
+    struct StageDesc {
+        GLenum Type;
+        std::string Filename;
+    };
+    struct PrepDef {
+        std::string Name, Value;
+    };
+
+    std::vector<StageDesc> Stages;
+    std::vector<PrepDef> Defines;
 };
 
 struct ShaderLib {
@@ -39,16 +48,39 @@ struct ShaderLib {
         }
     }
 
-    std::shared_ptr<Shader> LoadVertFrag(const std::string& name) {
-        ShaderStageDesc stages[2]{
-            { GL_VERTEX_SHADER, name + ".vert" },
-            { GL_FRAGMENT_SHADER, name + ".frag" },
-        };
-        return Load(stages, 2);
+    std::shared_ptr<Shader> LoadVertFrag(const std::string& name, std::vector<ShaderLoadParams::PrepDef> prepDefs = {}) {
+        return Load({
+            .Stages = {
+                { GL_VERTEX_SHADER, name + ".vert" },
+                { GL_FRAGMENT_SHADER, name + ".frag" },
+            },
+            .Defines = std::move(prepDefs),
+        });
     }
-    std::shared_ptr<Shader> Load(const ShaderStageDesc* stages, uint32_t numStages);
+    // Loads a fragment shader that is intended to be applied over a full screen triangle.
+    // See `Shader::DispatchFullscreen()`.
+    std::shared_ptr<Shader> LoadFrag(const std::string& name, std::vector<ShaderLoadParams::PrepDef> prepDefs = {}) {
+        return Load({
+            .Stages = {
+                { GL_FRAGMENT_SHADER, name + ".frag" },
+                { GL_VERTEX_SHADER, "_builtin/fullscreen_triangle.vert" },
+            },
+            .Defines = std::move(prepDefs),
+        });
+    }
+    std::shared_ptr<Shader> LoadComp(const std::string& name, std::vector<ShaderLoadParams::PrepDef> prepDefs = {}) {
+        return Load({
+            .Stages = {
+                { GL_COMPUTE_SHADER, name + ".comp" },
+            },
+            .Defines = std::move(prepDefs),
+        });
+    }
+
+    std::shared_ptr<Shader> Load(ShaderLoadParams pars);
     
-    void ReadSource(std::string& source, std::string_view filename, std::unordered_set<std::filesystem::path>* relatedSources = nullptr);
+    // Reads and expands includes for the given file, appending result to `source`.
+    void ReadSource(std::string& source, std::string_view filename, std::unordered_set<std::string>& includedFiles);
 
     // Re-compile shaders whose source has been changed. 
     void Refresh();
@@ -56,8 +88,10 @@ struct ShaderLib {
 private:
     struct ShaderCompilation {
         std::shared_ptr<Shader> Instance;
-        std::vector<ShaderStageDesc> Sources;
-        std::unordered_set<std::filesystem::path> RelatedSourceFiles;
+        std::unordered_set<std::string> IncludedFiles;
+        ShaderLoadParams LoadParams;
+
+        const char* GetLogName() { return LoadParams.Stages[0].Filename.c_str(); }
     };
 
     std::unique_ptr<detail::FileWatcher> _watcher;

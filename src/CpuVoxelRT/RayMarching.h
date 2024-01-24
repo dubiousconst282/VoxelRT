@@ -46,13 +46,15 @@ HitInfo RayMarch(const VoxelMap& map, VFloat3 origin, VFloat3 dir, VMask activeM
     VoxelPack voxels;
 
     VFloat dist = 0.0f;
+    VMask inboundMask = (VMask)~0u;
 
     for (uint32_t i = 0; i < 128; i++) {
         VFloat3 pos = origin + dir * dist;
 
         VInt vx = floor2i(pos.x), vy = floor2i(pos.y), vz = floor2i(pos.z);
 
-        activeMask &= _mm512_cmplt_epu32_mask(vx | vy | vz, _mm512_set1_epi32(VoxelMap::Size));
+        inboundMask = VoxelMap::GetInboundMask(vx, vy, vz);
+        activeMask &= inboundMask;
         VoxelPack currVoxels = map.GetPack(vx, vy, vz, activeMask);
 
         set_if(activeMask, voxels.Packed, currVoxels.Packed);
@@ -73,7 +75,7 @@ HitInfo RayMarch(const VoxelMap& map, VFloat3 origin, VFloat3 dir, VMask activeM
     return {
         .Dist = dist,
         .Voxels = voxels,
-        .Mask = (VMask)(~activeMask),
+        .Mask = (VMask)(~activeMask & inboundMask),
         .SideMaskX = sideDist.x < min(sideDist.y, sideDist.z),
         .SideMaskY = sideDist.y < min(sideDist.x, sideDist.z),
     };

@@ -3,9 +3,11 @@
 #include <cstdint>
 #include <memory>
 #include <algorithm>
+#include <set>
 
 #include <SwRast/SIMD.h>
 #include <Common/Scene.h>
+#include <OGL/QuickGL.h>
 
 namespace cvox {
 
@@ -14,16 +16,16 @@ using namespace swr::simd;
 struct Voxel {
     uint8_t Packed;
 
-    bool IsEmpty() const { return (Packed & 0x80) == 0; }
-    float GetDistToNearest() const { return IsEmpty() ? (Packed & 0x7F) / 4.0f : 0; }
+    bool IsEmpty() const { return Packed < 32; }
+    float GetDistToNearest() const { return IsEmpty() ? Packed : 0; }
 
     static Voxel CreateEmpty(float distToNearest) {
-        uint32_t scaledDist = std::clamp((int32_t)(distToNearest * 4.0f), 0, 0x7F);
+        int32_t scaledDist = std::clamp((int32_t)distToNearest, 0, 31);
         return { .Packed = (uint8_t)scaledDist };
     }
     static Voxel Create(uint32_t materialId) {
-        assert(materialId < 128);
-        return { .Packed = (uint8_t)(materialId | 0x80) };
+        assert(materialId < 256 - 32);
+        return { .Packed = (uint8_t)(materialId + 32) };
     }
 };
 struct Material {
@@ -48,10 +50,9 @@ struct Material {
 struct VoxelPack {
     VInt Packed;
 
-    VMask IsEmpty() const { return (Packed & 0x80) == 0; }
-    VFloat GetDistToNearest() const { return csel(IsEmpty(), conv2f(GetData()) / 4.0f, 0); }
-
-    VInt GetData() const { return Packed & 0x7F; }
+    VMask IsEmpty() const { return Packed < 32; }
+    VFloat GetDistToNearest() const { return csel(IsEmpty(), conv2f(Packed), 0); }
+    VInt GetMaterialId() const { return csel(IsEmpty(), 0, Packed - 32); }
 };
 struct MaterialPack {
     VInt Packed;
@@ -65,136 +66,127 @@ struct MaterialPack {
     }
     VFloat GetEmissionStrength() const { return conv2f((Packed >> 16) & 15) * (7.0f / 15); }
 };
-
 struct VoxelMap {
-    static const uint32_t Shift = 9, Size = 1 << Shift, Count = Size * Size * Size;
-    std::unique_ptr<Voxel[]> Voxels;
-    Material Palette[128]{};
+    static const uint32_t BrickShift = 7, BrickVoxelShift = 3;
+    static const uint32_t NumBricksPerAxis = 1 << BrickShift, NumTotalBricks = 1 << (BrickShift * 3);
+    static const uint32_t BrickSize = 1 << BrickVoxelShift, NumVoxelsPerBrick = 1 << (BrickVoxelShift * 3);
+    static const uint32_t BrickMask = NumBricksPerAxis - 1, BrickVoxelMask = BrickSize - 1;
+    static const uint32_t NumVoxelsPerAxis = NumBricksPerAxis * BrickSize;
 
-    VoxelMap() { Voxels = std::make_unique<Voxel[]>(Count); }
+    struct Brick {
+        Voxel Data[NumVoxelsPerBrick];
+    };
+    std::unique_ptr<uint32_t[]> BrickSlots;
+    std::vector<Brick> BrickStorage;
+    Material Palette[256 - 32] {};
 
-    Voxel& At(uint32_t x, uint32_t y, uint32_t z) {
-        assert((x | y | z) < Size);
-        return Voxels[GetTiledIndex(x, y, z)];
+    std::unique_ptr<ogl::Texture3D> GpuBrickStorage;
+    std::unique_ptr<ogl::Buffer> GpuMetaStorage;
+    std::set<uint32_t> DirtyBricks;
+
+    struct GpuMeta {
+        Material Palette[sizeof(VoxelMap::Palette) / sizeof(Material)];
+        uint32_t BrickSlots[NumTotalBricks]; // XYZ x 10-bit
+    };
+
+    VoxelMap() {
+        BrickSlots = std::make_unique<uint32_t[]>(NumTotalBricks);
+
+        BrickStorage.reserve(NumTotalBricks / 32);
+        // Reserve empty brick at the 0th slot to simplify queries (bounds / null checks / subtracts).
+        BrickStorage.emplace_back();
+    }
+
+    Brick* GetBrick(glm::uvec3 pos, bool markAsDirty = false, bool create = false) {
+        assert((pos.x | pos.y | pos.z) < NumVoxelsPerAxis);
+
+        uint32_t idx = GetBrickIndex(pos.x, pos.y, pos.z);
+        uint32_t& slot = BrickSlots[idx];
+        if (!slot) {
+            if (!create) {
+                return nullptr;
+            }
+            slot = BrickStorage.size();
+            BrickStorage.emplace_back();
+            markAsDirty = true;
+        }
+        if (markAsDirty) {
+            DirtyBricks.insert(idx);
+        }
+        return &BrickStorage[slot];
+    }
+
+    Voxel Get(glm::uvec3 pos) {
+        Brick* brick = GetBrick(pos);
+        return brick ? brick->Data[GetVoxelIndex(pos.x, pos.y, pos.z)] : Voxel::CreateEmpty(1.0f);
+    }
+    void Set(glm::uvec3 pos, Voxel voxel) {
+        Brick* brick = GetBrick(pos, true, true);
+
+        uint32_t idx = GetVoxelIndex(pos.x, pos.y, pos.z);
+        brick->Data[idx] = voxel;
+    }
+
+    // Creates mask for voxel coords that are inside the map.
+    static VMask GetInboundMask(VInt x, VInt y, VInt z) {
+        return _mm512_cmplt_epu32_mask(x | y | z, _mm512_set1_epi32(NumVoxelsPerAxis));
     }
 
     VoxelPack GetPack(VInt x, VInt y, VInt z, VMask mask) const {
-        auto index = GetTiledIndex(x, y, z);
+        assert((mask & ~GetInboundMask(x, y, z)) == 0);
 
-        auto emptyId = _mm512_set1_epi16(0);
-        auto data = _mm512_mask_i32gather_epi32(emptyId, mask, index, Voxels.get(), 1);
-        return { .Packed = VInt(data) & 0xFF };
+        VInt brickIdx = csel(mask, GetBrickIndex(x, y, z), 0);
+        VInt brickSlot = _mm512_mask_i32gather_epi32(brickIdx, mask, brickIdx, BrickSlots.get(), 4);
+        VInt storageOffset = brickSlot * sizeof(Brick) + GetVoxelIndex(x, y, z);
+
+        VInt data = _mm512_mask_i32gather_epi32(_mm512_set1_epi32(0), mask, storageOffset, BrickStorage.data(), 1);
+        return { .Packed = data & 0xFF };
     }
     MaterialPack GetMaterial(VoxelPack voxels) const {
         VMask mask = ~voxels.IsEmpty();
-        VInt mat = _mm512_mask_i32gather_epi32(_mm512_setzero_si512(), mask, voxels.GetData(), Palette, 4);
+        VInt mat = _mm512_mask_i32gather_epi32(_mm512_setzero_si512(), mask, voxels.GetMaterialId(), Palette, 4);
         return { .Packed = mat };
     }
 
-    void VoxelizeModel(const scene::Model& model);
+    void SyncGpuBuffers();
+
+    void Deserialize(std::string_view filename);
+    void Serialize(std::string_view filename);
+
+    void VoxelizeModel(const scene::Model& model, glm::uvec3 pos, glm::uvec3 size);
 
     template<typename TVisitor>
-    void ForEach(TVisitor fn) {
-        for (uint32_t y = 0; y < Size; y++) {
-            for (uint32_t z = 0; z < Size; z++) {
-                for (uint32_t x = 0; x < Size; x++) {
-                    fn(x, y, z);
-                }
+    void ForEach(TVisitor fn, bool skipEmptyBricks = false) {
+        for (uint32_t i = 0; i < NumTotalBricks; i++) {
+            if (skipEmptyBricks && !Storage->BrickSlots[i]) continue;
+
+            uint32_t bx = (i >> (BrickShift * 0)) & BrickMask;
+            uint32_t bz = (i >> (BrickShift * 1)) & BrickMask;
+            uint32_t by = (i >> (BrickShift * 2)) & BrickMask;
+
+            for (uint32_t j = 0; j < NumVoxelsPerBrick; j++) {
+                uint32_t vx = (j >> (BrickVoxelShift * 0)) & BrickVoxelMask;
+                uint32_t vy = (j >> (BrickVoxelShift * 1)) & BrickVoxelMask;
+                uint32_t vz = (j >> (BrickVoxelShift * 2)) & BrickVoxelMask;
+                fn((bx << BrickVoxelShift) + vx, (by << BrickVoxelShift) + vy, (bz << BrickVoxelShift) + vz);
             }
         }
     }
-
-    void UpdateDistanceField() {
-        auto distField = std::make_unique<int32_t[]>(Count);
-
-        ForEach([&](uint32_t x, uint32_t y, uint32_t z) {
-            Voxel& voxel = At(x, y, z);
-
-            if (voxel.IsEmpty()) {
-                distField[GetIndex(x, y, z)] = DF_INF;
-            }
-        });
-
-        // X
-        for (uint32_t i = 0; i < Size; i++) {
-            for (uint32_t j = 0; j < Size; j++) {
-                EuclideanDistanceTransform(&distField[i * (Size * Size) + j * Size], 1, Size);
-            }
-        }
-
-        // Z
-        for (uint32_t i = 0; i < Size; i++) {
-            for (uint32_t j = 0; j < Size; j++) {
-                EuclideanDistanceTransform(&distField[i * (Size * Size) + j], Size, Size);
-            }
-        }
-
-        // Y
-        for (uint32_t i = 0; i < Size; i++) {
-            for (uint32_t j = 0; j < Size; j++) {
-                EuclideanDistanceTransform(&distField[i * Size + j], Size * Size, Size);
-            }
-        }
-
-        ForEach([&](uint32_t x, uint32_t y, uint32_t z) {
-            Voxel& voxel = At(x, y, z);
-            if (voxel.IsEmpty()) {
-                voxel = Voxel::CreateEmpty(sqrtf(distField[GetIndex(x, y, z)]));
-            }
-        });
-    }
-
-private:
+    
     template<typename T>
-    static T GetIndex(T x, T y, T z) {
-        return y * (Size * Size) + z * Size + x;
+    static T GetBrickIndex(T x, T y, T z) {
+        return (y >> BrickVoxelShift) << (BrickShift * 2) |
+               (z >> BrickVoxelShift) << (BrickShift * 1) |
+               (x >> BrickVoxelShift) << (BrickShift * 0);
     }
+
     template<typename T>
-    static T GetTiledIndex(T x, T y, T z) {
-        const uint32_t S = Size / 8;
-
-        T subIdx = (y & 7) * 64 + (z & 7) * 8 + (x & 7);
-        T tileIdx = (y >> 3) * (S * S) + (z >> 3) * S + (x >> 3);
-        return subIdx + tileIdx * 512;
-    }
-
-    static const int32_t DF_INF = (1 << 15);
-
-    // Blatantly copied from https://acko.net/blog/subpixel-distance-transform/
-    // https://cs.brownorm.edu/people/pfelzens/papers/dt-final.pdf
-    static void EuclideanDistanceTransform(int32_t* Df, uint32_t stride, uint32_t n) {
-        int32_t v[n], z[n + 1], f[n];
-        v[0] = 0;
-        z[0] = -DF_INF;
-        z[1] = +DF_INF;
-        f[0] = Df[0];
-
-        int32_t k = 0;
-        for (int32_t q = 1; q < n; q++) {
-            f[q] = Df[q * (int32_t)stride];
-
-            int32_t s;
-            do {
-                int32_t r = v[k];
-                s = (f[q] - f[r] + q * q - r * r) / (q - r) / 2;
-            } while (s <= z[k] && --k >= 0);
-
-            k++;
-            v[k] = q;
-            z[k] = s;
-            z[k + 1] = DF_INF;
-        }
-
-        k = 0;
-        for (int32_t q = 0; q < n; q++) {
-            while (z[k + 1] < q) k++;
-            int32_t r = v[k];
-            int32_t d = q - r;
-            Df[q * (int32_t)stride] = f[r] + d * d;
-        }
+    static T GetVoxelIndex(T x, T y, T z) {
+        // OpenGL convention is XYZ
+        return (z & BrickVoxelMask) << (BrickVoxelShift * 2) |
+               (y & BrickVoxelMask) << (BrickVoxelShift * 1) |
+               (x & BrickVoxelMask) << (BrickVoxelShift * 0);
     }
 };
 
-// TODO: pseudo-infinite map?
-
-};
+}; // namespace cvox
