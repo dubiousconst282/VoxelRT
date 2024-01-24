@@ -1,7 +1,10 @@
-#include <memory>
 #include <vector>
 #include <set>
 #include <span>
+#include <functional>
+#include "../SwRast/SIMD.h"
+
+namespace glim {
 
 // Simple octree color quantizer
 // https://www.cubic.org/docs/octree.htm
@@ -190,3 +193,5 @@ private:
 
     Octree Tree;
 };
+
+}; // namespace glim

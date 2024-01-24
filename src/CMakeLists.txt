@@ -18,6 +18,7 @@ find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
 
 add_compile_options("-march=native" "-ffast-math" "-Wno-unused" "-Wsign-conversion")
 

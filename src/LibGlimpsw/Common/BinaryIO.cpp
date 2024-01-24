@@ -1,18 +1,11 @@
-#include <fstream>
+#include <cassert>
 #include <zstd.h>
 
-#include "VoxelMap.h"
+#include "BinaryIO.h"
 
-namespace cvox {
+namespace glim::io {
 
-static const uint64_t SER_MAGIC = 0x63'76'6f'78'00'00'00'01ul; // "cvox 0001"
-
-template<typename T>
-static void Write(std::ostream& os, const T& ptr) {
-    os.write((char*)&ptr, sizeof(T));
-}
-
-static void WriteCompressed(std::ostream& os, const void* ptr, size_t size) {
+void WriteCompressed(std::ostream& os, const void* ptr, size_t size) {
     ZSTD_CCtx* zst = ZSTD_createCCtx();
     ZSTD_CCtx_setParameter(zst, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT);
     ZSTD_CCtx_setParameter(zst, ZSTD_c_checksumFlag, 1);
@@ -38,17 +31,7 @@ static void WriteCompressed(std::ostream& os, const void* ptr, size_t size) {
     os.seekp(endPos);
 }
 
-template<typename T>
-static T Read(std::istream& is) {
-    T val;
-    
-    if (is.read((char*)&val, sizeof(T)).eof()) {
-        throw std::ios_base::failure("End of stream");
-    }
-    return val;
-}
-
-static void ReadCompressed(std::istream& is, void* ptr, size_t size) {
+void ReadCompressed(std::istream& is, void* ptr, size_t size) {
     ZSTD_DCtx* zst = ZSTD_createDCtx();
     ZSTD_outBuffer outBuf = { .dst = ptr, .size = size, .pos = 0 };
 
@@ -77,33 +60,4 @@ static void ReadCompressed(std::istream& is, void* ptr, size_t size) {
     ZSTD_freeDCtx(zst);
 }
 
-void VoxelMap::Deserialize(std::string_view filename) {
-    std::ifstream is(filename.data(), std::ios::binary);
-
-    if (!is.is_open()) {
-        throw std::runtime_error("File not found");
-    }
-
-    if (Read<uint64_t>(is) != SER_MAGIC) {
-        throw std::runtime_error("Incompatible file");
-    }
-
-    uint32_t numBricks = Read<uint32_t>(is);
-    BrickStorage.resize(numBricks);
-
-    ReadCompressed(is, Palette, sizeof(Palette));
-    ReadCompressed(is, BrickSlots.get(), sizeof(uint32_t) * NumTotalBricks);
-    ReadCompressed(is, BrickStorage.data(), sizeof(Brick) * BrickStorage.size());
-}
-void VoxelMap::Serialize(std::string_view filename) {
-    std::ofstream os(filename.data(), std::ios::binary | std::ios::trunc);
-
-    Write<uint64_t>(os, SER_MAGIC);
-    Write<uint32_t>(os, BrickStorage.size());
-
-    WriteCompressed(os, Palette, sizeof(Palette));
-    WriteCompressed(os, BrickSlots.get(), sizeof(uint32_t) * NumTotalBricks);
-    WriteCompressed(os, BrickStorage.data(), sizeof(Brick) * BrickStorage.size());
-}
-
-}; // namespace cvox
+};  // namespace glim::io

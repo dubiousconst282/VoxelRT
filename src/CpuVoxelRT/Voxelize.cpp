@@ -1,5 +1,5 @@
 #include "VoxelMap.h"
-#include "PaletteBuilder.h"
+#include "Common/PaletteBuilder.h"
 
 namespace cvox {
 
@@ -74,8 +74,8 @@ static glm::vec3 ProjectPointOnTriangle(const glm::vec3& p, const glm::vec3 vtx[
     return { alpha, beta, gamma };
 }
 
-void VoxelMap::VoxelizeModel(const scene::Model& model, glm::uvec3 pos, glm::uvec3 size) {
-    PaletteBuilder palette;
+void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 pos, glm::uvec3 size) {
+    glim::PaletteBuilder palette;
 
     for (auto& [name, tex] : model.Textures) {
         if (tex.Width <= 4 || tex.Height <= 4) continue;
@@ -101,7 +101,7 @@ void VoxelMap::VoxelizeModel(const scene::Model& model, glm::uvec3 pos, glm::uve
 
     glm::vec3 boundMin = glm::vec3(+INFINITY), boundMax = glm::vec3(-INFINITY);
 
-    model.Traverse([&](const scene::Node& node, const glm::mat4& modelMat) {
+    model.Traverse([&](const glim::ModelNode& node, const glm::mat4& modelMat) {
         for (size_t i = 0; i < 2; i++) {
             glm::vec3 pos = modelMat * glm::vec4(node.Bounds[i], 0.0);
             boundMin = glm::min(boundMin, pos);
@@ -118,9 +118,9 @@ void VoxelMap::VoxelizeModel(const scene::Model& model, glm::uvec3 pos, glm::uve
     glm::vec3 verts[3];
     glm::vec3 texU, texV;
 
-    model.Traverse([&](const scene::Node& node, const glm::mat4& modelMat) {
+    model.Traverse([&](const glim::ModelNode& node, const glm::mat4& modelMat) {
         for (uint32_t meshId : node.Meshes) {
-            const scene::Mesh& mesh = model.Meshes[meshId];
+            const glim::Mesh& mesh = model.Meshes[meshId];
 
             for (uint32_t i = 0; i < mesh.IndexCount; i += 3) {
                 for (uint32_t j = 0; j < 3; j++) {

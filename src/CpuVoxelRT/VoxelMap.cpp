@@ -1,5 +1,5 @@
 #include "VoxelMap.h"
-#include <fstream>
+#include <Common/BinaryIO.h>
 
 namespace cvox {
 
@@ -63,6 +63,39 @@ void VoxelMap::SyncGpuBuffers() {
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
     }
     GpuMetaStorage->Unmap();
+}
+
+namespace gio = glim::io;
+
+static const uint64_t serMagic = 0x63'76'6f'78'00'00'00'01ul;  // "cvox 0001"
+
+void VoxelMap::Deserialize(std::string_view filename) {
+    std::ifstream is(filename.data(), std::ios::binary);
+
+    if (!is.is_open()) {
+        throw std::runtime_error("File not found");
+    }
+
+    if (gio::Read<uint64_t>(is) != serMagic) {
+        throw std::runtime_error("Incompatible file");
+    }
+
+    uint32_t numBricks = gio::Read<uint32_t>(is);
+    BrickStorage.resize(numBricks);
+
+    gio::ReadCompressed(is, Palette, sizeof(Palette));
+    gio::ReadCompressed(is, BrickSlots.get(), sizeof(uint32_t) * NumTotalBricks);
+    gio::ReadCompressed(is, BrickStorage.data(), sizeof(Brick) * BrickStorage.size());
+}
+void VoxelMap::Serialize(std::string_view filename) {
+    std::ofstream os(filename.data(), std::ios::binary | std::ios::trunc);
+
+    gio::Write<uint64_t>(os, serMagic);
+    gio::Write<uint32_t>(os, BrickStorage.size());
+
+    gio::WriteCompressed(os, Palette, sizeof(Palette));
+    gio::WriteCompressed(os, BrickSlots.get(), sizeof(uint32_t) * NumTotalBricks);
+    gio::WriteCompressed(os, BrickStorage.data(), sizeof(Brick) * BrickStorage.size());
 }
 
 }; // namespace cvox

@@ -2,14 +2,16 @@
 
 #include <glm/gtx/euler_angles.hpp>
 
+namespace glim {  
+
 struct Camera {
-    enum class InputMode { FirstPerson, Arcball };
+    enum InputMode { FirstPerson, Arcball };
 
     glm::vec3 Position;
     glm::vec2 Euler;  // yaw, pitch
     float ArcDistance = 5.0f;
 
-    InputMode Mode = InputMode::FirstPerson;
+    InputMode Mode = FirstPerson;
 
     float FieldOfView = 90.0f;
     float AspectRatio = 1.0f;
@@ -79,3 +81,5 @@ struct Camera {
         return ang - (r * tau);
     }
 };
+
+};  // namespace glim::misc

@@ -25,7 +25,7 @@ class Renderer {
 public:
     virtual ~Renderer() { }
 
-    virtual void RenderFrame(cvox::VoxelMap& map, Camera& cam, glm::uvec2 viewSize) = 0;
+    virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) = 0;
     virtual void RenderSettings() { }
 };
 class CpuRenderer: public Renderer {
@@ -44,7 +44,7 @@ public:
         _skyBox = std::make_unique<swr::HdrTexture2D>(swr::texutil::LoadCubemapFromPanoramaHDR("assets/skyboxes/sunflowers_puresky_4k.hdr"));
     }
 
-    virtual void RenderFrame(cvox::VoxelMap& map, Camera& cam, glm::uvec2 viewSize) {
+    virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) {
         viewSize &= ~3u; // round down to 4x4 steps
 
         #ifndef NDEBUG
@@ -150,7 +150,7 @@ public:
         _shader = shlib.LoadFrag("VoxelRender");
     }
 
-    virtual void RenderFrame(cvox::VoxelMap& map, Camera& cam, glm::uvec2 viewSize) {
+    virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) {
         map.SyncGpuBuffers();
 
         _shader->SetUniform("u_BrickStorage", *map.GpuBrickStorage);
@@ -163,7 +163,7 @@ public:
 };
 
 class Application {
-    Camera _cam = {};
+    glim::Camera _cam = {};
 
     cvox::VoxelMap _map;
 
@@ -191,9 +191,9 @@ public:
         } catch (std::exception& ex) {
             std::cout << "Failed to load voxel map cache" << std::endl;
 
-            auto model = scene::Model("assets/models/Sponza/Sponza.gltf");
-            // auto model = scene::Model("logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf");
-            // auto model = scene::Model("logs/assets/models/DamagedHelmet/DamagedHelmet.gltf");
+            auto model = glim::Model("assets/models/Sponza/Sponza.gltf");
+            // auto model = glim::Model("logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf");
+            // auto model = glim::Model("logs/assets/models/DamagedHelmet/DamagedHelmet.gltf");
 
             _map.VoxelizeModel(model, glm::uvec3(0), glm::uvec3(512));
 

@@ -8,7 +8,7 @@
 #include <SwRast/Rasterizer.h>
 #include <SwRast/Texture.h>
 
-namespace scene {
+namespace glim {
 
 struct Material {
     // Layer 0: BaseColor
@@ -23,9 +23,8 @@ struct Mesh {
     glm::vec3 Bounds[2];
 };
 
-
-struct Node {
-    std::vector<Node> Children;
+struct ModelNode {
+    std::vector<ModelNode> Children;
     std::vector<uint32_t> Meshes;
     glm::mat4 Transform;
     glm::vec3 Bounds[2];
@@ -37,11 +36,10 @@ struct Vertex {
     int8_t nx, ny, nz;
     int8_t tx, ty, tz;
 };
-using Index = uint16_t;
+using VertexIndex = uint16_t;
 
 class Model {
 public:
-
     std::string BasePath;
 
     std::vector<Mesh> Meshes;
@@ -49,15 +47,15 @@ public:
     std::unordered_map<std::string, swr::RgbaTexture2D> Textures;
 
     std::unique_ptr<Vertex[]> VertexBuffer;
-    std::unique_ptr<Index[]> IndexBuffer;
+    std::unique_ptr<VertexIndex[]> IndexBuffer;
 
-    Node RootNode;
+    ModelNode RootNode;
 
     Model(std::string_view path);
 
     void Traverse(
-        std::function<bool(const Node&, const glm::mat4&)> visitor, 
-        const glm::mat4& _parentMat = glm::mat4(1.0f), const Node* _node = nullptr
+        std::function<bool(const ModelNode&, const glm::mat4&)> visitor, 
+        const glm::mat4& _parentMat = glm::mat4(1.0f), const ModelNode* _node = nullptr
     ) const {
         if (_node == nullptr) {
             _node = &RootNode;
@@ -68,10 +66,10 @@ public:
         if (_node->Meshes.size() > 0 && !visitor(*_node, localMat)) {
             return;
         }
-        for (const Node& child : _node->Children) {
+        for (auto& child : _node->Children) {
             Traverse(visitor, localMat, &child);
         }
     }
 };
 
-};  // namespace scene
+};  // namespace glim::scene

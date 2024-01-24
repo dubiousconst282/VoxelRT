@@ -153,7 +153,7 @@ struct VoxelMap {
     void Deserialize(std::string_view filename);
     void Serialize(std::string_view filename);
 
-    void VoxelizeModel(const scene::Model& model, glm::uvec3 pos, glm::uvec3 size);
+    void VoxelizeModel(const glim::Model& model, glm::uvec3 pos, glm::uvec3 size);
 
     template<typename TVisitor>
     void ForEach(TVisitor fn, bool skipEmptyBricks = false) {

@@ -25,10 +25,10 @@ class ModelRenderer {
     std::shared_ptr<swr::Framebuffer> _fb;
     std::shared_ptr<swr::Framebuffer> _prevFb;
     std::unique_ptr<swr::Rasterizer> _rast;
-    std::shared_ptr<scene::Model> _scene, _shadowScene;
+    std::shared_ptr<glim::Model> _scene, _shadowScene;
     std::unique_ptr<renderer::DefaultShader> _shader;
 
-    Camera _cam;
+    glim::Camera _cam;
     DepthPyramid _depthPyramid;
 
     std::unique_ptr<ogl::Texture2D> _frontTex;
@@ -61,7 +61,7 @@ public:
         LoadScene("assets/models/Sponza/Sponza.gltf");
         LoadSkybox("assets/skyboxes/sunflowers_puresky_4k.hdr");
 
-        _cam = Camera{ .Position = glm::vec3(-7, 5.5f, 0), .Euler = glm::vec2(-0.88f, -0.32f), .MoveSpeed = 5.0f };
+        _cam =  glim::Camera{ .Position = glm::vec3(-7, 5.5f, 0), .Euler = glm::vec2(-0.88f, -0.32f), .MoveSpeed = 5.0f };
 
         InitRasterizer(1280, 720);
 
@@ -76,11 +76,11 @@ public:
         _tempPixels = std::make_unique<uint32_t[]>(_fb->Width * _fb->Height);
     }
     void LoadScene(const std::filesystem::path& path) {
-        _scene = std::make_shared<scene::Model>(path.string());
+        _scene = std::make_shared<glim::Model>(path.string());
 
         if (path.filename().compare("Sponza.gltf") == 0) {
             auto shadowModelPath = path;
-            _shadowScene = std::make_shared<scene::Model>(shadowModelPath.replace_filename("Sponza_LowPoly.gltf").string());
+            _shadowScene = std::make_shared<glim::Model>(shadowModelPath.replace_filename("Sponza_LowPoly.gltf").string());
         } else {
             _shadowScene = _scene;
         }
@@ -182,7 +182,7 @@ public:
         ImGui::End();
 
         if (ImGui::IsKeyPressed(ImGuiKey_C)) {
-            _cam.Mode = _cam.Mode == Camera::InputMode::FirstPerson ? Camera::InputMode::Arcball : Camera::InputMode::FirstPerson;
+            _cam.Mode = _cam.Mode == glim::Camera::FirstPerson ? glim::Camera::Arcball : glim::Camera::FirstPerson;
         }
         _cam.Update();
 
@@ -215,9 +215,9 @@ public:
 
         uint32_t drawCalls = 0;
 
-        _scene->Traverse([&](const scene::Node& node, const glm::mat4& modelMat) {
+        _scene->Traverse([&](const glim::ModelNode& node, const glm::mat4& modelMat) {
             for (uint32_t meshId : node.Meshes) {
-                scene::Mesh& mesh = _scene->Meshes[meshId];
+                glim::Mesh& mesh = _scene->Meshes[meshId];
 
                 if (s_HzbOcclusion && !_depthPyramid.IsVisible(mesh.Bounds, modelMat)) continue;
 
@@ -295,9 +295,9 @@ public:
 
         _shadowFb->ClearDepth(1.0f);
 
-        _shadowScene->Traverse([&](const scene::Node& node, const glm::mat4& modelMat) {
+        _shadowScene->Traverse([&](const glim::ModelNode& node, const glm::mat4& modelMat) {
             for (uint32_t meshId : node.Meshes) {
-                scene::Mesh& mesh = _shadowScene->Meshes[meshId];
+                glim::Mesh& mesh = _shadowScene->Meshes[meshId];
 
                 swr::VertexReader data(
                     (uint8_t*)&_shadowScene->VertexBuffer[mesh.VertexOffset],

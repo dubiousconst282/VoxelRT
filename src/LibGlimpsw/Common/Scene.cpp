@@ -7,7 +7,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 
-namespace scene {
+namespace glim {
 
 static void PackNorm(int8_t* dst, float* src) {
     for (uint32_t i = 0; i < 3; i++) {
@@ -109,10 +109,10 @@ static swr::RgbaTexture2D* LoadTextures(Model& m, const aiMaterial* mat) {
     return &slot.first->second;
 }
 
-Node ConvertNode(const Model& model, aiNode* node) {
+ModelNode ConvertNode(const Model& model, aiNode* node) {
     //TODO: figure out wtf is going on with empty nodes
     //FIXME: apply transform on node AABBs
-    Node cn = {
+    ModelNode cn = {
         .Transform = glm::transpose(*(glm::mat4*)&node->mTransformation),
         .Bounds = { glm::vec3(INFINITY), glm::vec3(-INFINITY) }
     };
@@ -125,7 +125,7 @@ Node ConvertNode(const Model& model, aiNode* node) {
         cn.Bounds[1] = glm::max(cn.Bounds[1], mesh.Bounds[1]);
     }
     for (uint32_t i = 0; i < node->mNumChildren; i++) {
-        Node childNode = ConvertNode(model, node->mChildren[i]);
+        ModelNode childNode = ConvertNode(model, node->mChildren[i]);
 
         cn.Bounds[0] = glm::min(cn.Bounds[0], childNode.Bounds[0]);
         cn.Bounds[1] = glm::max(cn.Bounds[1], childNode.Bounds[1]);
@@ -142,8 +142,8 @@ Model::Model(std::string_view path) {
 
     Assimp::Importer imp;
 
-    if (sizeof(Index) < 4) {
-        imp.SetPropertyInteger(AI_CONFIG_PP_SLM_VERTEX_LIMIT, (1 << (sizeof(Index) * 8)) - 1);
+    if (sizeof(VertexIndex) < 4) {
+        imp.SetPropertyInteger(AI_CONFIG_PP_SLM_VERTEX_LIMIT, (1 << (sizeof(VertexIndex) * 8)) - 1);
     }
 
     const aiScene* scene = imp.ReadFile(path.data(), processFlags);
@@ -175,7 +175,7 @@ Model::Model(std::string_view path) {
     }
 
     VertexBuffer = std::make_unique<Vertex[]>(numVertices);
-    IndexBuffer = std::make_unique<Index[]>(numIndices);
+    IndexBuffer = std::make_unique<VertexIndex[]>(numIndices);
 
     uint32_t vertexPos = 0, indexPos = 0;
 
@@ -211,7 +211,7 @@ Model::Model(std::string_view path) {
             aiFace& face = mesh->mFaces[j];
 
             for (uint32_t k = 0; k < face.mNumIndices; k++) {
-                IndexBuffer[indexPos++] = (Index)face.mIndices[k];
+                IndexBuffer[indexPos++] = (VertexIndex)face.mIndices[k];
             }
         }
         impMesh.IndexCount = indexPos - impMesh.IndexOffset;

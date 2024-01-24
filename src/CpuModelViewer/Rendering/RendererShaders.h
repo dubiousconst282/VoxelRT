@@ -40,7 +40,7 @@ struct DefaultShader {
 
     // Uniform: Forward
     glm::mat4 ProjMat, ModelMat;
-    const swr::RgbaTexture2D* MaterialTex;  // See `scene::Material` for what's on this texture.
+    const swr::RgbaTexture2D* MaterialTex;  // See `glim::Material` for what's on this texture.
 
     // Uniform: Compose pass
     const swr::Framebuffer* ShadowBuffer;
@@ -53,15 +53,15 @@ struct DefaultShader {
     bool BlurSkybox = false;
 
     void ShadeVertices(const swr::VertexReader& data, swr::ShadedVertexPacket& vars) const {
-        VFloat3 pos = data.ReadAttribs<VFloat3>(&scene::Vertex::x);
+        VFloat3 pos = data.ReadAttribs<VFloat3>(&glim::Vertex::x);
         vars.Position = TransformVector(ProjMat, { pos, 1.0f });
 
-        vars.SetAttribs(0, data.ReadAttribs<VFloat2>(&scene::Vertex::u));
+        vars.SetAttribs(0, data.ReadAttribs<VFloat2>(&glim::Vertex::u));
 
-        VFloat3 norm = data.ReadAttribs<VFloat3>(&scene::Vertex::nx);
+        VFloat3 norm = data.ReadAttribs<VFloat3>(&glim::Vertex::nx);
         vars.SetAttribs(2, TransformNormal(ModelMat, norm));
 
-        VFloat3 tang = data.ReadAttribs<VFloat3>(&scene::Vertex::tx);
+        VFloat3 tang = data.ReadAttribs<VFloat3>(&glim::Vertex::tx);
         vars.SetAttribs(5, TransformNormal(ModelMat, tang));
     }
 
@@ -623,7 +623,7 @@ struct DepthOnlyShader {
     glm::mat4 ProjMat;
 
     void ShadeVertices(const swr::VertexReader& data, swr::ShadedVertexPacket& vars) const {
-        VFloat4 pos = { data.ReadAttribs<VFloat3>(&scene::Vertex::x), 1.0f };
+        VFloat4 pos = { data.ReadAttribs<VFloat3>(&glim::Vertex::x), 1.0f };
         vars.Position = TransformVector(ProjMat, pos);
     }
 
@@ -637,7 +637,7 @@ struct OverdrawShader {
     glm::mat4 ProjMat;
 
     void ShadeVertices(const swr::VertexReader& data, swr::ShadedVertexPacket& vars) const {
-        VFloat4 pos = { data.ReadAttribs<VFloat3>(&scene::Vertex::x), 1.0f };
+        VFloat4 pos = { data.ReadAttribs<VFloat3>(&glim::Vertex::x), 1.0f };
         vars.Position = TransformVector(ProjMat, pos);
     }
 
