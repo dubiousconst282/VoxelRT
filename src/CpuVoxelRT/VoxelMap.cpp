@@ -67,7 +67,7 @@ void VoxelMap::SyncGpuBuffers() {
 
 namespace gio = glim::io;
 
-static const uint64_t serMagic = 0x63'76'6f'78'00'00'00'01ul;  // "cvox 0001"
+static const uint64_t SerMagic = 0x00'00'00'01'78'6f'76'63ul;  // "cvox 0001"
 
 void VoxelMap::Deserialize(std::string_view filename) {
     std::ifstream is(filename.data(), std::ios::binary);
@@ -76,7 +76,7 @@ void VoxelMap::Deserialize(std::string_view filename) {
         throw std::runtime_error("File not found");
     }
 
-    if (gio::Read<uint64_t>(is) != serMagic) {
+    if (gio::Read<uint64_t>(is) != SerMagic) {
         throw std::runtime_error("Incompatible file");
     }
 
@@ -90,7 +90,7 @@ void VoxelMap::Deserialize(std::string_view filename) {
 void VoxelMap::Serialize(std::string_view filename) {
     std::ofstream os(filename.data(), std::ios::binary | std::ios::trunc);
 
-    gio::Write<uint64_t>(os, serMagic);
+    gio::Write<uint64_t>(os, SerMagic);
     gio::Write<uint32_t>(os, BrickStorage.size());
 
     gio::WriteCompressed(os, Palette, sizeof(Palette));

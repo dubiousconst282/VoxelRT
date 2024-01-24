@@ -20,13 +20,14 @@
 #include <Common/Scene.h>
 
 #include "RayMarching.h"
+#include "Common/SettingManager.h"
 
 class Renderer {
 public:
     virtual ~Renderer() { }
 
     virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) = 0;
-    virtual void RenderSettings() { }
+    virtual void InitSettings(glim::SettingManager& settings) { }
 };
 class CpuRenderer: public Renderer {
     std::shared_ptr<ogl::Shader> _blitShader;
@@ -37,6 +38,9 @@ class CpuRenderer: public Renderer {
 
     uint32_t _numAccumFrames = 0;
     bool _enablePathTracer = false;
+
+    glim::SettingStore _ownSettings;
+    glim::TimeMeasurer* _renderTimer = nullptr;
 
 public:
     CpuRenderer(ogl::ShaderLib& shlib) {
@@ -65,7 +69,7 @@ public:
         invProj = glm::scale(invProj, glm::vec3(2.0f / _fb->Width, 2.0f / _fb->Height, 1.0f));
 
         auto rows = std::ranges::iota_view(0u, (height + 3) / 4);
-        auto startTs = std::chrono::high_resolution_clock::now();
+        _renderTimer->Begin();
 
         std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
             swr::VRandom rng(rowId + _numAccumFrames * 123456ull);
@@ -127,10 +131,7 @@ public:
         });
         //_numAccumFrames++;
 
-        auto endTs = std::chrono::high_resolution_clock::now();
-        auto elapsed = (endTs - startTs).count() / 1000000.0;
-        ImGui::Text("Time: %.1fms", elapsed);
-        ImGui::Text("Frames: %d", _numAccumFrames);
+        _renderTimer->End();
 
         static_assert(offsetof(swr::Framebuffer, Height) == offsetof(swr::Framebuffer, Width) + 4);
         static_assert(offsetof(swr::Framebuffer, TileStride) == offsetof(swr::Framebuffer, Width) + 8);
@@ -140,6 +141,13 @@ public:
 
         _blitShader->SetUniform("ssbo_FrameData", *_pbo);
         _blitShader->DispatchFullscreen();
+    }
+
+    virtual void InitSettings(glim::SettingManager& settings) {
+        glim::SettingGroup& g = settings.AddGroup("Renderer##CPU", _ownSettings);
+        
+        g.AddCheckbox("Path Trace", [&](bool v) { _enablePathTracer = v; });
+        _renderTimer = g.AddTimeMetric("Frame Time");
     }
 };
 class GpuRenderer : public Renderer {
@@ -164,6 +172,8 @@ public:
 
 class Application {
     glim::Camera _cam = {};
+    glim::SettingManager _settings;
+    glim::SettingStore _ownSettings;
 
     cvox::VoxelMap _map;
 
@@ -207,13 +217,15 @@ public:
             _map.Serialize("logs/voxels.dat");
         }
 
-        _renderer = std::make_unique<GpuRenderer>(*_shaderLib);
+        InitSettings();
 
-        // _cam.Position = glm::vec3(50.5, 50.5, 50.5);
-        _cam.Position = glm::vec3(288, 72, 256);
-        // _cam.Position = glm::vec3(2, 4, 2);
-        _cam.MoveSpeed = 80;
-        _cam.Euler = glm::vec2(1.52, -0.5);
+        if (_renderer == nullptr) {
+            _renderer = std::make_unique<GpuRenderer>(*_shaderLib);
+            _renderer->InitSettings(_settings);
+        }
+    }
+    ~Application() {
+        _settings.Save("logs/voxelrt_settings.dat");
     }
 
     void Render(uint32_t vpWidth, uint32_t vpHeight) {
@@ -222,27 +234,52 @@ public:
         _cam.Update();
 
         ImGui::Begin("Settings");
-
-        ImGui::SeparatorText("Renderer");
-
-        _renderer->RenderSettings();
-
-        static bool s_RenderOnCpu = false;
-
-        if (ImGui::Checkbox("Render on CPU", &s_RenderOnCpu)) {
-            if (s_RenderOnCpu) _renderer = std::make_unique<CpuRenderer>(*_shaderLib);
-            else _renderer = std::make_unique<GpuRenderer>(*_shaderLib);
-        }
-
-        ImGui::SeparatorText("Camera");
-        ImGui::Text("Pos: %.2f %.2f %.2f, Rot: %.2f %.2f", _cam.Position.x, _cam.Position.y, _cam.Position.z, _cam.Euler.x, _cam.Euler.y);
-        ImGui::SliderFloat("Speed", &_cam.MoveSpeed, 0.5f, 500.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
-
+        _settings.Render();
         ImGui::End();
 
         _renderer->RenderFrame(_map, _cam, glm::uvec2(vpWidth, vpHeight));
 
         _shaderLib->Refresh();
+    }
+
+    void InitSettings() {
+        _settings.AddGroup("General", _ownSettings)
+            .AddCheckbox("VSync", [](bool value) { glfwSwapInterval(value ? 1 : 0); }, true)
+            .AddCheckbox("Render on CPU", [&](bool value) {
+                if (value) {
+                    _renderer = std::make_unique<CpuRenderer>(*_shaderLib);
+                } else {
+                    _renderer = std::make_unique<GpuRenderer>(*_shaderLib);
+                }
+                _renderer->InitSettings(_settings);
+            });
+
+        _settings.AddGroup("Camera", _ownSettings)
+            .Add({
+                .Name = std::string("Params"),
+                .Render = [&](glim::Setting& setting) {
+                    ImGui::InputFloat3("Pos", &_cam.Position.x, "%.1f");
+                    ImGui::InputFloat2("Rot", &_cam.Euler.x, "%.3f");
+                    ImGui::SliderFloat("Speed", &_cam.MoveSpeed, 0.5f, 500.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
+                    
+                    setting.Value<glm::mat2x3>() = { _cam.Position, glm::vec3(_cam.Euler, _cam.MoveSpeed) };
+                    return false;
+                },
+                .OnChange = [&](glim::Setting& setting) {
+                    auto value = setting.Value<glm::mat2x3>();
+                    _cam.Position = value[0];
+                    _cam.Euler = glm::vec2(value[1]);
+                    _cam.MoveSpeed = value[1][2];
+                },
+            });
+
+        // _cam.Position = glm::vec3(50.5, 50.5, 50.5);
+        _cam.Position = glm::vec3(288, 72, 256);
+        // _cam.Position = glm::vec3(2, 4, 2);
+        _cam.MoveSpeed = 80;
+        _cam.Euler = glm::vec2(1.52, -0.5);
+
+        _settings.Load("logs/voxelrt_settings.dat");
     }
 };
 
@@ -260,7 +297,7 @@ int main(int argc, char** args) {
     }
 
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(0); // Enable vsync
+    glfwSwapInterval(1); // Enable vsync
 
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 
