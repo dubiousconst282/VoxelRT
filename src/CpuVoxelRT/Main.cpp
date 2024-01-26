@@ -36,11 +36,14 @@ class CpuRenderer: public Renderer {
 
     std::unique_ptr<swr::HdrTexture2D> _skyBox;
 
-    uint32_t _numAccumFrames = 0;
+    uint32_t _frameNo = 0;
     bool _enablePathTracer = false;
 
     glim::SettingStore _ownSettings;
     glim::TimeMeasurer* _renderTimer = nullptr;
+
+    glm::vec3 _prevCameraPos;
+    glm::quat _prevCameraRot;
 
 public:
     CpuRenderer(ogl::ShaderLib& shlib) {
@@ -55,6 +58,13 @@ public:
         viewSize /= 4;
         #endif
 
+        bool camChanged = false;
+        if (glm::distance(cam._ViewPosition, _prevCameraPos) > 0.1f || glm::dot(cam._ViewRotation, _prevCameraRot) < 0.999999f) {
+            camChanged = true;
+        }
+        _prevCameraPos = cam._ViewPosition;
+        _prevCameraRot = cam._ViewRotation;
+
         if (_fb == nullptr || _fb->Width != viewSize.x || _fb->Height != viewSize.y) {
             _fb = std::make_unique<swr::Framebuffer>(viewSize.x, viewSize.y);
             _pbo = std::make_unique<ogl::Buffer>(viewSize.x * viewSize.y * 4 + 12, GL_DYNAMIC_STORAGE_BIT | GL_MAP_READ_BIT);
@@ -68,16 +78,16 @@ public:
         invProj = glm::translate(invProj, glm::vec3(-1.0f, -1.0f, 0.0f));
         invProj = glm::scale(invProj, glm::vec3(2.0f / _fb->Width, 2.0f / _fb->Height, 1.0f));
 
-        auto rows = std::ranges::iota_view(0u, (height + 3) / 4);
         _renderTimer->Begin();
 
+        auto rows = std::ranges::iota_view(0u, (height + 3) / 4);
         std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
-            swr::VRandom rng(rowId + _numAccumFrames * 123456ull);
+            swr::VRandom rng(rowId + _frameNo * 123456ull);
             uint32_t y = rowId * 4;
+            swr::VFloat v = swr::simd::conv2f((int32_t)y + swr::FragPixelOffsetsY) + rng.NextUnsignedFloat() - 0.5f;
 
             for (uint32_t x = 0; x < width; x += 4) {
                 swr::VFloat u = swr::simd::conv2f((int32_t)x + swr::FragPixelOffsetsX) + rng.NextUnsignedFloat() - 0.5f;
-                swr::VFloat v = swr::simd::conv2f((int32_t)y + swr::FragPixelOffsetsY) + rng.NextUnsignedFloat() - 0.5f;
 
                 swr::VFloat3 origin, dir;
                 cvox::GetPrimaryRay({ u, v }, invProj, origin, dir);
@@ -122,16 +132,17 @@ public:
 
                 auto prevColor = swr::pixfmt::RGB10u::Unpack(swr::VInt::load(tilePtr));
 
-                float weight = 1.0f / (_numAccumFrames + 1);
+                // float weight = 1.0f / (_frameNo + 1);
+                float weight = camChanged ? 0.5f : 0.1f;
                 auto finalColor = incomingLight * weight + prevColor * (1.0f - weight);
                 auto color = swr::pixfmt::RGB10u::Pack(finalColor);
 
                 color.store(tilePtr);
             }
         });
-        //_numAccumFrames++;
 
         _renderTimer->End();
+        _frameNo++;
 
         static_assert(offsetof(swr::Framebuffer, Height) == offsetof(swr::Framebuffer, Width) + 4);
         static_assert(offsetof(swr::Framebuffer, TileStride) == offsetof(swr::Framebuffer, Width) + 8);
@@ -231,15 +242,53 @@ public:
     void Render(uint32_t vpWidth, uint32_t vpHeight) {
         ImGui::ShowMetricsWindow();
 
-        _cam.Update();
+        if (ImGui::IsAnyMouseDown() && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
+            MousePickVoxels();
+        } else {
+            _cam.Update();
+        }
 
         ImGui::Begin("Settings");
         _settings.Render();
+
+        ImGui::SeparatorText("Stats");
+        ImGui::Text("Num Bricks: %zu", _map.BrickStorage.size());
         ImGui::End();
 
         _renderer->RenderFrame(_map, _cam, glm::uvec2(vpWidth, vpHeight));
 
         _shaderLib->Refresh();
+    }
+
+    void MousePickVoxels() {
+        glm::mat4 invProj = glm::inverse(_cam.GetProjMatrix() * _cam.GetViewMatrix());
+        swr::VFloat3 origin, dir;
+
+        ImVec2 mousePos = ImGui::GetMousePos();
+        ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+        glm::vec2 mouseUV = glm::vec2(mousePos.x / displaySize.x, 1 - mousePos.y / displaySize.y) * 2.0f - 1.0f;
+
+        cvox::GetPrimaryRay({ mouseUV.x, mouseUV.y }, invProj, origin, dir);
+        auto hit = cvox::RayMarch(_map, origin, dir, 1);
+
+        if (hit.Mask != 0) {
+            float x = origin.x[0] + dir.x[0] * hit.Dist[0];
+            float y = origin.y[0] + dir.y[0] * hit.Dist[0];
+            float z = origin.z[0] + dir.z[0] * hit.Dist[0];
+            int32_t radius = 3;
+
+            auto voxel = ImGui::IsKeyDown(ImGuiKey_ModAlt) ? cvox::Voxel::CreateEmpty(0) : cvox::Voxel::Create(223);
+
+            for (int32_t sy = -radius; sy <= radius; sy++) {
+                for (int32_t sz = -radius; sz <= radius; sz++) {
+                    for (int32_t sx = -radius; sx <= radius; sx++) {
+                        if (sx * sx + sy * sy + sz * sz >= radius * radius) continue;
+
+                        _map.Set(glm::uvec3(x + sx, y + sy, z + sz), voxel);
+                    }
+                }
+            }
+        }
     }
 
     void InitSettings() {
@@ -261,7 +310,7 @@ public:
                     ImGui::InputFloat3("Pos", &_cam.Position.x, "%.1f");
                     ImGui::InputFloat2("Rot", &_cam.Euler.x, "%.3f");
                     ImGui::SliderFloat("Speed", &_cam.MoveSpeed, 0.5f, 500.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
-                    
+
                     setting.Value<glm::mat2x3>() = { _cam.Position, glm::vec3(_cam.Euler, _cam.MoveSpeed) };
                     return false;
                 },
