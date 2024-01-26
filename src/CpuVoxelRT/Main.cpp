@@ -97,12 +97,12 @@ public:
                 swr::VMask mask = (swr::VMask)~0u;
 
                 for (uint32_t i = 0; i < 3 && mask; i++) {
-                    auto hit = cvox::RayMarch(map, origin, dir, mask);
-                    auto mat = map.GetMaterial(hit.Voxels);
+                    auto hit = cvox::RayMarch(map, origin, dir, mask, i==0);
+                    auto mat = map.GetMaterial(hit.Voxels, mask);
                     swr::VFloat3 matColor = mat.GetColor();
                     swr::VFloat emissionStrength = mat.GetEmissionStrength();
 
-                    swr::VMask missMask = mask & ~hit.Mask;
+                    /*swr::VMask missMask = mask & ~hit.Mask;
                     if (missMask) {
                         constexpr swr::SamplerDesc SD = { .MinFilter = swr::FilterMode::Nearest, .EnableMips = true };
                         swr::VFloat3 skyColor = _skyBox->SampleCube<SD>(dir);
@@ -110,7 +110,7 @@ public:
                         matColor.y = swr::simd::csel(missMask, skyColor.y, matColor.y);
                         matColor.z = swr::simd::csel(missMask, skyColor.z, matColor.z);
                         emissionStrength = swr::simd::csel(missMask, 1.0f, emissionStrength);
-                    }
+                    }*/
 
                     if (!_enablePathTracer) [[unlikely]] {
                         incomingLight = matColor;
@@ -172,8 +172,9 @@ public:
     virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) {
         map.SyncGpuBuffers();
 
-        _shader->SetUniform("u_BrickStorage", *map.GpuBrickStorage);
         _shader->SetUniform("ssbo_VoxelMapData", *map.GpuMetaStorage);
+        _shader->SetUniform("u_BrickStorage", *map.GpuBrickStorage);
+        _shader->SetUniform("u_OccupancyStorage", *map.GpuOccupancyStorage);
 
         glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * cam.GetViewMatrix());
         _shader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
@@ -197,15 +198,10 @@ public:
 
         _shaderLib = std::make_unique<ogl::ShaderLib>("src/CpuVoxelRT/Shaders/", true);
 
-        _map.Palette[220] = cvox::Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
-        _map.Palette[221] = cvox::Material::CreateDiffuse({ 0.2, 1, 0.2 }, 0.9f);
-        _map.Palette[222] = cvox::Material::CreateDiffuse({ 0.2, 0.2, 1 }, 0.9f);
-        _map.Palette[223] = cvox::Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
-
-        _map.Set({ 4, 2, 4 }, cvox::Voxel::Create(220));
-        _map.Set({ 4, 3, 4 }, cvox::Voxel::Create(221));
-        _map.Set({ 4, 4, 4 }, cvox::Voxel::Create(222));
-        _map.Set({ 4, 5, 4 }, cvox::Voxel::Create(223));
+        _map.Palette[252] = cvox::Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
+        _map.Palette[253] = cvox::Material::CreateDiffuse({ 0.2, 1, 0.2 }, 0.9f);
+        _map.Palette[254] = cvox::Material::CreateDiffuse({ 0.2, 0.2, 1 }, 0.9f);
+        _map.Palette[255] = cvox::Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
 
         try {
             _map.Deserialize("logs/voxels.dat");
@@ -218,14 +214,14 @@ public:
 
             _map.VoxelizeModel(model, glm::uvec3(0), glm::uvec3(512));
 
-            for (uint32_t x = 0; x < 512; x++) {
-                for (uint32_t z = 0; z < 32; z++) {
-                    _map.Set({ x, 16, 240 + z }, cvox::Voxel::Create(223));
-                    _map.Set({ x, 180, 240 + z }, cvox::Voxel::Create(223));
-                }
-            }
-
             _map.Serialize("logs/voxels.dat");
+        }
+
+        for (uint32_t x = 0; x < 512; x++) {
+            for (uint32_t z = 0; z < 32; z++) {
+                _map.Set({ x, 16, 240 + z }, cvox::Voxel::Create(255));
+                _map.Set({ x, 180, 240 + z }, cvox::Voxel::Create(255));
+            }
         }
 
         InitSettings();
@@ -269,7 +265,7 @@ public:
         glm::vec2 mouseUV = glm::vec2(mousePos.x / displaySize.x, 1 - mousePos.y / displaySize.y) * 2.0f - 1.0f;
 
         cvox::GetPrimaryRay({ mouseUV.x, mouseUV.y }, invProj, origin, dir);
-        auto hit = cvox::RayMarch(_map, origin, dir, 1);
+        auto hit = cvox::RayMarch(_map, origin, dir, 1, true);
 
         if (hit.Mask != 0) {
             float x = origin.x[0] + dir.x[0] * hit.Dist[0];
@@ -277,7 +273,7 @@ public:
             float z = origin.z[0] + dir.z[0] * hit.Dist[0];
             int32_t radius = 3;
 
-            auto voxel = ImGui::IsKeyDown(ImGuiKey_ModAlt) ? cvox::Voxel::CreateEmpty(0) : cvox::Voxel::Create(223);
+            auto voxel = ImGui::IsKeyDown(ImGuiKey_ModAlt) ? cvox::Voxel::CreateEmpty() : cvox::Voxel::Create(255);
 
             for (int32_t sy = -radius; sy <= radius; sy++) {
                 for (int32_t sz = -radius; sz <= radius; sz++) {

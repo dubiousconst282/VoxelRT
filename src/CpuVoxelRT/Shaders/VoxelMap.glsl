@@ -5,13 +5,18 @@ struct Material {
     uint Data;
 };
 readonly buffer ssbo_VoxelMapData {
-    Material Palette[224];
+    Material Palette[256];
     uint BrickSlots[NUM_BRICKS_PER_AXIS * NUM_BRICKS_PER_AXIS * NUM_BRICKS_PER_AXIS];
 };
 layout(r8ui) uniform readonly uimage3D u_BrickStorage;
+uniform usampler3D u_OccupancyStorage; // occupancy mips of N x N x (N/32) voxels
 
 uint vox_Lookup(ivec3 pos) {
     if (uint(pos.x | pos.y | pos.z) >= BRICK_SIZE * NUM_BRICKS_PER_AXIS) return 511;
+
+    //int k = 1;
+    //uvec4 tx=texelFetch(u_OccupancyStorage, ivec3(pos.xy >> k, pos.z >> (5 + k)),k-1);
+    //return ((tx.r >> (pos.z>>k) & 31u) & 1) * ((pos.x+pos.y+pos.z)%128+32);
     
     uvec3 brickPos = uvec3(pos) / BRICK_SIZE;
     uint brickIdx = brickPos.y * (NUM_BRICKS_PER_AXIS * NUM_BRICKS_PER_AXIS) +
@@ -22,14 +27,23 @@ uint vox_Lookup(ivec3 pos) {
     return imageLoad(u_BrickStorage, ivec3(slotPos * BRICK_SIZE + uvec3(pos) % BRICK_SIZE)).r;
 }
 
-bool vox_IsEmpty(uint data) {
-    return data < 32;
+uint vox_GetMipCellSize(ivec3 pos) {
+    int k = 0;
+    for (; k < 5; k++) {
+        ivec3 mipPos = pos >> (k+1);
+        uint column = texelFetch(u_OccupancyStorage, ivec3(mipPos.xy, mipPos.z >> 5), k).r;
+        uint opaque = (column >> (mipPos.z & 31u)) & 1u;
+        if (opaque != 0) break;
+    }
+    return 1 << k;
 }
-float vox_GetStepDist(uint data) {
-    return vox_IsEmpty(data) ? float(data) : 0;
+
+
+bool vox_IsEmpty(uint data) {
+    return data == 0;
 }
 Material vox_GetMaterial(uint data) {
-    return Palette[data - 32];
+    return Palette[data];
 }
 
 vec3 mat_GetColor(Material mat) {

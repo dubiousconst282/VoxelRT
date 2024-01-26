@@ -140,18 +140,12 @@ struct Texture2D : public Texture {
 
         glTextureStorage2D(Handle, mipLevels, internalFmt, width, height);
     }
-    void SetPixels(GLenum format, GLenum type, const void* pixels, uint32_t stride = 0, 
-                   glm::uvec2 offset = { 0, 0 }, glm::uvec2 size = { UINT_MAX, UINT_MAX },
-                   int32_t mipLevel = -1) {
+    void SetPixels(GLenum format, GLenum type, const void* pixels, uint32_t stride = 0) {
         if (stride != 0) glPixelStorei(GL_UNPACK_ROW_LENGTH, stride);
 
-        glTextureSubImage2D(
-            Handle, 
-            std::max(mipLevel, 0), offset.x, offset.y, 
-            std::min(size.x, Width), std::min(size.y, Height), 
-            format, type, pixels);
-            
-        if (mipLevel < 0) glGenerateTextureMipmap(Handle);
+        glTextureSubImage2D(Handle, 0, 0, 0, Width, Height, format, type, pixels);
+        glGenerateTextureMipmap(Handle);
+
         if (stride != 0) glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     }
     // Copies texture data to the specified buffer asynchronously.
@@ -180,21 +174,21 @@ struct Texture3D : public Texture {
         glTextureStorage3D(Handle, mipLevels, internalFmt, width, height, depth);
     }
 
-    void SetPixels(GLenum format, GLenum type, const void* pixels, uint32_t strideX = 0, uint32_t strideZ = 0, 
-                   glm::uvec3 offset = { 0, 0, 0 }, glm::uvec3 size = { UINT_MAX, UINT_MAX, UINT_MAX },
-                   int32_t mipLevel = -1) {
+    void SetPixels(GLenum format, GLenum type, const void* pixels, uint32_t strideX = 0, uint32_t strideZ = 0, int32_t mipLevel = 0,
+                   glm::uvec3 offset = { 0, 0, 0 }, glm::uvec3 size = { UINT_MAX, UINT_MAX, UINT_MAX }) {
         if (strideX != 0 || strideZ != 0) {
             glPixelStorei(GL_UNPACK_ROW_LENGTH, strideX);
             glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, strideZ);
         }
+        size.x = std::min(size.x, Width >> mipLevel);
+        size.y = std::min(size.y, Height >> mipLevel);
+        size.z = std::min(size.z, Depth >> mipLevel);
 
         glTextureSubImage3D(
             Handle, 
-            std::max(mipLevel, 0), offset.x, offset.y, offset.z, 
-            std::min(size.x, Width), std::min(size.y, Height), std::min(size.z, Depth),
+            mipLevel, offset.x, offset.y, offset.z, size.x, size.y, size.z,
             format, type, pixels);
             
-        if (mipLevel < 0) glGenerateTextureMipmap(Handle);
         if (strideX != 0 || strideZ != 0) {
             glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
             glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);

@@ -20,5 +20,39 @@
       </ArrayItems>
     </Expand>
   </Type>
+
+  <Type Name="glm::vec&lt;1,*,*&gt;">
+    <DisplayString>[{x,g}]</DisplayString>
+    <Expand HideRawView="1">
+      <Item Name="x">x,g</Item>
+    </Expand>
+  </Type>
+  
+  <Type Name="glm::vec&lt;2,*,*&gt;">
+    <DisplayString>[{x,g} {y,g}]</DisplayString>
+    <Expand HideRawView="1">
+      <Item Name="x">x,g</Item>
+      <Item Name="y">y,g</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="glm::vec&lt;3,*,*&gt;">
+    <DisplayString>[{x,g} {y,g} {z,g}]</DisplayString>
+    <Expand HideRawView="1">
+      <Item Name="x">x,g</Item>
+      <Item Name="y">y,g</Item>
+      <Item Name="z">z,g</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="glm::vec&lt;4,*,*&gt;">
+    <DisplayString>[{x,g} {y,g} {z,g} {w,g}]</DisplayString>
+    <Expand HideRawView="1">
+      <Item Name="x">x,g</Item>
+      <Item Name="y">y,g</Item>
+      <Item Name="z">z,g</Item>
+      <Item Name="w">w,g</Item>
+    </Expand>
+  </Type>
   
 </AutoVisualizer>

@@ -10,6 +10,7 @@ struct HitInfo {
     vec3 norm;
     vec2 uv;
     Material mat;
+    int iters;
 };
 
 vec3 getSideDist(vec3 x, vec3 s) {
@@ -18,25 +19,26 @@ vec3 getSideDist(vec3 x, vec3 s) {
     return mix(1.0 - x, x, lessThan(s, vec3(0.0)));
 }
 
-// https://medium.com/@calebleak/raymarching-voxel-rendering-58018201d9d6
-// Plane ray-marching is less accurate than DDA, but apparently easier to accelerate with distance fields.
 HitInfo rayMarch(vec3 origin, vec3 dir) {
     vec3 deltaDist = abs(1.0 / dir);
     vec3 sideDist;
 
     float totalDist = 0.0;
     uint voxelId = 0;
+    int i = 0;
 
-    for (int i = 0; i < 256; i++) {
+    for (; i < 128; i++) {
         vec3 pos = origin + dir * totalDist;
-        voxelId = vox_Lookup(ivec3(floor(pos)));
+        ivec3 gridPos = ivec3(floor(pos));
+        voxelId = vox_Lookup(gridPos);
 
         if (voxelId == 511 || !vox_IsEmpty(voxelId)) break;
 
-        sideDist = getSideDist(pos, dir) * deltaDist;
+        float cellSize = float(vox_GetMipCellSize(gridPos));
+        sideDist = getSideDist(pos/cellSize, dir) * (deltaDist * cellSize);
         float nearestSideDist = min(min(sideDist.x, sideDist.y), sideDist.z);
 
-        totalDist += max(vox_GetStepDist(voxelId), nearestSideDist + 1.0 / 4096);
+        totalDist += nearestSideDist + 1.0 / 4096;
     }
 
     // bool sideMaskX = sideDist.x < min(sideDist.y, sideDist.z);
@@ -48,6 +50,7 @@ HitInfo rayMarch(vec3 origin, vec3 dir) {
     hit.dist = totalDist;
     hit.norm = mix(vec3(0), -sign(dir), sideMask);
     hit.mat = vox_GetMaterial(voxelId);
+    hit.iters=i;
 
     return hit;
 }
@@ -66,6 +69,14 @@ void main() {
     HitInfo hit = rayMarch(rayPos, rayDir);
     //o_FragColor = vec4(hit.norm *0.5+0.5, 1.0);
     o_FragColor = vec4(mat_GetColor(hit.mat), 1.0);
+
+    /*uint sz=vox_GetMipCellSize(ivec3(rayPos+rayDir*(hit.dist)));
+    if(sz==1)o_FragColor.r+=0.2;
+    if(sz==2)o_FragColor.r+=0.5;
+    if(sz==4)o_FragColor.g+=0.2;
+    if(sz==8)o_FragColor.g+=0.5;
+    if(sz>=16)o_FragColor.b+=0.5;*/
+    //o_FragColor.rgb=vec3(hit.iters)/50.0;
     
     uint x = uint(v_FragCoord.x * 32);
     uint y = uint(v_FragCoord.y * 32);

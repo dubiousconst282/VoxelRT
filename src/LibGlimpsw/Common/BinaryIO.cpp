@@ -51,7 +51,7 @@ void ReadCompressed(std::istream& is, void* ptr, size_t size) {
         }
         size_t ret = ZSTD_decompressStream(zst, &outBuf, &inputBuf);
 
-        if (ZSTD_isError(ret)) {
+        if (ZSTD_isError(ret) || (ret > 0 && inputAvail == 0 && inputBuf.pos == inputBuf.size)) {
             throw std::ios_base::failure("Failed to decompress stream");
         }
     }

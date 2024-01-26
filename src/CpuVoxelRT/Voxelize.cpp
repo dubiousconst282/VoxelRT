@@ -92,7 +92,7 @@ void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 pos, glm::uvec
         swr::texutil::IterateTiles(tex.Width / 4, tex.Height / 4, processTile);
     }
 
-    palette.Build(210); // Can go up to 224, but we'll reserve a few slots for debug materials
+    palette.Build(240); // Can go up to 255, but we'll reserve a few slots for debug materials
 
     for (uint32_t i = 0; i < palette.NumColors; i++) {
         glm::vec3 color = glm::vec3(palette.ColorR[i], palette.ColorG[i], palette.ColorB[i]);
