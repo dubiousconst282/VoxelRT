@@ -15,14 +15,14 @@
 namespace ogl {
 
 inline void DebugMessage(GLenum type, GLenum severity, const char* fmt, ...) {
-    char msg[256];
+    char msg[1024];
 
     va_list args;
     va_start(args, fmt);
-    int len = vsprintf_s(msg, fmt, args);
+    vsnprintf(msg, sizeof(msg), fmt, args);
     va_end(args);
 
-    glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, type, clock(), severity, len, msg);
+    glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, type, clock(), severity, -1, msg);
 }
 
 inline void EnableDebugCallback() {

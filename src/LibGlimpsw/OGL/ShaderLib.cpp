@@ -151,14 +151,16 @@ void ShaderLib::Recompile(ShaderCompilation& shader) {
 
 };  // namespace ogl
 
+
+#ifdef _WIN32
+    #define WIN32_LEAN_AND_MEAN
+    #define NOMINMAX
+    #include <Windows.h>
+#endif
+
 namespace ogl::detail {
 
 #ifdef _WIN32
-
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <Windows.h>
-
 struct FileWatcher::ImplData {
     HANDLE _fileHandle;
     OVERLAPPED _overlapped = {};
@@ -216,6 +218,5 @@ FileWatcher::~FileWatcher() {
 }
 
 #endif
-
 
 };  // namespace ogl::detail
