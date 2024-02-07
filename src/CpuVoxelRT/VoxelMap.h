@@ -64,39 +64,45 @@ struct MaterialPack {
 };
 
 struct OccupancyMap {
-    static const uint32_t NumLevels = 5;  // 1/32
+    static const uint32_t NumLevels = 5;
 
-    std::unique_ptr<uint32_t[]> Data;  // N x N x (N / 32)
-    uint32_t CubeSize, CubeSizeLog2;
+    uint32_t Size, SizeLog2;
+    std::unique_ptr<uint8_t[]> Data;  // 2x2x2 cells
     uint32_t MipOffsets[NumLevels];
 
-    OccupancyMap(uint32_t cubeSize) {
+    OccupancyMap(uint32_t size) {
         uint32_t pos = 0;
         for (uint32_t i = 0; i < NumLevels; i++) {
             MipOffsets[i] = pos;
 
-            uint32_t d = cubeSize >> i;
-            pos += d * d * ((d + 31) / 32);
+            uint32_t d = size >> (i + 1);
+            pos += d * d * d;
         }
-        Data = std::make_unique<uint32_t[]>(pos);
-        CubeSize = cubeSize;
-        CubeSizeLog2 = (uint32_t)std::bit_width(cubeSize - 1);
-        assert(CubeSize == (1 << CubeSizeLog2)); // must be pow2
+        Data = std::make_unique<uint8_t[]>(pos);
+        Size = size;
+        SizeLog2 = (uint32_t)std::bit_width(size - 1);
+        assert(size == (1 << SizeLog2)); // must be pow2
     }
 
     // Update occupancy of a single brick located at the given voxel pos.
     void UpdateBrick(glm::uvec3 basePos, const Voxel* voxels);
 
-    // Update lower mips for a NxNx32 region, starting at the given voxel pos.
-    void UpdateMips(glm::uvec3 basePos, uint32_t planeSize);
-
     // Update occupancy of a single voxel.
     void Update(glm::uvec3 pos, bool occupied);
 
-    uint32_t GetColumnIndex(glm::uvec3 pos, uint32_t level) const {
-        uint32_t s = CubeSizeLog2 - level;
+    uint32_t GetCellIndex(glm::uvec3 pos, uint32_t level) const {
+        uint32_t s = SizeLog2 - (level + 1);
+        pos >>= 1;
         assert((pos.x | pos.y | pos.z) < (1 << s));
-        return MipOffsets[level] + pos.x + (pos.y << s) + ((pos.z >> 5) << (s * 2));
+        return MipOffsets[level] + pos.x + (pos.y << s) + (pos.z << (s * 2));
+    }
+    uint32_t GetSubcellIndex(glm::uvec3 pos) const {
+        return (pos.x & 1) | (pos.y & 1) << 1 | (pos.z & 1) << 2;
+    }
+    void Set(glm::uvec3 pos, uint32_t level, bool value) {
+        uint8_t& mask = Data[GetCellIndex(pos, level)];
+        uint32_t shift = GetSubcellIndex(pos);
+        mask = (mask & ~(1 << shift)) | (value << shift);
     }
 };
 struct VoxelMap {
@@ -112,7 +118,7 @@ struct VoxelMap {
 
     std::unique_ptr<uint32_t[]> BrickSlots;
     std::vector<Brick> BrickStorage;
-    OccupancyMap OccMap { NumVoxelsPerAxis / 2 }; // occupancy map starts at double voxel size
+    OccupancyMap OccMap { NumVoxelsPerAxis }; // occupancy map starts at double voxel size
     Material Palette[256] {};
 
     std::unique_ptr<ogl::Texture3D> GpuBrickStorage;

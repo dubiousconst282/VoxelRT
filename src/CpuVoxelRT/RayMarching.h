@@ -37,24 +37,6 @@ inline VFloat GetSideDist(VFloat x, VFloat sign) {
     return csel(sign < 0.0f, x, 1.0f - x);
 }
 
-VInt GetMipCellSize(const OccupancyMap& occ, VInt x, VInt y, VInt z, VMask mask) {
-    VInt opaqueLevel = 0;
-
-    for (uint32_t k = 0; k < 5 && mask; k++) {
-        // ivec3 mipPos = pos >> k;
-        // uint column = texelFetch(u_OccupancyStorage, ivec3(mipPos.xy, mipPos.z >> 5), k).r;
-        // uint opaque = (column >> (mipPos.z & 31u)) & 1u;
-        // if (opaque != 0) break;
-        x = x >> 1, y = y >> 1, z = z >> 1;
-        uint32_t s = occ.CubeSizeLog2 - k;
-        VInt offset = x + (y << s) + ((z >> 5) << (s * 2));
-        VInt column = _mm512_mask_i32gather_epi32(_mm512_setzero_si512(), mask, offset, occ.Data.get() + occ.MipOffsets[k], 4);
-        mask &= (column >> (z & 31) & 1) == 0;
-        opaqueLevel = csel(mask, (int32_t)k, opaqueLevel);
-    }
-    return 1 << opaqueLevel;
-}
-
 // https://medium.com/@calebleak/raymarching-voxel-rendering-58018201d9d6
 // Plane ray-marching is less accurate than DDA, but apparently easier to accelerate with distance fields.
 HitInfo RayMarch(const VoxelMap& map, VFloat3 origin, VFloat3 dir, VMask activeMask, bool isPrimaryRay) {
@@ -80,13 +62,9 @@ HitInfo RayMarch(const VoxelMap& map, VFloat3 origin, VFloat3 dir, VMask activeM
 
         if (!any(activeMask)) break;
 
-        VFloat cellSize = conv2f(GetMipCellSize(map.OccMap, vx, vy, vz, activeMask));
-        if (!isPrimaryRay) cellSize *= 2;
-        VFloat invCellSize = 1.0f / cellSize;
-
-        set_if(activeMask, sideDist.x, GetSideDist(pos.x * invCellSize, dir.x) * (delta.x * cellSize));
-        set_if(activeMask, sideDist.y, GetSideDist(pos.y * invCellSize, dir.y) * (delta.y * cellSize));
-        set_if(activeMask, sideDist.z, GetSideDist(pos.z * invCellSize, dir.z) * (delta.z * cellSize));
+        set_if(activeMask, sideDist.x, GetSideDist(pos.x, dir.x) * delta.x);
+        set_if(activeMask, sideDist.y, GetSideDist(pos.y, dir.y) * delta.y);
+        set_if(activeMask, sideDist.z, GetSideDist(pos.z, dir.z) * delta.z);
 
         VFloat stepDist = min(min(sideDist.x, sideDist.y), sideDist.z) + 1.0f / 4096;
         dist += csel(activeMask, stepDist, 0.0f);

@@ -102,7 +102,7 @@ public:
                     swr::VFloat3 matColor = mat.GetColor();
                     swr::VFloat emissionStrength = mat.GetEmissionStrength();
 
-                    /*swr::VMask missMask = mask & ~hit.Mask;
+                    swr::VMask missMask = mask & ~hit.Mask;
                     if (missMask) {
                         constexpr swr::SamplerDesc SD = { .MinFilter = swr::FilterMode::Nearest, .EnableMips = true };
                         swr::VFloat3 skyColor = _skyBox->SampleCube<SD>(dir);
@@ -110,7 +110,7 @@ public:
                         matColor.y = swr::simd::csel(missMask, skyColor.y, matColor.y);
                         matColor.z = swr::simd::csel(missMask, skyColor.z, matColor.z);
                         emissionStrength = swr::simd::csel(missMask, 1.0f, emissionStrength);
-                    }*/
+                    }
 
                     if (!_enablePathTracer) [[unlikely]] {
                         incomingLight = matColor;
@@ -163,14 +163,27 @@ public:
 };
 class GpuRenderer : public Renderer {
     std::shared_ptr<ogl::Shader> _shader;
+    glim::SettingStore _ownSettings;
+    int _showHeatmap;
+    int _useAnisoTraversal;
+
+    GLuint _frameQueryObj = 0;
+    GLint64 _frameTime = 0;
 
 public:
     GpuRenderer(ogl::ShaderLib& shlib) {
         _shader = shlib.LoadFrag("VoxelRender");
+        glCreateQueries(GL_TIME_ELAPSED, 1, &_frameQueryObj);
+    }
+    ~GpuRenderer() {
+        glDeleteQueries(1, &_frameQueryObj);
     }
 
     virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) {
         map.SyncGpuBuffers();
+
+        glGetQueryObjecti64v(_frameQueryObj, GL_QUERY_RESULT, &_frameTime);
+        glBeginQuery(GL_TIME_ELAPSED, _frameQueryObj);
 
         _shader->SetUniform("ssbo_VoxelMapData", *map.GpuMetaStorage);
         _shader->SetUniform("u_BrickStorage", *map.GpuBrickStorage);
@@ -178,7 +191,23 @@ public:
 
         glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * cam.GetViewMatrix());
         _shader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
+        _shader->SetUniform("u_ShowTraversalHeatmap", &_showHeatmap, 1);
+        _shader->SetUniform("u_AnisotropicTraversal", &_useAnisoTraversal, 1);
         _shader->DispatchFullscreen();
+
+        glEndQuery(GL_TIME_ELAPSED);
+    }
+
+    virtual void InitSettings(glim::SettingManager& settings) {
+        settings.AddGroup("Renderer##GPU", _ownSettings)
+            .AddCheckbox("Traversal Heatmap", [&](bool v) { _showHeatmap = v ? 1 : 0; })
+            .AddCheckbox("Anisotropic Traversal", [&](bool v) { _useAnisoTraversal = v ? 1 : 0; })
+            .Add({
+                .Render = [&](glim::Setting& s) {
+                    ImGui::Text("Frame Time: %.2fms", _frameTime / 1000000.0);
+                    return false;
+                }
+            });
     }
 };
 

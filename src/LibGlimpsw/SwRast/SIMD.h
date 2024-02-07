@@ -120,7 +120,8 @@ inline VInt operator<<(VInt a, uint32_t b) { return _mm512_slli_epi32(a, b); }
 
 inline VInt operator>>(VInt a, VInt b) { return _mm512_srav_epi32(a, b); }
 inline VInt operator<<(VInt a, VInt b) { return _mm512_sllv_epi32(a, b); }
-
+inline VInt operator~(VInt a) { return a ^ ~0; }
+inline VInt operator|=(VInt& a, VInt b) { return a = (a | b); }
 
 inline VFloat2 operator+(VFloat2 a, VFloat2 b) { return { a.x + b.x, a.y + b.y }; }
 inline VFloat2 operator-(VFloat2 a, VFloat2 b) { return { a.x - b.x, a.y - b.y }; }
@@ -196,6 +197,22 @@ inline VInt lerp16(VInt a, VInt b, VInt t) { return _mm512_add_epi16(a, _mm512_m
 // shift right logical
 inline VInt shrl(VInt a, uint32_t b) { return _mm512_srli_epi32(a, b); }
 inline VInt shrl(VInt a, VInt b) { return _mm512_srlv_epi32(a, b); }
+
+// Reverse bits of packed 32-bit integers.
+// https://wunkolo.github.io/post/2020/11/gf2p8affineqb-bit-reversal/
+inline VInt bitrev(VInt x) {
+    const auto A = _mm512_set1_epi64(0b10000000'01000000'00100000'00010000'00001000'00000100'00000010'00000001LL);
+    const auto B = _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
+
+    auto rev8 = _mm512_gf2p8affine_epi64_epi8(x, A, 0);
+    return _mm512_shuffle_epi8(rev8, _mm512_broadcast_i32x4(B));
+}
+inline VInt lzcnt(VInt x) { return _mm512_lzcnt_epi32(x); }
+
+// https://en.wikipedia.org/wiki/Find_first_set#Properties_and_relations
+// tzcnt(x) = 31 - lzcnt(x & -x)
+//          = popcnt((x & -x) - 1)   (popcnt 3c vs lzcnt 4c, avoids const load from mem -> reduced latency)
+inline VInt tzcnt(VInt x) { return _mm512_popcnt_epi32((x & (0 - x)) - 1); }
 
 inline VFloat dot(VFloat3 a, VFloat3 b) {
     return fma(a.x, b.x, fma(a.y, b.y, a.z * b.z));
