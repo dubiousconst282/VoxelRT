@@ -42,7 +42,7 @@ class CpuRenderer: public Renderer {
     glim::SettingStore _ownSettings;
     glim::TimeMeasurer* _renderTimer = nullptr;
 
-    glm::vec3 _prevCameraPos;
+    glm::dvec3 _prevCameraPos;
     glm::quat _prevCameraRot;
 
 public:
@@ -59,11 +59,11 @@ public:
         #endif
 
         bool camChanged = false;
-        if (glm::distance(cam._ViewPosition, _prevCameraPos) > 0.1f || glm::dot(cam._ViewRotation, _prevCameraRot) < 0.999999f) {
+        if (glm::distance(cam.ViewPosition, _prevCameraPos) > 0.1f || glm::dot(cam.ViewRotation, _prevCameraRot) < 0.999999f) {
             camChanged = true;
         }
-        _prevCameraPos = cam._ViewPosition;
-        _prevCameraRot = cam._ViewRotation;
+        _prevCameraPos = cam.ViewPosition;
+        _prevCameraRot = cam.ViewRotation;
 
         if (_fb == nullptr || _fb->Width != viewSize.x || _fb->Height != viewSize.y) {
             _fb = std::make_unique<swr::Framebuffer>(viewSize.x, viewSize.y);
@@ -189,10 +189,16 @@ public:
         _shader->SetUniform("u_BrickStorage", *map.GpuBrickStorage);
         _shader->SetUniform("u_OccupancyStorage", *map.GpuOccupancyStorage);
 
-        glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * cam.GetViewMatrix());
+        glm::dvec3 camPos = cam.ViewPosition;
+        glm::ivec3 worldOrigin = glm::ivec3(glm::floor(camPos));
+
+        glm::mat4 viewMat = glm::translate(cam.GetViewMatrix(false), glm::vec3(glm::floor(camPos) - camPos));
+        glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * viewMat);
+        
         _shader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
         _shader->SetUniform("u_ShowTraversalHeatmap", &_showHeatmap, 1);
         _shader->SetUniform("u_AnisotropicTraversal", &_useAnisoTraversal, 1);
+        _shader->SetUniform("u_WorldOrigin", &worldOrigin.x, 3);
         _shader->DispatchFullscreen();
 
         glEndQuery(GL_TIME_ELAPSED);
@@ -332,7 +338,7 @@ public:
             .Add({
                 .Name = std::string("Params"),
                 .Render = [&](glim::Setting& setting) {
-                    ImGui::InputFloat3("Pos", &_cam.Position.x, "%.1f");
+                    ImGui::InputScalarN("Pos", ImGuiDataType_Double, &_cam.Position.x, 3, 0, 0, "%.1f");
                     ImGui::InputFloat2("Rot", &_cam.Euler.x, "%.3f");
                     ImGui::SliderFloat("Speed", &_cam.MoveSpeed, 0.5f, 500.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
 

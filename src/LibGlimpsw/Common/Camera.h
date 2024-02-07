@@ -7,7 +7,7 @@ namespace glim {
 struct Camera {
     enum InputMode { FirstPerson, Arcball };
 
-    glm::vec3 Position;
+    glm::dvec3 Position;
     glm::vec2 Euler;  // yaw, pitch
     float ArcDistance = 5.0f;
 
@@ -19,14 +19,16 @@ struct Camera {
     float NearZ = 0.01f, FarZ = 1000.0f;
 
     // Smoothed values
-    glm::vec3 _ViewPosition;
-    glm::quat _ViewRotation;
+    glm::dvec3 ViewPosition;
+    glm::quat ViewRotation;
 
-    glm::mat4 GetViewMatrix() {
+    glm::mat4 GetViewMatrix(bool translateToView = true) {
         if (Mode == InputMode::Arcball) {
-            return glm::lookAt(_ViewPosition, glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
+            return glm::lookAt(ViewPosition, glm::dvec3(0, 0, 0), glm::dvec3(0, 1, 0));
         }
-        return glm::translate(glm::mat4_cast(_ViewRotation), -_ViewPosition);
+        glm::mat4 mat = glm::mat4_cast(ViewRotation);
+        if (translateToView) mat = glm::translate(mat, glm::vec3(-ViewPosition));
+        return mat;
     }
     glm::mat4 GetProjMatrix() { return glm::perspective(glm::radians(FieldOfView), AspectRatio, NearZ, FarZ); }
 
@@ -69,8 +71,8 @@ struct Camera {
                 // TODO: implement panning for arcball camera
             }
         }
-        _ViewRotation = glm::slerp(_ViewRotation, destRotation, blend);
-        _ViewPosition = glm::lerp(_ViewPosition, Position, blend);
+        ViewRotation = glm::slerp(ViewRotation, destRotation, blend);
+        ViewPosition = glm::lerp(ViewPosition, Position, (double)blend);
 
         AspectRatio = io.DisplaySize.x / io.DisplaySize.y;
     }

@@ -9,7 +9,9 @@ readonly buffer ssbo_VoxelMapData {
     uint BrickSlots[NUM_BRICKS_PER_AXIS * NUM_BRICKS_PER_AXIS * NUM_BRICKS_PER_AXIS];
 };
 layout(r8ui) uniform readonly uimage3D u_BrickStorage;
-uniform usampler3D u_OccupancyStorage; // occupancy mips of N x N x (N/32) voxels
+uniform usampler3D u_OccupancyStorage;
+
+uniform ivec3 u_WorldOrigin;
 
 bool isInBounds(ivec3 pos) {
     return uint(pos.x | pos.y | pos.z) < BRICK_SIZE * NUM_BRICKS_PER_AXIS;

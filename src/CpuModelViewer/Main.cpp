@@ -205,7 +205,7 @@ public:
         _shader->ShadowProjMat = _shadowProjMat;
         _shader->ViewMat = viewMat;
         _shader->LightPos = _lightPos;
-        _shader->ViewPos = _cam._ViewPosition;
+        _shader->ViewPos = _cam.ViewPosition;
 
         if (s_Layer == renderer::DebugLayer::Overdraw) {
             _fb->Clear(0xFF000000, 1.0f);

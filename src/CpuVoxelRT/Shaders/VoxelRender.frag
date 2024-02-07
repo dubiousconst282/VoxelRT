@@ -37,7 +37,7 @@ HitInfo rayMarch(vec3 origin, vec3 dir) {
     int k = 3;
 
     for (; i < 128; i++) {
-        ivec3 pos = ivec3(floor(currPos));
+        ivec3 pos = u_WorldOrigin + ivec3(floor(currPos));
 
         if (!isInBounds(pos)) break;
 
@@ -77,9 +77,9 @@ HitInfo rayMarch(vec3 origin, vec3 dir) {
             stepSize += (ivec3(expandMask) >> ivec3(0, 1, 2) & 1) << k;
         }
 
-        pos = pos + stepSize * stepDir;
+        pos = (pos-u_WorldOrigin) + stepSize * stepDir;
         sideDist = tStart + pos * invDir;
-        tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.01;
+        tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001;
 
         currPos = origin + tmin * dir;
     }
@@ -89,7 +89,7 @@ HitInfo rayMarch(vec3 origin, vec3 dir) {
     // bool sideMaskZ = !sideMaskX && !sideMaskY;
     bvec3 sideMask = lessThanEqual(sideDist.xyz, min(sideDist.yzx, sideDist.zxy));
 
-    uint voxelId = getVoxel(ivec3(floor(currPos)));
+    uint voxelId = getVoxel(u_WorldOrigin + ivec3(floor(currPos)));
 
     HitInfo hit;
     hit.dist = tmin;
