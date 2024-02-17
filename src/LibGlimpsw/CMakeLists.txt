@@ -7,7 +7,7 @@ add_library(
     SwRast/ImageHelpers.cpp
 
     Common/Scene.cpp
-    Common/SettingManager.cpp
+    Common/SettingStore.cpp
     Common/BinaryIO.cpp
 
     OGL/ShaderLib.cpp

@@ -363,6 +363,10 @@ public:
             default: throw std::exception();
         }
     }
+    void SetUniform(std::string_view name, int value) {
+        GLint loc = glGetUniformLocation(Handle, name.data());
+        glProgramUniform1i(Handle, loc, value);
+    }
 
     void Attach(GLuint type, std::string_view source) {
         GLuint shaderId = glCreateShader(type);

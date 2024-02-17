@@ -20,14 +20,14 @@
 #include <Common/Scene.h>
 
 #include "RayMarching.h"
-#include "Common/SettingManager.h"
+#include "Common/SettingStore.h"
 
 class Renderer {
 public:
     virtual ~Renderer() { }
 
     virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) = 0;
-    virtual void InitSettings(glim::SettingManager& settings) { }
+    virtual void DrawSettings(glim::SettingStore& settings) { }
 };
 class CpuRenderer: public Renderer {
     std::shared_ptr<ogl::Shader> _blitShader;
@@ -37,10 +37,9 @@ class CpuRenderer: public Renderer {
     std::unique_ptr<swr::HdrTexture2D> _skyBox;
 
     uint32_t _frameNo = 0;
-    bool _enablePathTracer = false;
 
-    glim::SettingStore _ownSettings;
-    glim::TimeMeasurer* _renderTimer = nullptr;
+    bool _enablePathTracer;
+    glim::TimeStat _frameTime;
 
     glm::dvec3 _prevCameraPos;
     glm::quat _prevCameraRot;
@@ -78,7 +77,7 @@ public:
         invProj = glm::translate(invProj, glm::vec3(-1.0f, -1.0f, 0.0f));
         invProj = glm::scale(invProj, glm::vec3(2.0f / _fb->Width, 2.0f / _fb->Height, 1.0f));
 
-        _renderTimer->Begin();
+        _frameTime.Begin();
 
         auto rows = std::ranges::iota_view(0u, (height + 3) / 4);
         std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
@@ -141,7 +140,7 @@ public:
             }
         });
 
-        _renderTimer->End();
+        _frameTime.End();
         _frameNo++;
 
         static_assert(offsetof(swr::Framebuffer, Height) == offsetof(swr::Framebuffer, Width) + 4);
@@ -153,27 +152,28 @@ public:
         _blitShader->SetUniform("ssbo_FrameData", *_pbo);
         _blitShader->DispatchFullscreen();
     }
-
-    virtual void InitSettings(glim::SettingManager& settings) {
-        glim::SettingGroup& g = settings.AddGroup("Renderer##CPU", _ownSettings);
-        
-        g.AddCheckbox("Path Trace", [&](bool v) { _enablePathTracer = v; });
-        _renderTimer = g.AddTimeMetric("Frame Time");
+    virtual void DrawSettings(glim::SettingStore& settings) {
+        ImGui::SeparatorText("Renderer##CPU");
+        settings.Checkbox("Path Trace", &_enablePathTracer);
+        _frameTime.Draw("Frame Time");
     }
 };
 class GpuRenderer : public Renderer {
     std::shared_ptr<ogl::Shader> _shader;
     glim::SettingStore _ownSettings;
-    int _showHeatmap;
-    int _useAnisoTraversal;
+    bool _showHeatmap;
+    bool _useAnisoTraversal;
 
     GLuint _frameQueryObj = 0;
-    GLint64 _frameTime = 0;
+    glim::TimeStat _frameTime;
+    std::unique_ptr<ogl::Buffer> _metricsBuffer;
 
 public:
     GpuRenderer(ogl::ShaderLib& shlib) {
         _shader = shlib.LoadFrag("VoxelRender");
         glCreateQueries(GL_TIME_ELAPSED, 1, &_frameQueryObj);
+
+        _metricsBuffer = std::make_unique<ogl::Buffer>(64, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
     }
     ~GpuRenderer() {
         glDeleteQueries(1, &_frameQueryObj);
@@ -182,7 +182,9 @@ public:
     virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) {
         map.SyncGpuBuffers();
 
-        glGetQueryObjecti64v(_frameQueryObj, GL_QUERY_RESULT, &_frameTime);
+        GLint64 frameElapsedNs;
+        glGetQueryObjecti64v(_frameQueryObj, GL_QUERY_RESULT, &frameElapsedNs);
+        _frameTime.AddSample(frameElapsedNs / 1000000.0);
         glBeginQuery(GL_TIME_ELAPSED, _frameQueryObj);
 
         _shader->SetUniform("ssbo_VoxelMapData", *map.GpuMetaStorage);
@@ -196,31 +198,32 @@ public:
         glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * viewMat);
         
         _shader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
-        _shader->SetUniform("u_ShowTraversalHeatmap", &_showHeatmap, 1);
-        _shader->SetUniform("u_AnisotropicTraversal", &_useAnisoTraversal, 1);
+        _shader->SetUniform("u_ShowTraversalHeatmap", _showHeatmap ? 1 : 0);
+        _shader->SetUniform("u_AnisotropicTraversal", _useAnisoTraversal ? 1 : 0);
         _shader->SetUniform("u_WorldOrigin", &worldOrigin.x, 3);
+        _shader->SetUniform("ssbo_Metrics", *_metricsBuffer);
         _shader->DispatchFullscreen();
 
         glEndQuery(GL_TIME_ELAPSED);
     }
+    virtual void DrawSettings(glim::SettingStore& settings) {
+        ImGui::SeparatorText("Renderer##GPU");
+        settings.Checkbox("Traversal Heatmap", &_showHeatmap);
+        settings.Checkbox("Anisotropic Traversal", &_useAnisoTraversal);
 
-    virtual void InitSettings(glim::SettingManager& settings) {
-        settings.AddGroup("Renderer##GPU", _ownSettings)
-            .AddCheckbox("Traversal Heatmap", [&](bool v) { _showHeatmap = v ? 1 : 0; })
-            .AddCheckbox("Anisotropic Traversal", [&](bool v) { _useAnisoTraversal = v ? 1 : 0; })
-            .Add({
-                .Render = [&](glim::Setting& s) {
-                    ImGui::Text("Frame Time: %.2fms", _frameTime / 1000000.0);
-                    return false;
-                }
-            });
+        ImGui::Separator();
+        _frameTime.Draw("Frame Time");
+
+        uint32_t* totalIters = _metricsBuffer->Map<uint32_t>(GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
+        ImGui::Text("Traversal Iters: %.3fM", *totalIters / 1000000.0);
+        *totalIters = 0;
+        _metricsBuffer->Unmap();
     }
 };
 
 class Application {
     glim::Camera _cam = {};
-    glim::SettingManager _settings;
-    glim::SettingStore _ownSettings;
+    glim::SettingStore _settings;
 
     cvox::VoxelMap _map;
 
@@ -239,7 +242,7 @@ public:
         _map.Palette[255] = cvox::Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
 
         try {
-            _map.Deserialize("logs/voxels.dat");
+            _map.Deserialize("logs/voxels_pinnace.dat");
         } catch (std::exception& ex) {
             std::cout << "Failed to load voxel map cache" << std::endl;
 
@@ -247,27 +250,16 @@ public:
             // auto model = glim::Model("logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf");
             // auto model = glim::Model("logs/assets/models/DamagedHelmet/DamagedHelmet.gltf");
 
-            _map.VoxelizeModel(model, glm::uvec3(0), glm::uvec3(512));
+            _map.VoxelizeModel(model, glm::uvec3(24), glm::uvec3(1000));
 
             _map.Serialize("logs/voxels.dat");
         }
 
-        for (uint32_t x = 0; x < 512; x++) {
-            for (uint32_t z = 0; z < 32; z++) {
-                _map.Set({ x, 16, 240 + z }, cvox::Voxel::Create(255));
-                _map.Set({ x, 180, 240 + z }, cvox::Voxel::Create(255));
-            }
-        }
+        _cam.Position = glm::vec3(512, 128, 512);
+        _cam.MoveSpeed = 180;
+        _cam.Euler = glm::vec2(1.52, -0.5);
 
-        InitSettings();
-
-        if (_renderer == nullptr) {
-            _renderer = std::make_unique<GpuRenderer>(*_shaderLib);
-            _renderer->InitSettings(_settings);
-        }
-    }
-    ~Application() {
-        _settings.Save("logs/voxelrt_settings.dat");
+        _settings.Load("logs/voxelrt_settings.dat", true);
     }
 
     void Render(uint32_t vpWidth, uint32_t vpHeight) {
@@ -280,10 +272,33 @@ public:
         }
 
         ImGui::Begin("Settings");
-        _settings.Render();
 
-        ImGui::SeparatorText("Stats");
+        ImGui::SeparatorText("General");
+
+        static bool useVSync = true;
+        if (_settings.Checkbox("VSync", &useVSync)) {
+            glfwSwapInterval(useVSync ? 1 : 0);
+        }
+
+        static bool useCpuRenderer = false;
+        if (_renderer == nullptr || _settings.Checkbox("Use CPU Renderer", &useCpuRenderer)) {
+            if (useCpuRenderer) {
+                _renderer = std::make_unique<CpuRenderer>(*_shaderLib);
+            } else {
+                _renderer = std::make_unique<GpuRenderer>(*_shaderLib);
+            }
+            auto fn = std::function(ImGui::InputScalarN);
+        }
+
+        _renderer->DrawSettings(_settings);
+
         ImGui::Text("Num Bricks: %zu", _map.BrickStorage.size());
+
+        ImGui::SeparatorText("Camera");
+        _settings.InputScalarN("Pos", &_cam.Position.x, 3, "%.1f");
+        _settings.InputScalarN("Rot", &_cam.Euler.x, 2, "%.1f");
+        _settings.Slider("Speed", &_cam.MoveSpeed, 1, 0.5f, 500.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
+
         ImGui::End();
 
         _renderer->RenderFrame(_map, _cam, glm::uvec2(vpWidth, vpHeight));
@@ -292,7 +307,7 @@ public:
     }
 
     void MousePickVoxels() {
-        glm::mat4 invProj = glm::inverse(_cam.GetProjMatrix() * _cam.GetViewMatrix());
+        glm::mat4 invProj = glm::inverse(_cam.GetProjMatrix() * _cam.GetViewMatrix(false));
         swr::VFloat3 origin, dir;
 
         ImVec2 mousePos = ImGui::GetMousePos();
@@ -300,6 +315,7 @@ public:
         glm::vec2 mouseUV = glm::vec2(mousePos.x / displaySize.x, 1 - mousePos.y / displaySize.y) * 2.0f - 1.0f;
 
         cvox::GetPrimaryRay({ mouseUV.x, mouseUV.y }, invProj, origin, dir);
+        origin += glm::vec3(glm::floor(_cam.ViewPosition));
         auto hit = cvox::RayMarch(_map, origin, dir, 1, true);
 
         if (hit.Mask != 0) {
@@ -320,46 +336,6 @@ public:
                 }
             }
         }
-    }
-
-    void InitSettings() {
-        _settings.AddGroup("General", _ownSettings)
-            .AddCheckbox("VSync", [](bool value) { glfwSwapInterval(value ? 1 : 0); }, true)
-            .AddCheckbox("Render on CPU", [&](bool value) {
-                if (value) {
-                    _renderer = std::make_unique<CpuRenderer>(*_shaderLib);
-                } else {
-                    _renderer = std::make_unique<GpuRenderer>(*_shaderLib);
-                }
-                _renderer->InitSettings(_settings);
-            });
-
-        _settings.AddGroup("Camera", _ownSettings)
-            .Add({
-                .Name = std::string("Params"),
-                .Render = [&](glim::Setting& setting) {
-                    ImGui::InputScalarN("Pos", ImGuiDataType_Double, &_cam.Position.x, 3, 0, 0, "%.1f");
-                    ImGui::InputFloat2("Rot", &_cam.Euler.x, "%.3f");
-                    ImGui::SliderFloat("Speed", &_cam.MoveSpeed, 0.5f, 500.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
-
-                    setting.Value<glm::mat2x3>() = { _cam.Position, glm::vec3(_cam.Euler, _cam.MoveSpeed) };
-                    return false;
-                },
-                .OnChange = [&](glim::Setting& setting) {
-                    auto value = setting.Value<glm::mat2x3>();
-                    _cam.Position = value[0];
-                    _cam.Euler = glm::vec2(value[1]);
-                    _cam.MoveSpeed = value[1][2];
-                },
-            });
-
-        // _cam.Position = glm::vec3(50.5, 50.5, 50.5);
-        _cam.Position = glm::vec3(288, 72, 256);
-        // _cam.Position = glm::vec3(2, 4, 2);
-        _cam.MoveSpeed = 80;
-        _cam.Euler = glm::vec2(1.52, -0.5);
-
-        _settings.Load("logs/voxelrt_settings.dat");
     }
 };
 
