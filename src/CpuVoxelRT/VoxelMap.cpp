@@ -1,130 +1,150 @@
 #include "VoxelMap.h"
+
 #include <Common/BinaryIO.h>
+#include <sstream>
 
-namespace cvox {
-
-static glm::uvec3 GetGpuBrickSlot(uint32_t slotId) {
-    const uint32_t mask = 0x49249249; // 0b001 on all consecutive bits
-
-    // Morton de-interleaving. This is quite arbitrary but allows
-    // the texture size to be cubed in respect to number of bricks.
-    auto pos = glm::uvec3(0);
-    pos.x = _pext_u32(slotId, mask << 0);
-    pos.y = _pext_u32(slotId, mask << 1);
-    pos.z = _pext_u32(slotId, mask << 2);
-    return pos;
-}
-static glm::uvec3 GetGpuTextureSize(uint32_t numBricks) {
-    return (GetGpuBrickSlot(std::bit_ceil(numBricks) - 1u) + 1u) * VoxelMap::BrickSize;
+Brick* Sector::GetBrick(uint32_t index, bool create) {
+    uint8_t& slot = BrickSlots[index];
+    if (slot != 0) {
+        return &Storage[slot - 1];
+    }
+    if (create) {
+        slot = (uint8_t)Storage.size() + 1;
+        return &Storage.emplace_back();
+    }
+    return nullptr;
 }
 
-void VoxelMap::SyncGpuBuffers() {
-    if (GpuMetaStorage == nullptr) {
-        GpuMetaStorage = std::make_unique<ogl::Buffer>(sizeof(GpuMeta), GL_MAP_WRITE_BIT);
+void Sector::DeleteBricks(uint64_t mask) {
+    uint32_t j = 0;
 
-        uint32_t occSize = OccMap.Size >> 1;
-        GpuOccupancyStorage = std::make_unique<ogl::Texture3D>(occSize, occSize, occSize, OccupancyMap::NumLevels, GL_R8UI);
-    }
-    glm::uvec3 texSize = GetGpuTextureSize(BrickStorage.capacity());
-
-    if (GpuBrickStorage == nullptr || GpuBrickStorage->Width < texSize.x || GpuBrickStorage->Height < texSize.y || GpuBrickStorage->Depth < texSize.z) {
-        GpuBrickStorage = std::make_unique<ogl::Texture3D>(texSize.x, texSize.y, texSize.z, 1, GL_R8UI);
-
-        for (uint32_t i = 0; i < NumTotalBricks; i++) {
-            if (BrickSlots[i] != 0) {
-                DirtyBricks.insert(i);
-            }
+    for (uint32_t i = 0; i < 64; i++) {
+        if (mask >> i & 1) {
+            BrickSlots[i] = 0;
+            continue;
         }
-    }
-    
-    auto meta = GpuMetaStorage->Map<GpuMeta>(GL_MAP_WRITE_BIT);
-    std::memcpy(meta->Palette, Palette, sizeof(Palette));
 
-    if (DirtyBricks.size() > 0) {
-        uint32_t stageCount = std::min((uint32_t)DirtyBricks.size(), 1024u);
-        const GLenum mappingFlags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT;
-        auto stageBuffer = ogl::Buffer(stageCount * sizeof(Brick), mappingFlags);
-        Brick* stageBufferPtr = stageBuffer.Map<Brick>(mappingFlags | GL_MAP_FLUSH_EXPLICIT_BIT);
-
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, stageBuffer.Handle);
-
-        auto itr = DirtyBricks.begin();
-        for (uint32_t i = 0; itr != DirtyBricks.end() && i < stageCount; i++) {
-            uint32_t brickIdx = *itr;
-            uint32_t brickSlot = BrickSlots[brickIdx];
-            glm::uvec3 slotPos = GetGpuBrickSlot(brickSlot);
-
-            glm::uvec3 brickPos = GetBrickPos(brickIdx) * BrickSize;
-            OccMap.UpdateBrick(brickPos, BrickStorage[brickSlot].Data);
-
-            stageBufferPtr[i] = BrickStorage[brickSlot];
-            meta->BrickSlots[brickIdx] = slotPos.x << 0 | slotPos.y << 10 | slotPos.z << 20;
-
-            stageBuffer.FlushMappedRange(i * sizeof(Brick), sizeof(Brick));
-            GpuBrickStorage->SetPixels(GL_RED_INTEGER, GL_UNSIGNED_BYTE, (void*)(i * sizeof(Brick)), 8, 8, 
-                                       0, slotPos * VoxelMap::BrickSize, glm::uvec3(8));
-
-            DirtyBricks.erase(itr++);
+        if (j != i) {
+            BrickSlots[i] = j;
+            Storage[j] = Storage[i];
         }
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
-        if (true||DirtyBricks.size() == 0) {
-            for (int32_t i = 0; i < OccupancyMap::NumLevels; i++) {
-                GpuOccupancyStorage->SetPixels(
-                    GL_RED_INTEGER, GL_UNSIGNED_BYTE, 
-                    &OccMap.Data[OccMap.MipOffsets[i]], 0, 0, i);
-            }
-        }
+        j++;
     }
-    GpuMetaStorage->Unmap();
+    Storage.resize(j);
 }
 
-void OccupancyMap::UpdateBrick(glm::uvec3 basePos, const Voxel* voxels) {
-    const uint32_t size = VoxelMap::BrickSize;
-    assert((basePos.x | basePos.y | basePos.z) % size == 0);
+Brick* VoxelMap::GetBrick(glm::uvec3 pos, bool create, bool markAsDirty) {
+    glm::uvec3 sectorPos = pos >> BrickIndexer::Shift;
 
-    for (uint32_t z = 0; z < size; z += 2) {
-        for (uint32_t y = 0; y < size; y += 2) {
-            for (uint32_t x = 0; x < size; x += 2) {
-                uint8_t mask = 0;
-
-                for (uint32_t i = 0; i < 8; i++) {
-                    uint32_t idx = VoxelMap::GetVoxelIndex(x + (i >> 0 & 1), y + (i >> 1 & 1), z + (i >> 2 & 1));
-                    mask |= !voxels[idx].IsEmpty() << i;
-                }
-
-                Data[GetCellIndex(basePos + glm::uvec3(x, y, z), 0)] = mask;
-            }
-        }
+    if (!SectorIndexer::CheckInBounds(sectorPos)) {
+        return nullptr;
     }
 
-    // Update mips
-    for (uint32_t k = 0; k < NumLevels - 1; k++) {
-        uint32_t mipSize = size >> k;
+    // TODO: global brick lookups aren't supposed to be glowing hot but it could be worth
+    //       doing a single entry LRU cache (eg. lastBrickIdx + lackBrickPtr) to minimize hash lookups
+    uint32_t sectorIdx = SectorIndexer::GetIndex(sectorPos);
+    uint32_t brickIdx = BrickIndexer::GetIndex(pos);
+    Sector* sector = nullptr;
 
-        for (uint32_t z = 0; z < mipSize; z += 2) {
-            for (uint32_t y = 0; y < mipSize; y += 2) {
-                for (uint32_t x = 0; x < mipSize; x += 2) {
-                    glm::uvec3 pos = (basePos >> k) + glm::uvec3(x, y, z);
-                    uint8_t mask = Data[GetCellIndex(pos, k)];
-                    Set(pos >> 1u, k + 1, mask != 0);
-                }
-            }
+    if (auto iter = Sectors.find(sectorIdx); iter != Sectors.end()) {
+        sector = &iter->second;
+    } else if (create) {
+        sector = &Sectors[sectorIdx];
+    } else {
+        return nullptr;
+    }
+
+    if (markAsDirty) {
+        DirtyLocs[sectorIdx] |= 1ull << brickIdx;
+    }
+    return sector->GetBrick(brickIdx, true);
+}
+
+bool VoxelMap::PopDirty(glm::uvec3& pos) {
+    auto iter = DirtyLocs.begin();
+    if (iter == DirtyLocs.end()) return false;
+
+    uint32_t brickIdx = (uint32_t)std::countr_zero(iter->second);
+    pos = SectorIndexer::GetPos(iter->first);
+    pos = pos * BrickIndexer::Size + BrickIndexer::GetPos(brickIdx);
+
+    iter->second &= ~(1ull << brickIdx);
+    if (iter->second == 0) {
+        DirtyLocs.erase(iter);
+    }
+
+    assert(GetBrick(pos) != nullptr);
+    return true;
+}
+
+static glm::dvec3 GetSideDist(glm::dvec3 pos, glm::dvec3 dir) {
+    pos = glm::fract(pos);
+    return glm::mix(1.0 - pos, pos, glm::lessThan(dir, glm::dvec3(0.0)));
+    // return dir < 0.0 ? pos : 1.0 - pos;
+} 
+double VoxelMap::RayCast(glm::dvec3 origin, glm::vec3 dir, uint32_t maxIters) {
+    glm::dvec3 deltaDist = glm::abs(1.0f / dir);
+    glm::dvec3 sideDist = GetSideDist(origin, dir) * deltaDist;
+    glm::ivec3 currPos = glm::floor(origin);
+
+    while (maxIters-- > 0) {
+        if (!BrickIndexer::CheckInBounds(glm::uvec3(currPos) / Brick::Size)) break;
+        if (!Get(currPos).IsEmpty()) {
+            return glm::min(glm::min(sideDist.x, sideDist.y), sideDist.z);
+        }
+
+        if (sideDist.x < sideDist.y && sideDist.x < sideDist.z) {
+            sideDist.x += deltaDist.x;
+            currPos.x += dir.x < 0 ? -1 : +1;
+        } else if (sideDist.y < sideDist.z) {
+            sideDist.y += deltaDist.y;
+            currPos.y += dir.y < 0 ? -1 : +1;
+        } else {
+            sideDist.z += deltaDist.z;
+            currPos.z += dir.z < 0 ? -1 : +1;
         }
     }
+    return -1.0;
 }
 
-void OccupancyMap::Update(glm::uvec3 pos, bool occupied) {
-    // TODO:
-    //   occupied==true: mark appropriate cells up to root
-    //   occupied==false: do nothing if any sibling cell is occupied, otherwise unmark and repeat until root
-    throw std::runtime_error("not implemented");
-}
+bool Brick::IsEmpty() const {
+    auto ptr = (uint8_t*)Data;
+    auto end = ptr + sizeof(Data);
 
+    while (ptr < end) {
+#ifdef __AVX512F__
+        auto a = _mm512_loadu_epi8(&ptr[0]);
+        auto b = _mm512_loadu_epi8(&ptr[64]);
+        if (_mm512_cmpneq_epi8_mask(_mm512_or_si512(a, b), _mm512_set1_epi8(0)) != 0) {
+            return false;
+        }
+        ptr += 128;
+#elif __AVX2__
+        auto a = _mm256_loadu_si256((__m256i*)&ptr[0]);
+        auto b = _mm256_loadu_si256((__m256i*)&ptr[32]);
+        if (~_mm256_movemask_epi8(_mm256_cmpeq_epi8(_mm256_or_si256(a, b), _mm256_set1_epi8(0))) != 0) {
+            return false;
+        }
+        ptr += 64;
+#else
+        uint64_t a = *(uint64_t*)&ptr[0];
+        uint64_t b = *(uint64_t*)&ptr[8];
+        uint64_t c = *(uint64_t*)&ptr[16];
+        uint64_t d = *(uint64_t*)&ptr[24];
+        if ((a | b | c | d) != 0) {
+            return false;
+        }
+        ptr += 32;
+#endif
+    }
+    return true;
+}
 
 namespace gio = glim::io;
 
-static const uint64_t SerMagic = 0x00'00'00'01'78'6f'76'63ul;  // "cvox 0001"
+// TODO: This serialization format is as horrible as iostreams. switch to/design something better
+static const uint64_t SerMagic = 0x00'00'00'03'78'6f'76'63ul;  // "cvox 0003"
+static const uint32_t MaxPackSize = 1024 * 1024 * 16;
 
 void VoxelMap::Deserialize(std::string_view filename) {
     std::ifstream is(filename.data(), std::ios::binary);
@@ -136,23 +156,60 @@ void VoxelMap::Deserialize(std::string_view filename) {
     if (gio::Read<uint64_t>(is) != SerMagic) {
         throw std::runtime_error("Incompatible file");
     }
-
-    uint32_t numBricks = gio::Read<uint32_t>(is);
-    BrickStorage.resize(numBricks);
+    uint32_t numSectors = gio::Read<uint32_t>(is);
+    Sectors.reserve(numSectors);
 
     gio::ReadCompressed(is, Palette, sizeof(Palette));
-    gio::ReadCompressed(is, BrickSlots.get(), sizeof(uint32_t) * NumTotalBricks);
-    gio::ReadCompressed(is, BrickStorage.data(), sizeof(Brick) * BrickStorage.size());
+
+    std::istringstream cst;
+
+    for (uint32_t i = 0; i < numSectors; i++) {
+        if (gio::BytesAvail(cst) == 0) {
+            std::string buf(gio::Read<uint32_t>(is), '\0');
+            gio::ReadCompressed(is, buf.data(), buf.size());
+            cst.str(std::move(buf));
+        }
+        uint32_t idx = gio::Read<uint32_t>(cst);
+        uint64_t mask = gio::Read<uint64_t>(cst);
+        Sector& sector = Sectors[idx];
+
+        sector.Storage.reserve((size_t)std::popcount(mask));
+
+        for (; mask != 0; mask &= mask - 1) {
+            uint32_t j = (uint32_t)std::countr_zero(mask);
+            *sector.GetBrick(j, true) = gio::Read<Brick>(cst);
+        }
+    }
 }
 void VoxelMap::Serialize(std::string_view filename) {
     std::ofstream os(filename.data(), std::ios::binary | std::ios::trunc);
 
     gio::Write<uint64_t>(os, SerMagic);
-    gio::Write<uint32_t>(os, BrickStorage.size());
-
+    gio::Write<uint32_t>(os, Sectors.size());
     gio::WriteCompressed(os, Palette, sizeof(Palette));
-    gio::WriteCompressed(os, BrickSlots.get(), sizeof(uint32_t) * NumTotalBricks);
-    gio::WriteCompressed(os, BrickStorage.data(), sizeof(Brick) * BrickStorage.size());
-}
 
-}; // namespace cvox
+    std::ostringstream cst;
+    const auto FlushPack = [&](bool final = false) {
+        if (cst.tellp() >= MaxPackSize || final) {
+            auto buf = cst.view();
+            gio::Write<uint32_t>(os, buf.size());
+            gio::WriteCompressed(os, buf.data(), buf.size());
+            cst.str("");
+        }
+    };
+
+    for (auto& [idx, sector] : Sectors) {
+        uint64_t mask = sector.GetAllocationMask();
+        gio::Write<uint32_t>(cst, idx);
+        gio::Write<uint64_t>(cst, mask);
+        
+        for (; mask != 0; mask &= mask - 1) {
+            int32_t j = std::countr_zero(mask);
+            Brick* brick = &sector.Storage[sector.BrickSlots[j]];
+
+            gio::Write(cst, *brick);
+        }
+        FlushPack();
+    }
+    FlushPack(true);
+}

@@ -37,4 +37,12 @@ inline void WriteStr(std::ostream& os, std::string_view str) {
     os.write(str.data(), (std::streamsize)str.size());
 }
 
-};  // namespace grsw::io
+inline size_t BytesAvail(std::istream& is) {
+    std::streampos curr = is.tellg();
+    is.seekg(0, std::ios::end);
+    std::streamsize end = is.tellg();
+    is.seekg(curr);
+    return (size_t)(end - curr);
+}
+
+};  // namespace glim::io

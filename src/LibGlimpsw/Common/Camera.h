@@ -1,5 +1,6 @@
 #pragma once
 
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/euler_angles.hpp>
 
 namespace glim {  
@@ -41,13 +42,13 @@ struct Camera {
         float blend = 1.0f - powf(0.7f, io.DeltaTime * 60);  // https://gamedev.stackexchange.com/a/149106
         glm::quat destRotation = glm::eulerAngleXY(-Euler.y, -Euler.x);
 
-        if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow) && !ImGuizmo::IsUsing()) {
+        if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow)) {
             if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 float rx = io.MouseDelta.x * sensitivity;
                 float ry = io.MouseDelta.y * sensitivity;
 
                 Euler.x = NormalizeRadians(Euler.x - rx);
-                Euler.y = std::clamp(Euler.y - ry, -pitchRange, +pitchRange);
+                Euler.y = glm::clamp(Euler.y - ry, -pitchRange, +pitchRange);
 
                 destRotation = glm::eulerAngleXY(-Euler.y, -Euler.x);
             }
@@ -65,7 +66,7 @@ struct Camera {
                 Position += mv * destRotation * speed;
             } else if (Mode == InputMode::Arcball) {
                 if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
-                    ArcDistance = std::clamp(ArcDistance - io.MouseWheel * 0.5f, NearZ, FarZ * 0.8f);
+                    ArcDistance = glm::clamp(ArcDistance - io.MouseWheel * 0.5f, NearZ, FarZ * 0.8f);
                 }
                 Position = glm::vec3(0, 0, ArcDistance) * destRotation;
                 // TODO: implement panning for arcball camera

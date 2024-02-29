@@ -39,25 +39,29 @@ void ReadCompressed(std::istream& is, void* ptr, size_t size) {
     ZSTD_inBuffer inputBuf = { .src = buffer, .size = 0, .pos = 0 };
     uint32_t inputAvail = Read<uint32_t>(is);
 
-    while (outBuf.pos < outBuf.size) {
-        if (inputAvail > 0 && inputBuf.pos == inputBuf.size) {
+    while (inputAvail > 0) {
+        if (inputBuf.pos == inputBuf.size) {
             inputBuf.pos = 0;
             inputBuf.size = std::min(inputAvail, (uint32_t)sizeof(buffer));
 
             if (is.read(buffer, (std::streamsize)inputBuf.size).eof()) {
+                ZSTD_freeDCtx(zst);
                 throw std::ios_base::failure("End of stream");
             }
             inputAvail -= inputBuf.size;
         }
         size_t ret = ZSTD_decompressStream(zst, &outBuf, &inputBuf);
 
-        if (ZSTD_isError(ret) || (ret > 0 && inputAvail == 0 && inputBuf.pos == inputBuf.size)) {
+        if (ZSTD_isError(ret)) {
+            ZSTD_freeDCtx(zst);
             throw std::ios_base::failure("Failed to decompress stream");
         }
     }
-
-    assert(inputAvail == 0);
     ZSTD_freeDCtx(zst);
+
+    if (outBuf.pos != outBuf.size) {
+        throw std::ios_base::failure("Decompressed stream is too short");
+    }
 }
 
 };  // namespace glim::io

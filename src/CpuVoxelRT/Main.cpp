@@ -1,8 +1,6 @@
 
 #include <chrono>
-#include <execution>
 #include <iostream>
-#include <ranges>
 #include <vector>
 
 #include <glad/glad.h>
@@ -14,21 +12,11 @@
 
 #include <SwRast/Rasterizer.h>
 #include <SwRast/Texture.h>
-#include <Common/Camera.h>
-#include <OGL/QuickGL.h>
-#include <OGL/ShaderLib.h>
-#include <Common/Scene.h>
 
-#include "RayMarching.h"
-#include "Common/SettingStore.h"
+#include "Renderer.h"
 
-class Renderer {
-public:
-    virtual ~Renderer() { }
 
-    virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) = 0;
-    virtual void DrawSettings(glim::SettingStore& settings) { }
-};
+/*
 class CpuRenderer: public Renderer {
     std::shared_ptr<ogl::Shader> _blitShader;
     std::unique_ptr<ogl::Buffer> _pbo;
@@ -50,7 +38,7 @@ public:
         _skyBox = std::make_unique<swr::HdrTexture2D>(swr::texutil::LoadCubemapFromPanoramaHDR("assets/skyboxes/sunflowers_puresky_4k.hdr"));
     }
 
-    virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) {
+    virtual void RenderFrame(VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) {
         viewSize &= ~3u; // round down to 4x4 steps
 
         #ifndef NDEBUG
@@ -89,14 +77,14 @@ public:
                 swr::VFloat u = swr::simd::conv2f((int32_t)x + swr::FragPixelOffsetsX) + rng.NextUnsignedFloat() - 0.5f;
 
                 swr::VFloat3 origin, dir;
-                cvox::GetPrimaryRay({ u, v }, invProj, origin, dir);
+                GetPrimaryRay({ u, v }, invProj, origin, dir);
 
                 swr::VFloat3 attenuation = 1.0f;
                 swr::VFloat3 incomingLight = 0.0f;
                 swr::VMask mask = (swr::VMask)~0u;
 
                 for (uint32_t i = 0; i < 3 && mask; i++) {
-                    auto hit = cvox::RayMarch(map, origin, dir, mask, i==0);
+                    auto hit = RayMarch(map, origin, dir, mask, i==0);
                     auto mat = map.GetMaterial(hit.Voxels, mask);
                     swr::VFloat3 matColor = mat.GetColor();
                     swr::VFloat emissionStrength = mat.GetEmissionStrength();
@@ -157,75 +145,13 @@ public:
         settings.Checkbox("Path Trace", &_enablePathTracer);
         _frameTime.Draw("Frame Time");
     }
-};
-class GpuRenderer : public Renderer {
-    std::shared_ptr<ogl::Shader> _shader;
-    glim::SettingStore _ownSettings;
-    bool _showHeatmap;
-    bool _useAnisoTraversal;
-
-    GLuint _frameQueryObj = 0;
-    glim::TimeStat _frameTime;
-    std::unique_ptr<ogl::Buffer> _metricsBuffer;
-
-public:
-    GpuRenderer(ogl::ShaderLib& shlib) {
-        _shader = shlib.LoadFrag("VoxelRender");
-        glCreateQueries(GL_TIME_ELAPSED, 1, &_frameQueryObj);
-
-        _metricsBuffer = std::make_unique<ogl::Buffer>(64, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
-    }
-    ~GpuRenderer() {
-        glDeleteQueries(1, &_frameQueryObj);
-    }
-
-    virtual void RenderFrame(cvox::VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) {
-        map.SyncGpuBuffers();
-
-        GLint64 frameElapsedNs;
-        glGetQueryObjecti64v(_frameQueryObj, GL_QUERY_RESULT, &frameElapsedNs);
-        _frameTime.AddSample(frameElapsedNs / 1000000.0);
-        glBeginQuery(GL_TIME_ELAPSED, _frameQueryObj);
-
-        _shader->SetUniform("ssbo_VoxelMapData", *map.GpuMetaStorage);
-        _shader->SetUniform("u_BrickStorage", *map.GpuBrickStorage);
-        _shader->SetUniform("u_OccupancyStorage", *map.GpuOccupancyStorage);
-
-        glm::dvec3 camPos = cam.ViewPosition;
-        glm::ivec3 worldOrigin = glm::ivec3(glm::floor(camPos));
-
-        glm::mat4 viewMat = glm::translate(cam.GetViewMatrix(false), glm::vec3(glm::floor(camPos) - camPos));
-        glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * viewMat);
-        
-        _shader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
-        _shader->SetUniform("u_ShowTraversalHeatmap", _showHeatmap ? 1 : 0);
-        _shader->SetUniform("u_AnisotropicTraversal", _useAnisoTraversal ? 1 : 0);
-        _shader->SetUniform("u_WorldOrigin", &worldOrigin.x, 3);
-        _shader->SetUniform("ssbo_Metrics", *_metricsBuffer);
-        _shader->DispatchFullscreen();
-
-        glEndQuery(GL_TIME_ELAPSED);
-    }
-    virtual void DrawSettings(glim::SettingStore& settings) {
-        ImGui::SeparatorText("Renderer##GPU");
-        settings.Checkbox("Traversal Heatmap", &_showHeatmap);
-        settings.Checkbox("Anisotropic Traversal", &_useAnisoTraversal);
-
-        ImGui::Separator();
-        _frameTime.Draw("Frame Time");
-
-        uint32_t* totalIters = _metricsBuffer->Map<uint32_t>(GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
-        ImGui::Text("Traversal Iters: %.3fM", *totalIters / 1000000.0);
-        *totalIters = 0;
-        _metricsBuffer->Unmap();
-    }
-};
+};*/
 
 class Application {
     glim::Camera _cam = {};
     glim::SettingStore _settings;
 
-    cvox::VoxelMap _map;
+    std::shared_ptr<VoxelMap> _map;
 
     std::unique_ptr<ogl::ShaderLib> _shaderLib;
     std::unique_ptr<Renderer> _renderer;
@@ -236,23 +162,24 @@ public:
 
         _shaderLib = std::make_unique<ogl::ShaderLib>("src/CpuVoxelRT/Shaders/", true);
 
-        _map.Palette[252] = cvox::Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
-        _map.Palette[253] = cvox::Material::CreateDiffuse({ 0.2, 1, 0.2 }, 0.9f);
-        _map.Palette[254] = cvox::Material::CreateDiffuse({ 0.2, 0.2, 1 }, 0.9f);
-        _map.Palette[255] = cvox::Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
+        _map = std::make_shared<VoxelMap>();
+        _map->Palette[252] = Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
+        _map->Palette[253] = Material::CreateDiffuse({ 0.2, 1, 0.2 }, 0.9f);
+        _map->Palette[254] = Material::CreateDiffuse({ 0.2, 0.2, 1 }, 0.9f);
+        _map->Palette[255] = Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
 
         try {
-            _map.Deserialize("logs/voxels_pinnace.dat");
+            _map->Deserialize("logs/voxels_2k.dat");
         } catch (std::exception& ex) {
-            std::cout << "Failed to load voxel map cache" << std::endl;
+            std::cout << "Failed to load voxel map cache: " << ex.what() << std::endl;
 
             auto model = glim::Model("assets/models/Sponza/Sponza.gltf");
             // auto model = glim::Model("logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf");
             // auto model = glim::Model("logs/assets/models/DamagedHelmet/DamagedHelmet.gltf");
 
-            _map.VoxelizeModel(model, glm::uvec3(24), glm::uvec3(1000));
+            _map->VoxelizeModel(model, glm::uvec3(24), glm::uvec3(2024));
 
-            _map.Serialize("logs/voxels.dat");
+            _map->Serialize("logs/voxels_2k.dat");
         }
 
         _cam.Position = glm::vec3(512, 128, 512);
@@ -265,7 +192,7 @@ public:
     void Render(uint32_t vpWidth, uint32_t vpHeight) {
         ImGui::ShowMetricsWindow();
 
-        if (ImGui::IsAnyMouseDown() && ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
+        if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
             MousePickVoxels();
         } else {
             _cam.Update();
@@ -285,57 +212,64 @@ public:
             if (useCpuRenderer) {
                 _renderer = std::make_unique<CpuRenderer>(*_shaderLib);
             } else {
-                _renderer = std::make_unique<GpuRenderer>(*_shaderLib);
+                _renderer = std::make_unique<GpuRenderer>(*_shaderLib, _map);
             }
             auto fn = std::function(ImGui::InputScalarN);
         }
 
         _renderer->DrawSettings(_settings);
 
-        ImGui::Text("Num Bricks: %zu", _map.BrickStorage.size());
+        ImGui::Text("Total Sectors: %zu", _map->Sectors.size());
 
         ImGui::SeparatorText("Camera");
         _settings.InputScalarN("Pos", &_cam.Position.x, 3, "%.1f");
         _settings.InputScalarN("Rot", &_cam.Euler.x, 2, "%.1f");
-        _settings.Slider("Speed", &_cam.MoveSpeed, 1, 0.5f, 500.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
-
+        _settings.Slider("Speed", &_cam.MoveSpeed, 1, 0.5f, 500.0f, "%.1f");
+        _settings.Slider("FOV", &_cam.FieldOfView, 1, 10.0f, 120.0f, "%.1f deg");
         ImGui::End();
 
-        _renderer->RenderFrame(_map, _cam, glm::uvec2(vpWidth, vpHeight));
+        _renderer->RenderFrame(_cam, glm::uvec2(vpWidth, vpHeight));
 
         _shaderLib->Refresh();
     }
 
     void MousePickVoxels() {
-        glm::mat4 invProj = glm::inverse(_cam.GetProjMatrix() * _cam.GetViewMatrix(false));
-        swr::VFloat3 origin, dir;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) return;
 
         ImVec2 mousePos = ImGui::GetMousePos();
         ImVec2 displaySize = ImGui::GetIO().DisplaySize;
         glm::vec2 mouseUV = glm::vec2(mousePos.x / displaySize.x, 1 - mousePos.y / displaySize.y) * 2.0f - 1.0f;
 
-        cvox::GetPrimaryRay({ mouseUV.x, mouseUV.y }, invProj, origin, dir);
-        origin += glm::vec3(glm::floor(_cam.ViewPosition));
-        auto hit = cvox::RayMarch(_map, origin, dir, 1, true);
+        glm::mat4 invProj = glm::inverse(_cam.GetProjMatrix() * _cam.GetViewMatrix(false));
+        glm::vec4 nearPos = invProj * glm::vec4(mouseUV, 0, 1);
+        glm::vec4 farPos = nearPos + glm::vec4(invProj[2]);
+        glm::vec3 dir = glm::normalize(farPos * (1.0f / farPos.w));
 
-        if (hit.Mask != 0) {
-            float x = origin.x[0] + dir.x[0] * hit.Dist[0];
-            float y = origin.y[0] + dir.y[0] * hit.Dist[0];
-            float z = origin.z[0] + dir.z[0] * hit.Dist[0];
-            int32_t radius = 3;
+        static double brushDist = 30;
+        bool erase = ImGui::IsKeyDown(ImGuiKey_ModAlt);
+        auto voxel = erase ? Voxel::CreateEmpty() : Voxel::Create(255);
 
-            auto voxel = ImGui::IsKeyDown(ImGuiKey_ModAlt) ? cvox::Voxel::CreateEmpty() : cvox::Voxel::Create(255);
+        double hitDist = _map->RayCast(_cam.ViewPosition, dir, 4096);
+        if (hitDist < 30) hitDist = 30;
 
-            for (int32_t sy = -radius; sy <= radius; sy++) {
-                for (int32_t sz = -radius; sz <= radius; sz++) {
-                    for (int32_t sx = -radius; sx <= radius; sx++) {
-                        if (sx * sx + sy * sy + sz * sz >= radius * radius) continue;
-
-                        _map.Set(glm::uvec3(x + sx, y + sy, z + sz), voxel);
-                    }
-                }
-            }
+        glm::ivec3 hitPos = glm::floor(_cam.ViewPosition + glm::dvec3(dir) * hitDist);
+        if (erase || ImGui::IsMouseClicked(ImGuiMouseButton_Left) || 
+            (!erase && (hitDist > brushDist || _map->Get(hitPos).Data != voxel.Data))
+        ) {
+            brushDist = hitDist;
         }
+
+        glm::ivec3 brushPos = glm::floor(_cam.ViewPosition + glm::dvec3(dir) * brushDist);
+        int32_t radius = 90;
+
+        using swr::VInt, swr::VMask;
+        _map->RegionDispatchSIMD(brushPos - radius, brushPos + radius, true, [&](VInt x, VInt y, VInt z, VInt& voxelIds) {
+            VInt dx = x - brushPos.x, dy = y - brushPos.y, dz = z - brushPos.z;
+            VMask mask = dx * dx + dy * dy + dz * dz <= radius * radius;
+
+            swr::simd::set_if(mask, voxelIds, voxel.Data);
+            return mask != 0;
+        });
     }
 };
 

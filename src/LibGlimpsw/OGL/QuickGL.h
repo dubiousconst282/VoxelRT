@@ -7,6 +7,7 @@
 #include <vector>
 #include <unordered_map>
 #include <functional>
+#include <memory>
 
 #include <glad/glad.h>
 #include <glm/glm.hpp>
@@ -22,7 +23,8 @@ inline void DebugMessage(GLenum type, GLenum severity, const char* fmt, ...) {
     vsnprintf(msg, sizeof(msg), fmt, args);
     va_end(args);
 
-    glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, type, clock(), severity, -1, msg);
+    static GLuint msgId = 0;
+    glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, type, ++msgId, severity, -1, msg);
 }
 
 inline void EnableDebugCallback() {
@@ -82,13 +84,24 @@ struct Buffer : public Object {
     }
     ~Buffer() { glDeleteBuffers(1, &Handle); }
 
+    struct Unmapper {
+        GLuint BufferHandle;
+
+        template<typename T>
+        void operator()(T* arg) {
+            glUnmapNamedBuffer(BufferHandle);
+        }
+    };
+    template<typename T>
+    using MappedPtr = std::unique_ptr<T, Unmapper>;
+
     template<typename T = uint8_t>
-    T* Map(GLbitfield access, size_t offset = 0, size_t length = 0) {
+    MappedPtr<T> Map(GLbitfield access, size_t offset = 0, size_t length = 0) {
         if (length == 0) length = Size;
-        return (T*)glMapNamedBufferRange(Handle, offset, length, access);
+        T* ptr = (T*)glMapNamedBufferRange(Handle, offset, length, access);
+        return MappedPtr<T>(ptr, Unmapper{ Handle });
     }
-    void Unmap() { glUnmapNamedBuffer(Handle); }
-    
+
     void FlushMappedRange(size_t offset, size_t length) { glFlushMappedNamedBufferRange(Handle, offset, length); }
 };
 

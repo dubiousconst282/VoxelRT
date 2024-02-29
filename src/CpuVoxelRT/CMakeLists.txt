@@ -4,6 +4,9 @@ add_executable(
     Main.cpp
     VoxelMap.cpp
     Voxelize.cpp
+    #CpuTracer.cpp
+    GpuRenderer.cpp
+    BrickSlotAllocator.cpp
 )
 
 target_link_libraries(CpuVoxelRT PRIVATE

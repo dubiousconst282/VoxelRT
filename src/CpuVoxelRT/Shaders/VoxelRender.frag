@@ -33,51 +33,19 @@ HitInfo rayMarch(vec3 origin, vec3 dir) {
     vec3 sideDist;
     float tmin = 0;
 
-    const int maxLevel = 5;
-    int k = 3;
-
-    for (; i < 128; i++) {
+    for (; i < 256; i++) {
         ivec3 pos = u_WorldOrigin + ivec3(floor(currPos));
 
         if (!isInBounds(pos)) break;
 
-        if (getOccupancy(pos >> k, k) != 0) {
-            while (--k >= 0 && getOccupancy(pos >> k, k) != 0) ;
-            if (k < 0) break;
-        } else {
-            while (++k < maxLevel && getOccupancy(pos >> k, k) == 0) ;
-            k--;
-        }
-        
-        int cellMask = (1 << k) - 1;
-        pos.x = dir.x<0 ? (pos.x|cellMask) : (pos.x&~cellMask);
-        pos.y = dir.y<0 ? (pos.y|cellMask) : (pos.y&~cellMask);
-        pos.z = dir.z<0 ? (pos.z|cellMask) : (pos.z&~cellMask);
+        int k = getLod(pos) - 1;
+        if (k == 0 && getVoxel(pos) != 0) break;
 
-        ivec3 stepSize = ivec3(cellMask);
+        pos.x = dir.x<0 ? (pos.x&~k) : (pos.x|k);
+        pos.y = dir.y<0 ? (pos.y&~k) : (pos.y|k);
+        pos.z = dir.z<0 ? (pos.z&~k) : (pos.z|k);
 
-        if (u_AnisotropicTraversal) {
-            // 0 1   8 16   x+
-            // 2 4  32 64   y+
-            //        z+
-            uint mask = 0;
-            for (int j = 0; j < 7; j++) {
-                ivec3 cornerPos = (ivec3(j + 1) >> ivec3(0, 1, 2)) & 1;
-                mask |= getOccupancy((pos >> k) + cornerPos * stepDir, k) << j;
-            }
-
-            // See GenAnisoExpansionTable.js
-            const uint[] expansionTable = {
-                0x45654567, 0x01210123, 0x41614163, 0x01210123, 0x45254523, 0x01210123, 0x41214123, 0x01210123,
-                0x45654563, 0x01210123, 0x41614163, 0x01210123, 0x45254523, 0x01210123, 0x41214123, 0x01210123
-            };
-
-            uint tableIdx = mask * 4;
-            uint expandMask = expansionTable[tableIdx >> 5] >> (tableIdx & 31);
-            stepSize += (ivec3(expandMask) >> ivec3(0, 1, 2) & 1) << k;
-        }
-
-        pos = (pos-u_WorldOrigin) + stepSize * stepDir;
+        pos = (pos-u_WorldOrigin);
         sideDist = tStart + pos * invDir;
         tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001;
 
@@ -96,7 +64,7 @@ HitInfo rayMarch(vec3 origin, vec3 dir) {
     hit.pos = currPos;
     hit.uv = fract(mix(currPos.xz, currPos.yy, sideMask.xz));
     hit.norm = mix(vec3(0), -sign(dir), sideMask);
-    hit.mat = Palette[voxelId];
+    hit.mat = u_VoxelData.Palette[voxelId];
     hit.iters=i;
     
     atomicAdd(TotalIters, uint(i));

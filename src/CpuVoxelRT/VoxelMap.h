@@ -1,17 +1,9 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
-#include <algorithm>
-#include <set>
-
-#include <SwRast/SIMD.h>
 #include <Common/Scene.h>
-#include <OGL/QuickGL.h>
 
-namespace cvox {
-
-using namespace swr::simd;
+#include <map>
 
 struct Voxel {
     uint8_t Data;
@@ -45,199 +37,161 @@ struct Material {
     }
 };
 
-struct VoxelPack {
-    VInt Data;
+template<int ShiftXZ_, int ShiftY_>
+struct LinearIndexer3D {
+    static const uint32_t ShiftXZ = ShiftXZ_, ShiftY = ShiftY_;
+    static const uint32_t SizeXZ = 1 << ShiftXZ, SizeY = 1 << ShiftY;
+    static const uint32_t MaskXZ = SizeXZ - 1, MaskY = SizeY - 1;
+    static const size_t MaxArea = (size_t)(1ull << (ShiftXZ * 2 + ShiftY));
 
-    VMask IsEmpty() const { return Data == 0; }
-};
-struct MaterialPack {
-    VInt Data;
+    static constexpr glm::uvec3 Size = glm::uvec3(SizeXZ, SizeY, SizeXZ);
+    static constexpr glm::uvec3 Shift = glm::uvec3(ShiftXZ, ShiftY, ShiftXZ);
 
-    VFloat3 GetColor() const {
-        return {
-            conv2f((Data >> 11) & 31) * (1.0f / 31),
-            conv2f((Data >> 5) & 63) * (1.0f / 63),
-            conv2f((Data >> 0) & 31) * (1.0f / 31),
-        };
+    static bool CheckInBounds(glm::uvec3 pos) {
+        return (pos.x | pos.z) < SizeXZ && pos.y < SizeY;
     }
-    VFloat GetEmissionStrength() const { return conv2f((Data >> 16) & 15) * (7.0f / 15); }
+    static uint32_t GetIndex(glm::uvec3 pos) {
+        return GetIndex(pos.x, pos.y, pos.z);
+    }
+    static glm::uvec3 GetPos(uint32_t index) {
+        uint32_t x = index & MaskXZ;
+        uint32_t z = index >> ShiftXZ & MaskXZ;
+        uint32_t y = index >> (ShiftXZ * 2) & MaskY;
+        return { x, y, z };
+    }
+
+    template<typename T>
+    static T GetIndex(T x, T y, T z) {
+        return (x & MaskXZ) | (z & MaskXZ) << ShiftXZ | (y & MaskY) << (ShiftXZ * 2);
+    }
 };
 
-struct OccupancyMap {
-    static const uint32_t NumLevels = 5;
+using SectorIndexer = LinearIndexer3D<12, 8>;   // Map -> Sector
+using BrickIndexer = LinearIndexer3D<2, 2>;     // Sector -> Brick
+using VoxelIndexer = LinearIndexer3D<3, 3>;     // Brick -> Voxel
 
-    uint32_t Size, SizeLog2;
-    std::unique_ptr<uint8_t[]> Data;  // 2x2x2 cells
-    uint32_t MipOffsets[NumLevels];
+struct Brick {
+    static constexpr glm::uvec3 Size = VoxelIndexer::Size;
 
-    OccupancyMap(uint32_t size) {
-        uint32_t pos = 0;
-        for (uint32_t i = 0; i < NumLevels; i++) {
-            MipOffsets[i] = pos;
+    Voxel Data[VoxelIndexer::MaxArea];
 
-            uint32_t d = size >> (i + 1);
-            pos += d * d * d;
+    bool IsEmpty() const;
+};
+
+// 4x4x4 region of bricks.
+// TODO: consider implementing bit-packing: 1/2/4/8 bits per voxel
+//      - makes accesses difficult, need Get/Set, Gather/Scatter APIs
+//      - makes palette sharing difficult, but sector is 32³ so global sharing might still be reasonable
+struct Sector {
+    static_assert(BrickIndexer::MaxArea == 64);
+
+    std::vector<Brick> Storage;
+    uint8_t BrickSlots[64]{};
+
+    Brick* GetBrick(uint32_t index, bool create = false);
+    // Bulk delete bricks indicated by mask
+    void DeleteBricks(uint64_t mask);
+
+    uint64_t GetAllocationMask() {
+#ifdef __AVX512F__
+        static_assert(sizeof(BrickSlots) == 64);
+        return _mm512_cmpneq_epi8_mask(_mm512_loadu_epi8(BrickSlots), _mm512_set1_epi8(0));
+#endif
+        uint64_t mask = 0;
+        for (uint32_t i = 0; i < 64; i++) {
+            uint64_t bit = BrickSlots[i] != 0;
+            mask |= bit << i;
         }
-        Data = std::make_unique<uint8_t[]>(pos);
-        Size = size;
-        SizeLog2 = (uint32_t)std::bit_width(size - 1);
-        assert(size == (1 << SizeLog2)); // must be pow2
-    }
-
-    // Update occupancy of a single brick located at the given voxel pos.
-    void UpdateBrick(glm::uvec3 basePos, const Voxel* voxels);
-
-    // Update occupancy of a single voxel.
-    void Update(glm::uvec3 pos, bool occupied);
-
-    uint32_t GetCellIndex(glm::uvec3 pos, uint32_t level) const {
-        uint32_t s = SizeLog2 - (level + 1);
-        pos >>= 1;
-        assert((pos.x | pos.y | pos.z) < (1 << s));
-        return MipOffsets[level] + pos.x + (pos.y << s) + (pos.z << (s * 2));
-    }
-    uint32_t GetSubcellIndex(glm::uvec3 pos) const {
-        return (pos.x & 1) | (pos.y & 1) << 1 | (pos.z & 1) << 2;
-    }
-    void Set(glm::uvec3 pos, uint32_t level, bool value) {
-        uint8_t& mask = Data[GetCellIndex(pos, level)];
-        uint32_t shift = GetSubcellIndex(pos);
-        mask = (mask & ~(1 << shift)) | (value << shift);
+        return mask;
     }
 };
+
 struct VoxelMap {
-    static const uint32_t BrickShift = 7, BrickVoxelShift = 3;
-    static const uint32_t NumBricksPerAxis = 1 << BrickShift, NumTotalBricks = 1 << (BrickShift * 3);
-    static const uint32_t BrickSize = 1 << BrickVoxelShift, NumVoxelsPerBrick = 1 << (BrickVoxelShift * 3);
-    static const uint32_t BrickMask = NumBricksPerAxis - 1, BrickVoxelMask = BrickSize - 1;
-    static const uint32_t NumVoxelsPerAxis = NumBricksPerAxis * BrickSize;
+    static constexpr glm::uvec3 Size = SectorIndexer::Size * BrickIndexer::Size * VoxelIndexer::Size;
 
-    struct Brick {
-        Voxel Data[NumVoxelsPerBrick];
-    };
+    std::unordered_map<uint32_t, Sector> Sectors;
+    std::map<uint32_t, uint64_t> DirtyLocs;         // 4x4x4 masks of dirty bricks
 
-    std::unique_ptr<uint32_t[]> BrickSlots;
-    std::vector<Brick> BrickStorage;
-    OccupancyMap OccMap { NumVoxelsPerAxis }; // occupancy map starts at double voxel size
     Material Palette[256] {};
 
-    std::unique_ptr<ogl::Texture3D> GpuBrickStorage;
-    std::unique_ptr<ogl::Texture3D> GpuOccupancyStorage;
-    std::unique_ptr<ogl::Buffer> GpuMetaStorage;
-    std::set<uint32_t> DirtyBricks;
-
-    struct GpuMeta {
-        Material Palette[sizeof(VoxelMap::Palette) / sizeof(Material)];
-        uint32_t BrickSlots[NumTotalBricks]; // XYZ x 10-bit
-    };
-
-    VoxelMap() {
-        BrickSlots = std::make_unique<uint32_t[]>(NumTotalBricks);
-
-        BrickStorage.reserve(NumTotalBricks / 32);
-        // Reserve empty brick at the 0th slot to simplify queries (bounds / null checks / subtracts).
-        BrickStorage.emplace_back();
-    }
-
-    Brick* GetBrick(glm::uvec3 pos, bool markAsDirty = false, bool create = false) {
-        assert((pos.x | pos.y | pos.z) < NumVoxelsPerAxis);
-
-        uint32_t idx = GetBrickIndex(pos.x, pos.y, pos.z);
-        uint32_t& slot = BrickSlots[idx];
-        if (!slot) {
-            if (!create) {
-                return nullptr;
-            }
-            slot = BrickStorage.size();
-            BrickStorage.emplace_back();
-            markAsDirty = true;
-        }
-        if (markAsDirty) {
-            DirtyBricks.insert(idx);
-        }
-        return &BrickStorage[slot];
-    }
+    Brick* GetBrick(glm::uvec3 pos, bool create = false, bool markAsDirty = false);
 
     Voxel Get(glm::uvec3 pos) {
-        Brick* brick = GetBrick(pos);
-        return brick ? brick->Data[GetVoxelIndex(pos.x, pos.y, pos.z)] : Voxel::CreateEmpty();
+        Brick* brick = GetBrick(pos >> VoxelIndexer::Shift);
+        return brick ? brick->Data[VoxelIndexer::GetIndex(pos)] : Voxel::CreateEmpty();
     }
     void Set(glm::uvec3 pos, Voxel voxel) {
-        Brick* brick = GetBrick(pos, true, true);
+        Brick* brick = GetBrick(pos >> VoxelIndexer::Shift, true, true);
+        if (brick == nullptr) return; // out of bounds
 
-        uint32_t idx = GetVoxelIndex(pos.x, pos.y, pos.z);
+        uint32_t idx = VoxelIndexer::GetIndex(pos);
         brick->Data[idx] = voxel;
     }
 
-    // Creates mask for voxel coords that are inside the map.
-    static VMask GetInboundMask(VInt x, VInt y, VInt z) {
-        return _mm512_cmplt_epu32_mask(x | y | z, _mm512_set1_epi32(NumVoxelsPerAxis));
+    void MarkAllDirty() {
+        for (auto& [idx, sector] : Sectors) {
+            DirtyLocs[idx] |= sector.GetAllocationMask();
+        }
     }
+    // Gets and unmarks the position of the next dirty brick.
+    bool PopDirty(glm::uvec3& pos);
 
-    VoxelPack GetPack(VInt x, VInt y, VInt z, VMask mask) const {
-        assert((mask & ~GetInboundMask(x, y, z)) == 0);
-
-        VInt brickIdx = csel(mask, GetBrickIndex(x, y, z), 0);
-        VInt brickSlot = _mm512_mask_i32gather_epi32(brickIdx, mask, brickIdx, BrickSlots.get(), 4);
-        VInt storageOffset = brickSlot * sizeof(Brick) + GetVoxelIndex(x, y, z);
-
-        VInt data = _mm512_mask_i32gather_epi32(_mm512_set1_epi32(0), mask, storageOffset, BrickStorage.data(), 1);
-        return { .Data = data & 0xFF };
-    }
-    MaterialPack GetMaterial(VoxelPack voxels, VMask mask) const {
-        VInt mat = _mm512_mask_i32gather_epi32(_mm512_setzero_si512(), mask, voxels.Data, Palette, 4);
-        return { .Data = mat };
-    }
-
-    void SyncGpuBuffers();
+    // Slow scalar raycaster intended for picking and stuff.
+    // Returns hit distance or -1 if no hit was found.
+    double RayCast(glm::dvec3 origin, glm::vec3 dir, uint32_t maxIters);
 
     void Deserialize(std::string_view filename);
     void Serialize(std::string_view filename);
 
     void VoxelizeModel(const glim::Model& model, glm::uvec3 pos, glm::uvec3 size);
 
-    template<typename TVisitor>
-    void ForEach(TVisitor fn, bool skipEmptyBricks = false) {
-        for (uint32_t i = 0; i < NumTotalBricks; i++) {
-            if (skipEmptyBricks && !Storage->BrickSlots[i]) continue;
+    // Iterates over bricks within the specified region (in voxel coords).
+    template<typename F>
+    void RegionDispatchSIMD(glm::ivec3 regionMin, glm::ivec3 regionMax, bool createEmpty, F fn) {
+        using namespace swr::simd;
 
-            glm::uvec3 brickPos = GetBrickPos(i) * BrickSize;
+        glm::ivec3 brickMin = regionMin >> glm::ivec3(VoxelIndexer::Shift);
+        glm::ivec3 brickMax = regionMax >> glm::ivec3(VoxelIndexer::Shift);
 
-            for (uint32_t j = 0; j < NumVoxelsPerBrick; j++) {
-                fn(brickPos + GetVoxelPos(j));
+        for (int32_t by = brickMin.y; by <= brickMax.y; by++) {
+            for (int32_t bz = brickMin.z; bz <= brickMax.z; bz++) {
+                for (int32_t bx = brickMin.x; bx <= brickMax.x; bx++) {
+                    Brick* brick = GetBrick(glm::uvec3(bx, by, bz), createEmpty);
+                    if (brick == nullptr) continue;
+
+                    bool dirty = false;
+
+                    for (uint32_t i = 0; i < VoxelIndexer::MaxArea; i += VInt::Length) {
+                        static_assert(VInt::Length <= VoxelIndexer::MaxArea);
+
+                        VInt vi = (int32_t)i + VInt::ramp();
+                        VInt x = (bx * VoxelIndexer::SizeXZ) + (vi & VoxelIndexer::MaskXZ);
+                        VInt z = (bz * VoxelIndexer::SizeXZ) + (vi >> VoxelIndexer::ShiftXZ & VoxelIndexer::MaskXZ);
+                        VInt y = (by * VoxelIndexer::SizeY) + (vi >> (VoxelIndexer::ShiftXZ * 2));
+
+#ifdef __AVX512F__
+                        VInt voxelIds = _mm512_cvtepu8_epi32(_mm_loadu_epi8(&brick->Data[i]));
+                        if (fn(x, y, z, voxelIds)) {
+                            _mm_storeu_epi8(&brick->Data[i], _mm512_cvtepi32_epi8(voxelIds));
+                            dirty = true;
+                        }
+#elif __AVX2__
+                        VInt voxelIds = _mm256_cvtepu8_epi32(_mm_loadu_si64(&brick->Data[i]));
+                        if (fn(x, y, z, voxelIds)) {
+                            _mm_storeu_si64(&brick->Data[i], _mm256_cvtepi32_epi8(voxelIds));
+                            dirty = true;
+                        }
+#else
+#error SIMD accel not supported in this compiler or platform
+#endif
+                    }
+
+                    if (dirty) {
+                        uint32_t sectionIdx = SectorIndexer::GetIndex(glm::uvec3(bx, by, bz) >> BrickIndexer::Shift);
+                        DirtyLocs[sectionIdx] |= 1ull << BrickIndexer::GetIndex(glm::uvec3(bx, by, bz));
+                    }
+                }
             }
         }
     }
-    
-    template<typename T>
-    static T GetBrickIndex(T x, T y, T z) {
-        return (y >> BrickVoxelShift) << (BrickShift * 2) |
-               (z >> BrickVoxelShift) << (BrickShift * 1) |
-               (x >> BrickVoxelShift) << (BrickShift * 0);
-    }
-
-    template<typename T>
-    static T GetVoxelIndex(T x, T y, T z) {
-        // OpenGL convention is XYZ
-        return (z & BrickVoxelMask) << (BrickVoxelShift * 2) |
-               (y & BrickVoxelMask) << (BrickVoxelShift * 1) |
-               (x & BrickVoxelMask) << (BrickVoxelShift * 0);
-    }
-
-    static glm::uvec3 GetBrickPos(uint32_t index) {
-        return {
-            (index >> (BrickShift * 0)) & BrickMask,
-            (index >> (BrickShift * 2)) & BrickMask,
-            (index >> (BrickShift * 1)) & BrickMask,
-        };
-    }
-    static glm::uvec3 GetVoxelPos(uint32_t index) {
-        return {
-            (index >> (BrickVoxelShift * 0)) & BrickVoxelMask,
-            (index >> (BrickVoxelShift * 1)) & BrickVoxelMask,
-            (index >> (BrickVoxelShift * 2)) & BrickVoxelMask,
-        };
-    }
 };
-
-}; // namespace cvox

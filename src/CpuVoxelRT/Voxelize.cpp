@@ -1,8 +1,6 @@
 #include "VoxelMap.h"
 #include "Common/PaletteBuilder.h"
 
-namespace cvox {
-
 // http://research.michael-schwarz.com/publ/files/vox-siga10.pdf
 static void VoxelizeTriangleSurface(const glm::vec3 v[3], std::function<void(glm::ivec3)> visitor) {
     using namespace glm;
@@ -74,7 +72,7 @@ static glm::vec3 ProjectPointOnTriangle(const glm::vec3& p, const glm::vec3 vtx[
     return { alpha, beta, gamma };
 }
 
-void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 pos, glm::uvec3 size) {
+void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 startPos, glm::uvec3 size) {
     glim::PaletteBuilder palette;
 
     for (auto& [name, tex] : model.Textures) {
@@ -112,7 +110,7 @@ void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 pos, glm::uvec
 
     glm::vec3 boundRange = boundMax - boundMin;
     glm::vec3 scale = glm::vec3(size) / glm::max(glm::max(boundRange.x, boundRange.y), boundRange.z);
-    glm::vec3 center = glm::vec3(pos) + (glm::vec3(size) - (boundRange * scale)) * 0.5f;
+    glm::vec3 center = glm::vec3(startPos) + (glm::vec3(size) - (boundRange * scale)) * 0.5f;
     center.y = 0;
 
     glm::vec3 verts[3];
@@ -131,18 +129,16 @@ void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 pos, glm::uvec
                     texV[(int32_t)j] = vtx.v;
                 }
 
-                cvox::VoxelizeTriangleSurface(verts, [&](glm::ivec3 ipos) {
-                    glm::uvec3 pos = ipos;
-                    if ((pos.x | pos.y | pos.z) >= NumVoxelsPerAxis) return;
-
-                    auto bary = cvox::ProjectPointOnTriangle(glm::vec3(pos), verts);
+                VoxelizeTriangleSurface(verts, [&](glm::ivec3 pos) {
+                    auto bary = ProjectPointOnTriangle(glm::vec3(pos), verts);
                     float u = glm::dot(texU, bary);
                     float v = glm::dot(texV, bary);
 
                     constexpr swr::SamplerDesc SD = { .MinFilter = swr::FilterMode::Nearest, .EnableMips = true };
                     auto colors = mesh.Material->Texture->Sample<SD>(u, v, 0, 2);
-                    uint32_t paletteIdx = palette.FindIndex((uint32_t)colors[0]);
+                    if (colors[0] < 0x80'000000) return;  // alpha test
 
+                    uint32_t paletteIdx = palette.FindIndex((uint32_t)colors[0]);
                     Set(pos, Voxel::Create(paletteIdx));
                 });
             }
@@ -150,5 +146,3 @@ void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 pos, glm::uvec
         return true;
     });
 }
-
-};  // namespace cvox
