@@ -20,18 +20,31 @@ struct HitInfo {
     int iters;
 };
 
-vec3 signbit(vec3 x) {
-    return vec3(greaterThan(x, vec3(0.0)));
+vec3 clipRayToAABB(vec3 origin, vec3 dir, vec3 bbMin, vec3 bbMax) {
+    vec3 invDir = 1.0 / dir;
+    vec3 t1 = (bbMin - origin) * invDir;
+    vec3 t2 = (bbMax - origin) * invDir;
+    vec3 temp = t1;
+    t1 = min(temp, t2);
+    t2 = max(temp, t2);
+
+    float tmin = max(t1.x, max(t1.y, t1.z));
+    float tmax = min(t2.x, min(t2.y, t2.z));
+
+    return tmin > 0 && tmin < tmax ? origin + dir * tmin : origin;
 }
+
 HitInfo rayMarch(vec3 origin, vec3 dir) {
     int i = 0;
 
     vec3 invDir = 1.0 / dir;
     ivec3 stepDir = mix(ivec3(+1), ivec3(-1), lessThan(dir, vec3(0)));
-    vec3 tStart = (signbit(dir) - origin) * invDir;
+    vec3 tStart = (max(sign(dir), 0.0) - origin) * invDir;
     vec3 currPos = origin;
     vec3 sideDist;
     float tmin = 0;
+    
+    currPos = clipRayToAABB(currPos, dir, -u_WorldOrigin+1, vec3(GRID_SIZE_XZ, GRID_SIZE_Y,GRID_SIZE_XZ)-u_WorldOrigin-1);
 
     for (; i < 256; i++) {
         ivec3 pos = u_WorldOrigin + ivec3(floor(currPos));
@@ -47,14 +60,15 @@ HitInfo rayMarch(vec3 origin, vec3 dir) {
 
         pos = (pos-u_WorldOrigin);
         sideDist = tStart + pos * invDir;
-        tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001;
+        tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
+
+        // Bias tmin by the smallest amount that is representable by a float (BitIncrement),
+        // to avoid ray from getting stuck. Constant found by trial and error.
+        tmin = uintBitsToFloat(floatBitsToUint(tmin) + 4);
 
         currPos = origin + tmin * dir;
     }
 
-    // bool sideMaskX = sideDist.x < min(sideDist.y, sideDist.z);
-    // bool sideMaskY = sideDist.y < min(sideDist.x, sideDist.z);
-    // bool sideMaskZ = !sideMaskX && !sideMaskY;
     bvec3 sideMask = lessThanEqual(sideDist.xyz, min(sideDist.yzx, sideDist.zxy));
 
     uint voxelId = getVoxel(u_WorldOrigin + ivec3(floor(currPos)));
@@ -86,6 +100,13 @@ void main() {
     HitInfo hit = rayMarch(rayPos, rayDir);
     //o_FragColor = vec4(hit.norm *0.5+0.5, 1.0);
     o_FragColor = vec4(mat_GetColor(hit.mat), 1.0);
+
+    if (hit.norm.x != 0)
+        o_FragColor *= (hit.norm.x < 0?0.7:0.8);
+    else if (hit.norm.z != 0)
+        o_FragColor *= (hit.norm.z < 0 ? 0.6 : 0.7);
+    else if (hit.norm.y < 0)
+        o_FragColor *= 0.5;
 
     if (u_ShowTraversalHeatmap) {
         o_FragColor.rgb=vec3(hit.iters)/64.0;

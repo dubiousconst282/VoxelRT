@@ -41,6 +41,7 @@ struct BrickSlotAllocator {
     };
 
     glm::uvec2 MaxBounds; // XZ, Y
+    glm::ivec3 ViewOffset = {}; // World offset in sector coords
     std::unique_ptr<SectorInfo[]> Sectors;
     FreeList Arena;
 
@@ -54,12 +55,28 @@ struct BrickSlotAllocator {
     uint64_t Alloc(SectorInfo* sector, uint64_t mask);
     uint64_t Free(SectorInfo* sector, uint64_t mask);
 
-    SectorInfo* GetSector(glm::uvec3 pos) {
-        if ((pos.x | pos.y) >= MaxBounds.x || pos.y >= MaxBounds.y) {
+    SectorInfo* GetSector(glm::ivec3 pos) {
+        glm::uvec3 upos = pos + GetCoordBias();
+
+        if ((upos.x | upos.z) >= MaxBounds.x || upos.y >= MaxBounds.y) {
             return nullptr;
         }
-        uint32_t idx = pos.x + pos.z * MaxBounds.x + (pos.y * MaxBounds.x * MaxBounds.x);
+        uint32_t idx = upos.x + upos.z * MaxBounds.x + (upos.y * MaxBounds.x * MaxBounds.x);
+        assert(idx < MaxBounds.x * MaxBounds.x * MaxBounds.y);
         return &Sectors[idx];
+    }
+    glm::ivec3 GetPos(SectorInfo* sector) {
+        uint32_t idx = sector - Sectors.get();
+        uint32_t x = idx % MaxBounds.x;
+        uint32_t z = (idx / MaxBounds.x) % MaxBounds.x;
+        uint32_t y = (idx / MaxBounds.x) / MaxBounds.x;
+        return glm::ivec3(x, y, z) - GetCoordBias();
+    }
+
+private:
+    glm::ivec3 GetCoordBias() const {
+        return ViewOffset;
+ //       +glm::ivec3(MaxBounds.x, MaxBounds.y, MaxBounds.x) / 2;
     }
 
     // TODO: implement rolling 3D buffer or something to support infinite maps

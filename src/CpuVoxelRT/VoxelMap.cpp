@@ -33,7 +33,7 @@ void Sector::DeleteBricks(uint64_t mask) {
     Storage.resize(j);
 }
 
-Brick* VoxelMap::GetBrick(glm::uvec3 pos, bool create, bool markAsDirty) {
+Brick* VoxelMap::GetBrick(glm::ivec3 pos, bool create, bool markAsDirty) {
     glm::uvec3 sectorPos = pos >> BrickIndexer::Shift;
 
     if (!SectorIndexer::CheckInBounds(sectorPos)) {
@@ -60,7 +60,7 @@ Brick* VoxelMap::GetBrick(glm::uvec3 pos, bool create, bool markAsDirty) {
     return sector->GetBrick(brickIdx, true);
 }
 
-bool VoxelMap::PopDirty(glm::uvec3& pos) {
+bool VoxelMap::PopDirty(glm::ivec3& pos) {
     auto iter = DirtyLocs.begin();
     if (iter == DirtyLocs.end()) return false;
 
@@ -88,7 +88,7 @@ double VoxelMap::RayCast(glm::dvec3 origin, glm::vec3 dir, uint32_t maxIters) {
     glm::ivec3 currPos = glm::floor(origin);
 
     while (maxIters-- > 0) {
-        if (!BrickIndexer::CheckInBounds(glm::uvec3(currPos) / Brick::Size)) break;
+        if (!CheckInBounds(currPos)) break;
         if (!Get(currPos).IsEmpty()) {
             return glm::min(glm::min(sideDist.x, sideDist.y), sideDist.z);
         }
@@ -204,9 +204,8 @@ void VoxelMap::Serialize(std::string_view filename) {
         gio::Write<uint64_t>(cst, mask);
         
         for (; mask != 0; mask &= mask - 1) {
-            int32_t j = std::countr_zero(mask);
-            Brick* brick = &sector.Storage[sector.BrickSlots[j]];
-
+            uint32_t j = (uint32_t)std::countr_zero(mask);
+            Brick* brick = sector.GetBrick(j);
             gio::Write(cst, *brick);
         }
         FlushPack();

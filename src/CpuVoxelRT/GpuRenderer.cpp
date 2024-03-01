@@ -61,7 +61,7 @@ struct GpuVoxelStorage {
 
         for (auto [sectorIdx, dirtyMask] : batch) {
             Sector& actualSector = map.Sectors[sectorIdx];
-            glm::uvec3 sectorPos = SectorIndexer::GetPos(sectorIdx);
+            glm::ivec3 sectorPos = SectorIndexer::GetPos(sectorIdx);
             auto sectorAlloc = SlotAllocator.GetSector(sectorPos);
 
             for (uint64_t m = dirtyMask; m != 0; m &= m - 1) {

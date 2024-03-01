@@ -263,11 +263,11 @@ public:
         int32_t radius = 90;
 
         using swr::VInt, swr::VMask;
-        _map->RegionDispatchSIMD(brushPos - radius, brushPos + radius, true, [&](VInt x, VInt y, VInt z, VInt& voxelIds) {
-            VInt dx = x - brushPos.x, dy = y - brushPos.y, dz = z - brushPos.z;
+        _map->RegionDispatchSIMD(brushPos - radius, brushPos + radius, true, [&](VoxelDispatchInvocationPars& pars) {
+            VInt dx = pars.X - brushPos.x, dy = pars.Y - brushPos.y, dz = pars.Z - brushPos.z;
             VMask mask = dx * dx + dy * dy + dz * dz <= radius * radius;
 
-            swr::simd::set_if(mask, voxelIds, voxel.Data);
+            swr::simd::set_if(mask, pars.VoxelIds, voxel.Data);
             return mask != 0;
         });
     }
