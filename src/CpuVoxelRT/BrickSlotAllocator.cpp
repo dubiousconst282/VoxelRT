@@ -9,15 +9,15 @@ uint64_t BrickSlotAllocator::Alloc(SectorInfo* sector, uint64_t mask) {
     uint32_t newBase = Arena.Realloc(sector->BaseSlot, currSize, newSize);
 
     if (newBase == 0) {
-        // TODO: defrag storage
+        // TODO: defrag storage? and/or maybe add heuristics in FreeList::Realloc to minimize fragmentation
         throw std::exception("Could not allocate brick slots");
     }
     sector->BaseSlot = newBase;
     sector->AllocMask = newMask;
 
-    // After reallocating slots, we could be allocating bricks in the middle of
-    // the old mask which will offset slots that are already in use.
-    // For now, we'll just say that the entire sector must be updated.
+    // Even if newBase hasn't changed, some of the old slots will be offset if
+    // new bricks are allocated in the middle of the old mask.
+    // For now, we'll just always say that the entire sector must be updated.
     return newMask;
 }
 
@@ -43,9 +43,11 @@ uint32_t FreeList::Realloc(uint32_t baseAddr, uint32_t currSize, uint32_t newSiz
     // Try to bump current allocation first
     if (baseAddr != 0) {
         auto itr = FreeRanges.lower_bound(baseAddr);
+        uint32_t currEndAddr = baseAddr + currSize;
+        uint32_t newEndAddr = baseAddr + newSize;
 
-        if (itr != FreeRanges.end() && itr->first < baseAddr + newSize) {
-            Split(itr, baseAddr + newSize - itr->first);
+        if (itr != FreeRanges.end() && itr->first == currEndAddr && newEndAddr < itr->first + itr->second) {
+            Split(itr, newEndAddr - itr->first);
             return baseAddr;
         }
 

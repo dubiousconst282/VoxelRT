@@ -23,24 +23,33 @@ struct GpuVoxelStorage {
     };
 
     void SyncGpuBuffers(VoxelMap& map) {
-        const uint32_t MaxBatchSize = 1024 * 1024 * 32 / (sizeof(Brick) * 64);
+        const uint32_t MaxBatchSize = 1024 * 1024 * 128 / (sizeof(Brick) * 64);
         std::vector<std::tuple<uint32_t, uint64_t>> batch;
 
         auto itr = map.DirtyLocs.begin();
+        uint32_t maxSlotId = SlotAllocator.Arena.NumAllocated;
+        uint32_t dirtyBricksInBatch = 0;
+
         while (itr != map.DirtyLocs.end() && batch.size() < MaxBatchSize) {
             auto [sectorIdx, dirtyMask] = *itr;
 
-            glm::uvec3 sectorPos = SectorIndexer::GetPos(sectorIdx);
+            glm::ivec3 sectorPos = SectorIndexer::GetPos(sectorIdx);
             auto sectorAlloc = SlotAllocator.GetSector(sectorPos);
 
             if (sectorAlloc != nullptr) {
                 dirtyMask |= SlotAllocator.Alloc(sectorAlloc, dirtyMask);
                 batch.push_back({ sectorIdx, dirtyMask });
+
+                maxSlotId = std::max(maxSlotId, sectorAlloc->BaseSlot + (uint32_t)std::popcount(sectorAlloc->AllocMask));
             }
+
+            dirtyBricksInBatch += (uint32_t)std::popcount(dirtyMask);
             map.DirtyLocs.erase(itr++);
         }
-
-        size_t bufferSize = sizeof(GpuMeta) + std::bit_ceil(SlotAllocator.Arena.NumAllocated) * sizeof(Brick);
+        // avg * dlocs
+        uint32_t estimDirtyBricksLeft = batch.size() == 0 ? 0 : dirtyBricksInBatch * (uint64_t)map.DirtyLocs.size() / batch.size();
+        uint32_t maxBricksInBuffer = std::bit_ceil(std::max(estimDirtyBricksLeft * 3 / 4, maxSlotId));
+        size_t bufferSize = sizeof(GpuMeta) + maxBricksInBuffer * sizeof(Brick);
 
         if (StorageBuffer == nullptr || StorageBuffer->Size < bufferSize) {
             StorageBuffer = std::make_unique<ogl::Buffer>(bufferSize, GL_MAP_WRITE_BIT);
@@ -59,8 +68,9 @@ struct GpuVoxelStorage {
                 uint32_t idx = (uint32_t)std::countr_zero(m);
                 uint32_t slotIdx = sectorAlloc->GetSlot(idx) - 1;
 
+                assert(slotIdx < maxBricksInBuffer);
+
                 Brick* brick = actualSector.GetBrick(idx);
-                if(brick!=nullptr)
                 mappedStorage->Bricks[slotIdx] = *brick;
             }
 
@@ -94,6 +104,11 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     _frameTime.AddSample(frameElapsedNs / 1000000.0);
     glBeginQuery(GL_TIME_ELAPSED, _frameQueryObj);
 
+    if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
+        _map->MarkAllDirty();
+        _storage->SlotAllocator = BrickSlotAllocator(GpuVoxelStorage::ViewSize);
+    }
+
     _storage->SyncGpuBuffers(*_map);
 
     _mainShader->SetUniform("ssbo_VoxelData", *_storage->StorageBuffer);
@@ -124,6 +139,7 @@ void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
     ImGui::Text("Traversal Iters: %.3fM", *totalIters / 1000000.0);
     *totalIters = 0;
 
-if(_storage->StorageBuffer!=nullptr)
-    ImGui::Text("Storage: %.1fMB", _storage->StorageBuffer->Size / 1048576.0);
+    if (_storage->StorageBuffer != nullptr) {
+        ImGui::Text("Storage: %.1fMB (FreeListRanges: %zu)", _storage->StorageBuffer->Size / 1048576.0, _storage->SlotAllocator.Arena.FreeRanges.size());
+    }
 }
