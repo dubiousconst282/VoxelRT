@@ -16,6 +16,7 @@ Brick* Sector::GetBrick(uint32_t index, bool create) {
 }
 
 void Sector::DeleteBricks(uint64_t mask) {
+    throw std::runtime_error("Broken impl");
     uint32_t j = 0;
 
     for (uint32_t i = 0; i < 64; i++) {
@@ -31,6 +32,7 @@ void Sector::DeleteBricks(uint64_t mask) {
         j++;
     }
     Storage.resize(j);
+    Storage.shrink_to_fit();
 }
 
 Brick* VoxelMap::GetBrick(glm::ivec3 pos, bool create, bool markAsDirty) {

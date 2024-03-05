@@ -217,7 +217,7 @@ struct VoxelMap {
                     glm::ivec3 brickPos = glm::ivec3(bx, by, bz);
                     Brick* brick = GetBrick(brickPos, createEmpty);
 
-                    if (brick != nullptr && brick->DispatchSIMD(fn)) {
+                    if (brick != nullptr && brick->DispatchSIMD(fn, brickPos)) {
                         uint32_t sectionIdx = SectorIndexer::GetIndex(brickPos >> BrickIndexer::Shift);
                         DirtyLocs[sectionIdx] |= 1ull << BrickIndexer::GetIndex(brickPos);
                     }

@@ -15,6 +15,8 @@
 
 #include "Renderer.h"
 
+#include "TerrainGenerator.h"
+
 
 /*
 class CpuRenderer: public Renderer {
@@ -155,6 +157,7 @@ class Application {
 
     std::unique_ptr<ogl::ShaderLib> _shaderLib;
     std::unique_ptr<Renderer> _renderer;
+    std::unique_ptr<TerrainGenerator> _terrainGen;
 
 public:
     Application() {
@@ -181,6 +184,15 @@ public:
 
             _map->Serialize("logs/voxels_2k.dat");
         }
+        _terrainGen = std::make_unique<TerrainGenerator>(_map);
+        for (size_t y = 0; y < 12; y++) {
+            for (size_t z = 0; z < 64; z++) {
+                for (size_t x = 0; x < 64; x++) {
+                    //_terrainGen->RequestSector(glm::ivec3(x, y, z));
+                }
+            }
+        }
+        _terrainGen->RequestSector(glm::ivec3(1, 3, 1));
 
         _cam.Position = glm::vec3(512, 128, 512);
         _cam.MoveSpeed = 180;
@@ -196,6 +208,15 @@ public:
             MousePickVoxels();
         } else {
             _cam.Update();
+        }
+
+        while (true) {
+            auto [sectorPos, sector] = _terrainGen->Poll();
+            if (sector == nullptr) break;
+
+            uint32_t sectorIdx = SectorIndexer::GetIndex(sectorPos);
+            _map->DirtyLocs[sectorIdx] = sector->GetAllocationMask();
+            _map->Sectors[sectorIdx] = std::move(*sector);
         }
 
         ImGui::Begin("Settings");
@@ -219,7 +240,7 @@ public:
 
         _renderer->DrawSettings(_settings);
 
-        ImGui::Text("Total Sectors: %zu", _map->Sectors.size());
+        ImGui::Text("Total Sectors: %zu (%d pending gen)", _map->Sectors.size(), _terrainGen->GetNumPendingRequests());
 
         ImGui::SeparatorText("Camera");
         _settings.InputScalarN("Pos", &_cam.Position.x, 3, "%.1f");
@@ -260,7 +281,7 @@ public:
         }
 
         glm::ivec3 brushPos = glm::floor(_cam.ViewPosition + glm::dvec3(dir) * brushDist);
-        int32_t radius = 90;
+        int32_t radius = 60;
 
         using swr::VInt, swr::VMask;
         _map->RegionDispatchSIMD(brushPos - radius, brushPos + radius, true, [&](VoxelDispatchInvocationPars& pars) {
