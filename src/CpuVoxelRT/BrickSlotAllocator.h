@@ -23,6 +23,7 @@ private:
             FreeRanges.insert({ node->first + count, node->second - count });
         }
         FreeRanges.erase(node);
+        NumAllocated += count;
     }
 };
 

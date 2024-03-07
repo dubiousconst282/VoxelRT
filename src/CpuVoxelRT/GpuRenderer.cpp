@@ -1,11 +1,16 @@
 #include "Renderer.h"
 #include "BrickSlotAllocator.h"
 
-struct GpuVoxelStorage {
-    static constexpr auto ViewSize = glm::uvec2(64, 32); // XZ, Y sectors (* 4x4x4 * 8x8x8 -> 2048 XZ, 1024 Y)
+static constexpr auto ViewSize = glm::uvec2(64, 32);  // XZ, Y sectors (* 4x4x4 * 8x8x8 -> 2048 XZ, 1024 Y)
+static const std::vector<ogl::ShaderLoadParams::PrepDef> DefaultShaderDefs = {
+    { "BRICK_SIZE", std::to_string(Brick::Size.x) },
+    { "NUM_SECTORS_XZ", std::to_string(ViewSize.x) },
+    { "NUM_SECTORS_Y", std::to_string(ViewSize.y) },
+};
 
+struct GpuVoxelStorage {
     std::unique_ptr<ogl::Buffer> StorageBuffer;
-    std::unique_ptr<ogl::Texture3D> OccupancyStorage;
+    std::unique_ptr<ogl::Buffer> OccupancyStorage;
 
     std::shared_ptr<ogl::Shader> BuildOccupancyShader;
 
@@ -21,6 +26,14 @@ struct GpuVoxelStorage {
         SectorInfo Sectors[ViewSize.x * ViewSize.x * ViewSize.y];
         Brick Bricks[];
     };
+    struct UpdateRequest {
+        uint32_t Count;
+        glm::uvec3 BrickLocs[];
+    };
+
+    GpuVoxelStorage(ogl::ShaderLib& shlib) {
+        BuildOccupancyShader = shlib.LoadComp("UpdateOccupancy", DefaultShaderDefs);
+    }
 
     void SyncGpuBuffers(VoxelMap& map) {
         const uint32_t MaxBatchSize = 1024 * 1024 * 128 / (sizeof(Brick) * 64);
@@ -46,18 +59,23 @@ struct GpuVoxelStorage {
             dirtyBricksInBatch += (uint32_t)std::popcount(dirtyMask);
             map.DirtyLocs.erase(itr++);
         }
-        // avg * dlocs
-        uint32_t estimDirtyBricksLeft = batch.size() == 0 ? 0 : dirtyBricksInBatch * (uint64_t)map.DirtyLocs.size() / batch.size();
-        uint32_t maxBricksInBuffer = std::bit_ceil(std::max(estimDirtyBricksLeft * 3 / 4, maxSlotId));
+        uint32_t maxBricksInBuffer = std::bit_ceil(maxSlotId * 4 / 3);
         size_t bufferSize = sizeof(GpuMeta) + maxBricksInBuffer * sizeof(Brick);
 
         if (StorageBuffer == nullptr || StorageBuffer->Size < bufferSize) {
             StorageBuffer = std::make_unique<ogl::Buffer>(bufferSize, GL_MAP_WRITE_BIT);
+            OccupancyStorage = std::make_unique<ogl::Buffer>(maxBricksInBuffer * (VoxelIndexer::MaxArea / 8), 0);
 
             map.MarkAllDirty();
         }
         auto mappedStorage = StorageBuffer->Map<GpuMeta>(GL_MAP_WRITE_BIT);
         std::memcpy(mappedStorage->Palette, map.Palette, sizeof(VoxelMap::Palette));
+
+        if (dirtyBricksInBatch == 0) return;
+
+        auto updateBuffer = ogl::Buffer(dirtyBricksInBatch * sizeof(glm::uvec3) + sizeof(UpdateRequest), GL_MAP_WRITE_BIT);
+        auto updateLocs = updateBuffer.Map<UpdateRequest>(GL_MAP_WRITE_BIT);
+        uint32_t updateLocIdx = 0;
 
         for (auto [sectorIdx, dirtyMask] : batch) {
             Sector& actualSector = map.Sectors[sectorIdx];
@@ -65,13 +83,18 @@ struct GpuVoxelStorage {
             auto sectorAlloc = SlotAllocator.GetSector(sectorPos);
 
             for (uint64_t m = dirtyMask; m != 0; m &= m - 1) {
-                uint32_t idx = (uint32_t)std::countr_zero(m);
-                uint32_t slotIdx = sectorAlloc->GetSlot(idx) - 1;
+                uint32_t brickIdx = (uint32_t)std::countr_zero(m);
+                uint32_t slotIdx = sectorAlloc->GetSlot(brickIdx) - 1;
 
                 assert(slotIdx < maxBricksInBuffer);
 
-                Brick* brick = actualSector.GetBrick(idx);
+                Brick* brick = actualSector.GetBrick(brickIdx);
+                assert(brick != nullptr);
+
                 mappedStorage->Bricks[slotIdx] = *brick;
+
+                glm::uvec3 brickPos = sectorPos * BrickIndexer::Size + BrickIndexer::GetPos(brickIdx);
+                updateLocs->BrickLocs[updateLocIdx++] = brickPos;
             }
 
             // Also update sector metadata while we have it in hand.
@@ -80,18 +103,21 @@ struct GpuVoxelStorage {
             gpuSector.AllocMask_0 = (uint32_t)(sectorAlloc->AllocMask >> 0);
             gpuSector.AllocMask_1 = (uint32_t)(sectorAlloc->AllocMask >> 32);
         }
+
+        updateLocs->Count = updateLocIdx;
+        updateLocs.reset();
+        BuildOccupancyShader->SetUniform("ssbo_UpdateLocs", updateBuffer);
+        BuildOccupancyShader->SetUniform("ssbo_VoxelData", *StorageBuffer);
+        BuildOccupancyShader->SetUniform("ssbo_Occupancy", *OccupancyStorage);
+        BuildOccupancyShader->DispatchCompute(1, 1, (updateLocIdx + 63) / 64);
     }
 };
 
 GpuRenderer::GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
     _map = std::move(map);
-    _storage = std::make_unique<GpuVoxelStorage>();
+    _storage = std::make_unique<GpuVoxelStorage>(shlib);
 
-    _mainShader = shlib.LoadFrag("VoxelRender", {
-        { "BRICK_SIZE", std::to_string(Brick::Size.x) },
-        { "NUM_SECTORS_XZ", std::to_string(GpuVoxelStorage::ViewSize.x) },
-        { "NUM_SECTORS_Y", std::to_string(GpuVoxelStorage::ViewSize.y) },
-    });
+    _mainShader = shlib.LoadFrag("VoxelRender", DefaultShaderDefs);
 
     glCreateQueries(GL_TIME_ELAPSED, 1, &_frameQueryObj);
     _metricsBuffer = std::make_unique<ogl::Buffer>(64, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
@@ -106,13 +132,13 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 
     if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
         _map->MarkAllDirty();
-        _storage->SlotAllocator = BrickSlotAllocator(GpuVoxelStorage::ViewSize);
+        _storage->SlotAllocator = BrickSlotAllocator(ViewSize);
     }
 
     _storage->SyncGpuBuffers(*_map);
 
     _mainShader->SetUniform("ssbo_VoxelData", *_storage->StorageBuffer);
-    // _mainShader->SetUniform("u_DistField", *_storage->OccupancyStorage);
+    _mainShader->SetUniform("ssbo_Occupancy", *_storage->OccupancyStorage);
 
     glm::dvec3 camPos = cam.ViewPosition;
     glm::ivec3 worldOrigin = glm::ivec3(glm::floor(camPos));

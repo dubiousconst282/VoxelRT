@@ -37,8 +37,6 @@ uint64_t BrickSlotAllocator::Free(SectorInfo* sector, uint64_t mask) {
 uint32_t FreeList::Realloc(uint32_t baseAddr, uint32_t currSize, uint32_t newSize) {
     assert(baseAddr == 0 ? currSize == 0 : true);
     assert(newSize >= currSize);
-    
-    NumAllocated += newSize - currSize;
 
     // Try to bump current allocation first
     if (baseAddr != 0) {
@@ -54,13 +52,17 @@ uint32_t FreeList::Realloc(uint32_t baseAddr, uint32_t currSize, uint32_t newSiz
         Free(baseAddr, currSize);
     }
 
-    // Scan free-list
+    // Find best fitting node (that leads to least amount of fragmentation)
+    auto bestNode = FreeRanges.end();
     for (auto itr = FreeRanges.begin(); itr != FreeRanges.end(); itr++) {
-        if (itr->second >= newSize) {
-            uint32_t freeAddrBase = itr->first;
-            Split(itr, newSize);
-            return freeAddrBase;
+        if (itr->second >= newSize && (bestNode == FreeRanges.end() || itr->second < bestNode->second)) {
+            bestNode = itr;
         }
+    }
+    if (bestNode != FreeRanges.end()) {
+        uint32_t freeAddrBase = bestNode->first;
+        Split(bestNode, newSize);
+        return freeAddrBase;
     }
     return 0;
 }
