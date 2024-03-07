@@ -16,23 +16,84 @@ Brick* Sector::GetBrick(uint32_t index, bool create) {
 }
 
 void Sector::DeleteBricks(uint64_t mask) {
-    throw std::runtime_error("Broken impl");
-    uint32_t j = 0;
+    if (mask == 0) return;
 
-    for (uint32_t i = 0; i < 64; i++) {
-        if (mask >> i & 1) {
-            BrickSlots[i] = 0;
+    uint64_t allocMask = GetAllocationMask() & ~mask;
+    Sector newSect;
+    newSect.Storage.reserve((uint32_t)std::popcount(allocMask));
+
+    for (; allocMask != 0; allocMask &= allocMask - 1) {
+        uint32_t i = (uint32_t)std::countr_zero(allocMask);
+        Brick* brick = GetBrick(i);
+
+        *newSect.GetBrick(i, true) = *brick;
+    }
+    *this = std::move(newSect);
+
+    /*
+    uint32_t i = 0, j = 0;
+
+    for (; i < Storage.size(); i++) {
+        uint32_t brickIdx = GetBrickIndexFromSlot(allocMask, i);
+
+        if (mask >> brickIdx & 1) {
+            BrickSlots[brickIdx] = 0;
             continue;
         }
-
-        if (j != i) {
-            BrickSlots[i] = j;
+        if (i != j) {
+            BrickSlots[brickIdx] = j;
             Storage[j] = Storage[i];
         }
         j++;
     }
     Storage.resize(j);
-    Storage.shrink_to_fit();
+    Storage.shrink_to_fit();*/
+}
+
+uint64_t Sector::GetAllocationMask() {
+    static_assert(sizeof(BrickSlots) == 64);
+
+#ifdef __AVX512F__
+    uint64_t mask = _mm512_cmpneq_epi8_mask(_mm512_loadu_epi8(BrickSlots), _mm512_set1_epi8(0));
+#else
+    uint64_t mask = 0;
+    for (uint32_t i = 0; i < 64; i++) {
+        uint64_t bit = BrickSlots[i] != 0;
+        mask |= bit << i;
+    }
+#endif
+    return mask;
+}
+uint64_t Sector::DeleteEmptyBricks(uint64_t mask) {
+    uint64_t emptyMask = 0;
+
+    for (; mask != 0; mask &= mask - 1) {
+        uint32_t i = (uint32_t)std::countr_zero(mask);
+        Brick* brick = GetBrick(i);
+
+        if (brick != nullptr && brick->IsEmpty()) {
+            emptyMask |= (1ull << i);
+        }
+    }
+    DeleteBricks(emptyMask);
+    return emptyMask;
+}
+
+// Leftmost binary search
+uint32_t Sector::GetBrickIndexFromSlot(uint64_t allocMask, uint32_t slotIdx) {
+    uint32_t start = 0, end = 64;
+
+    while (start < end) {
+        uint32_t mid = (start + end) / 2;
+        int32_t c = std::popcount(allocMask & ((1ull << mid) - 1));
+
+        if (c > slotIdx) {
+            end = mid;
+        } else {
+            start = mid + 1;
+        }
+    }
+    return end - 1;
 }
 
 Brick* VoxelMap::GetBrick(glm::ivec3 pos, bool create, bool markAsDirty) {

@@ -145,18 +145,10 @@ struct Sector {
     // Bulk delete bricks indicated by mask
     void DeleteBricks(uint64_t mask);
 
-    uint64_t GetAllocationMask() {
-#ifdef __AVX512F__
-        static_assert(sizeof(BrickSlots) == 64);
-        return _mm512_cmpneq_epi8_mask(_mm512_loadu_epi8(BrickSlots), _mm512_set1_epi8(0));
-#endif
-        uint64_t mask = 0;
-        for (uint32_t i = 0; i < 64; i++) {
-            uint64_t bit = BrickSlots[i] != 0;
-            mask |= bit << i;
-        }
-        return mask;
-    }
+    uint64_t GetAllocationMask();
+    uint64_t DeleteEmptyBricks(uint64_t mask = ~0ull);
+
+    static uint32_t GetBrickIndexFromSlot(uint64_t allocMask, uint32_t slotIdx);
 };
 
 struct VoxelMap {

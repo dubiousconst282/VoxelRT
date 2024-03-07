@@ -274,7 +274,7 @@ public:
         if (hitDist < 30) hitDist = 30;
 
         glm::ivec3 hitPos = glm::floor(_cam.ViewPosition + glm::dvec3(dir) * hitDist);
-        if (erase || ImGui::IsMouseClicked(ImGuiMouseButton_Left) || 
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || 
             (!erase && (hitDist > brushDist || _map->Get(hitPos).Data != voxel.Data))
         ) {
             brushDist = hitDist;
