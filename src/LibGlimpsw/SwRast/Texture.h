@@ -40,17 +40,26 @@ struct RGBA8u {
         };
     }
     static VInt Pack(const VFloat4& value) {
-        auto ri = _mm512_cvtps_epi32(value.x * 255.0f);
-        auto gi = _mm512_cvtps_epi32(value.y * 255.0f);
-        auto bi = _mm512_cvtps_epi32(value.z * 255.0f);
-        auto ai = _mm512_cvtps_epi32(value.w * 255.0f);
+        const auto shuffMask = _mm_setr_epi8(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
 
+        auto ri = simd::round2i(value.x * 255.0f);
+        auto gi = simd::round2i(value.y * 255.0f);
+        auto bi = simd::round2i(value.z * 255.0f);
+        auto ai = simd::round2i(value.w * 255.0f);
+
+#if SIMD_AVX512
         auto rg = _mm512_packs_epi32(ri, gi);
         auto ba = _mm512_packs_epi32(bi, ai);
         auto cb = _mm512_packus_epi16(rg, ba);
 
-        const auto shuffMask = _mm_setr_epi8(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15);
         return _mm512_shuffle_epi8(cb, _mm512_broadcast_i32x4(shuffMask));
+#elif SIMD_AVX2
+        auto rg = _mm256_packs_epi32(ri, gi);
+        auto ba = _mm256_packs_epi32(bi, ai);
+        auto cb = _mm256_packus_epi16(rg, ba);
+
+        return _mm256_shuffle_epi8(cb, _mm256_broadcastsi128_si256(shuffMask));
+#endif
     }
 };
 
@@ -94,6 +103,7 @@ struct RG16f {
     using UnpackedTy = VFloat2;
     using LerpedTy = UnpackedTy;
 
+#if SIMD_AVX512
     static VFloat2 Unpack(VInt packed) {
         return {
             _mm512_cvtph_ps(_mm512_cvtepi32_epi16(packed)),
@@ -105,6 +115,19 @@ struct RG16f {
         VInt g = _mm512_cvtepi16_epi32(_mm512_cvtps_ph(value.y, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
         return r | (g << 16);
     }
+#elif SIMD_AVX2
+    static VFloat2 Unpack(VInt packed) {
+        return {
+            _mm256_cvtph_ps(_mm256_cvtepi32_epi16(packed)),
+            _mm256_cvtph_ps(_mm256_cvtepi32_epi16(packed >> 16)),
+        };
+    }
+    static VInt Pack(const VFloat2& value) {
+        VInt r = _mm256_cvtepi16_epi32(_mm256_cvtps_ph(value.x, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        VInt g = _mm256_cvtepi16_epi32(_mm256_cvtps_ph(value.y, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        return r | (g << 16);
+    }
+#endif
 };
 
 // RG x 11-bit float, B x 10-bit float
@@ -249,7 +272,7 @@ inline void ProjectCubemap(VFloat3 dir, VFloat& u, VFloat& v, VInt& faceIdx) {
     faceIdx += simd::shrl(simd::re2i(w), 31);
 
     // uv = { x: zy,  y: xz,  z: xy }[w]
-    w = simd::rcp14(simd::abs(w)) * 0.5f;
+    w = simd::approx_rcp(simd::abs(w)) * 0.5f;
     u = simd::csel(wx, dir.x, dir.z) * w + 0.5f;
     v = simd::csel(wy, dir.z, dir.y) * w + 0.5f;
 }
@@ -273,7 +296,7 @@ inline VFloat3 UnprojectCubemap(VFloat u, VFloat v, VInt faceIdx) {
         simd::csel(axis == 1, w, v),
         simd::csel(axis == 2, w, simd::csel(axis == 0, u, v)),
     };
-    return unnormDir * simd::rsqrt14(u * u + v * v + 1.0f);
+    return unnormDir * simd::approx_rsqrt(u * u + v * v + 1.0f);
 }
 
 // Lookups the adjacent cube face and UVs to the nearest edge.
@@ -295,7 +318,12 @@ inline void GetAdjacentCubeFace(VInt& faceIdx, VInt& u, VInt& v, VInt scaleU, VI
     VInt quadIdx = simd::csel(simd::abs(cu) > simd::abs(cv), simd::shrl(cu, 31) + 2, simd::shrl(cv, 31));
     VInt tableIdx = quadIdx * 8 + faceIdx;
 
+#if SIMD_AVX512
     VInt data = _mm512_permutexvar_epi8(tableIdx, _mm512_broadcast_i32x8(_mm256_loadu_epi8(AdjFaceLUT)));
+#elif SIMD_AVX2
+    // fucking hell intel, just pick an argument order and stick with it
+    VInt data = _mm256_permutevar8x32_epi32(_mm256_loadu_si256((__m256i*)AdjFaceLUT), tableIdx);
+#endif
 
     faceIdx = data & 7;
 
@@ -309,6 +337,7 @@ inline void GetAdjacentCubeFace(VInt& faceIdx, VInt& u, VInt& v, VInt scaleU, VI
     v = simd::csel(invV, scaleV - sv, sv);
 }
 
+#if 0
 // Texture swizzling doesn't improve performance by much, the functions below are keept for reference.
 
 // 32-bit Z-curve/morton encode. Takes ~8.5 cycles per 16 coord pairs on TigerLake, according to llvm-mca.
@@ -336,6 +365,7 @@ inline VInt GetTiledOffset(VInt ix, VInt iy, VInt rowShift) {
     VInt pixelOffset = (ix & 3) + (iy & 3) * 4;
     return tileId * 16 + pixelOffset;
 }
+#endif
 
 };  // namespace texutil
 
@@ -419,10 +449,17 @@ struct Texture2D {
         uint32_t* dst = &Data[(layer << LayerShift) + (uint32_t)_mipOffsets[mipLevel]];
         uint32_t stride = RowShift - mipLevel;
 
+#if SIMD_AVX512
         _mm_storeu_epi32(&dst[x + ((y + 0) << stride)], _mm512_extracti32x4_epi32(packed, 0));
         _mm_storeu_epi32(&dst[x + ((y + 1) << stride)], _mm512_extracti32x4_epi32(packed, 1));
         _mm_storeu_epi32(&dst[x + ((y + 2) << stride)], _mm512_extracti32x4_epi32(packed, 2));
         _mm_storeu_epi32(&dst[x + ((y + 3) << stride)], _mm512_extracti32x4_epi32(packed, 3));
+#else
+        _mm256_storeu2_m128i(
+            (__m128i*)&dst[x + ((y + 0) << stride)],
+            (__m128i*)&dst[x + ((y + 1) << stride)], 
+            packed);
+#endif
     }
 
     void GenerateMips() {
@@ -469,7 +506,7 @@ struct Texture2D {
             ix = ix >> mipLevel;
             iy = iy >> mipLevel;
             stride -= mipLevel;
-            offset += _mm512_permutexvar_epi32(mipLevel, _mipOffsets);
+            offset += VInt::shuffle(_mipOffsets, mipLevel);
         }
 
         // Sample
@@ -487,8 +524,8 @@ struct Texture2D {
         if constexpr (IsCubeSample_) {
             //    x < 1 || x >= N
             // =  (x-1) >= (N-1)     given twos-complement + unsigned cmp
-            VMask edgeU = _mm512_cmpge_epu32_mask((ix >> LerpFracBits) - 1, (_maskU >> mipLevel) - 1);
-            VMask edgeV = _mm512_cmpge_epu32_mask((iy >> LerpFracBits) - 1, (_maskV >> mipLevel) - 1);
+            VMask edgeU = simd::ucmp_ge((ix >> LerpFracBits) - 1, (_maskU >> mipLevel) - 1);
+            VMask edgeV = simd::ucmp_ge((iy >> LerpFracBits) - 1, (_maskV >> mipLevel) - 1);
 
             if (simd::any(edgeU | edgeV)) [[unlikely]] {
                 return SampleLinearNearCubeEdge(ix, iy, offset, stride, mipLevel, layer);

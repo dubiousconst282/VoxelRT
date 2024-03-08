@@ -103,26 +103,25 @@ struct Brick {
         for (uint32_t i = 0; i < VoxelIndexer::MaxArea; i += VInt::Length) {
             static_assert(VInt::Length <= VoxelIndexer::MaxArea);
 
-            VInt vi = (int32_t)i + VInt::ramp();
+            VInt vi = (int32_t)i + simd::RampI;
             p.X = (basePos.x * VoxelIndexer::SizeXZ) + (vi & VoxelIndexer::MaskXZ);
             p.Z = (basePos.z * VoxelIndexer::SizeXZ) + (vi >> VoxelIndexer::ShiftXZ & VoxelIndexer::MaskXZ);
             p.Y = (basePos.y * VoxelIndexer::SizeY) + (vi >> (VoxelIndexer::ShiftXZ * 2));
             p.GroupBaseIdx = i;
 
-#ifdef __AVX512F__
+#ifdef SIMD_AVX512
             p.VoxelIds = _mm512_cvtepu8_epi32(_mm_loadu_epi8(&Data[i]));
             if (fn(p)) {
                 _mm_storeu_epi8(&Data[i], _mm512_cvtepi32_epi8(p.VoxelIds));
                 dirty = true;
             }
-#elif __AVX2__
+#elif SIMD_AVX2
             p.VoxelIds = _mm256_cvtepu8_epi32(_mm_loadu_si64(&Data[i]));
             if (fn(p)) {
-                _mm_storeu_si64(&Data[i], _mm256_cvtepi32_epi8(p.VoxelIds));
+                auto tmp = _mm_packus_epi32(_mm256_extracti128_si256(p.VoxelIds, 0), _mm256_extracti128_si256(p.VoxelIds, 1));
+                _mm_storeu_si64(&Data[i], _mm_packus_epi16(tmp, tmp));
                 dirty = true;
             }
-#else
-#error SIMD accel not supported in this compiler or platform
 #endif
         }
         return dirty;

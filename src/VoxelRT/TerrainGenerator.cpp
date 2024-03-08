@@ -21,7 +21,7 @@ uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) 
             VMask fillMask = noise < 0.0;
             p.VoxelIds = simd::csel(fillMask, VInt(255), VInt(0));
 
-            isNonEmpty |= fillMask != 0;
+            isNonEmpty |= simd::any(fillMask);
             return true;
         }, brickPos);
 

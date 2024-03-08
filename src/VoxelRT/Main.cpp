@@ -287,7 +287,7 @@ public:
             VMask mask = dx * dx + dy * dy + dz * dz <= radius * radius;
 
             simd::set_if(mask, pars.VoxelIds, voxel.Data);
-            return mask != 0;
+            return simd::any(mask);
         });
     }
 };

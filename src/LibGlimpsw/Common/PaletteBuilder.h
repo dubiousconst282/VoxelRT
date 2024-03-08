@@ -70,10 +70,10 @@ struct PaletteBuilder {
         // This will actually result in slightly better quality because colors across
         // octree nodes are considered. It also only depends on the final palette, which
         // is tiny and cache friendly.
-
-        auto targetR = _mm512_set1_epi16((color >> 0) & 255);
-        auto targetG = _mm512_set1_epi16((color >> 8) & 255);
-        auto targetB = _mm512_set1_epi16((color >> 16) & 255);
+#ifdef SIMD_AVX512
+        auto targetR = _mm512_set1_epi16(color >> 0 & 255);
+        auto targetG = _mm512_set1_epi16(color >> 8 & 255);
+        auto targetB = _mm512_set1_epi16(color >> 16 & 255);
 
         auto closestDist = _mm512_set1_epi16(32767);
         uint32_t closestIdx = 0;
@@ -94,14 +94,39 @@ struct PaletteBuilder {
             }
 
             if (_mm512_cmplt_epu16_mask(dist, closestDist) != 0) {
+                // minpos would be better done as a last step (closestIdx as a vector of `i + ramp`),
+                // but this is fast enough for all I care
                 _mm512_minpos_epu16(dist, closestDist, closestIdx);
                 closestIdx += i;
             }
         }
         return closestIdx;
+#else
+        int32_t targetR = color >> 0 & 255;
+        int32_t targetG = color >> 8 & 255;
+        int32_t targetB = color >> 16 & 255;
+
+        int32_t closestDist = 32767;
+        uint32_t closestIdx = 0;
+
+        for (uint32_t i = 0; i < NumColors; i++) {
+            int16_t deltaR = targetR - ColorR[i];
+            int16_t deltaG = targetG - ColorG[i];
+            int16_t deltaB = targetB - ColorB[i];
+
+            int16_t dist = std::abs(deltaR) + std::abs(deltaG) + std::abs(deltaB);
+
+            if (dist < closestDist) {
+                closestDist = dist;
+                closestIdx = i;
+            }
+        }
+        return closestIdx;
+#endif
     }
 
 private:
+#ifdef SIMD_AVX512
     static void _mm512_minpos_epu16(__m512i x, __m512i& minValue, uint32_t& minIndex) {
         auto a = _mm256_min_epu16(_mm512_extracti32x8_epi32(x, 0), _mm512_extracti32x8_epi32(x, 1));
         auto b = _mm_min_epu16(_mm256_extracti128_si256(a, 0), _mm256_extracti128_si256(a, 1));
@@ -110,6 +135,7 @@ private:
         minValue = _mm512_broadcastw_epi16(c);
         minIndex = (uint32_t)std::countr_zero(_mm512_cmpeq_epu16_mask(x, minValue));
     }
+#endif
 
     struct Node {
         uint32_t RgbSum[3]{};     // Sum of added colors
