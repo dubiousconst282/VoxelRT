@@ -7,8 +7,6 @@
 #include <bit>
 #include <glm/mat4x4.hpp>
 
-namespace swr::simd {
-
 struct VInt {
     static const uint32_t Length = sizeof(__m512i) / sizeof(int32_t);
 
@@ -28,7 +26,9 @@ struct VInt {
     inline void store(void* ptr) const { _mm512_storeu_si512((__m512i*)ptr, reg); }
 
     template<int IndexScale = 1>
-    static inline VInt gather(const void* basePtr, VInt indices) { return _mm512_i32gather_epi32(indices, basePtr, IndexScale); }
+    static inline VInt gather(const void* basePtr, VInt indices) {
+        return _mm512_i32gather_epi32(indices, basePtr, IndexScale);
+    }
 
     static inline VInt ramp() { return _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15); }
 };
@@ -51,7 +51,9 @@ struct VFloat {
     inline void store(void* ptr) const { _mm512_storeu_ps(ptr, reg); }
 
     template<int IndexScale = 1>
-    static inline VFloat gather(const void* basePtr, VInt indices) { return _mm512_i32gather_ps(indices.reg, basePtr, IndexScale); }
+    static inline VFloat gather(const void* basePtr, VInt indices) {
+        return _mm512_i32gather_ps(indices.reg, basePtr, IndexScale);
+    }
 
     static inline VFloat ramp() { return _mm512_setr_ps(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15); }
 };
@@ -141,6 +143,11 @@ inline VFloat4 operator*(VFloat4 a, VFloat4 b) { return { a.x * b.x, a.y * b.y, 
 inline VFloat4 operator/(VFloat4 a, VFloat4 b) { return { a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w }; }
 
 // Math ops
+namespace simd {
+// Pixel offsets within a 4x4 tile/fragment
+//   X: [0,1,2,3, 0,1,2,3, ...]
+//   Y: [0,0,0,0, 1,1,1,1, ...]
+inline const VInt FragPixelOffsetsX = VInt::ramp() & 3, FragPixelOffsetsY = VInt::ramp() >> 2;
 
 inline VInt round2i(VFloat x) { return _mm512_cvtps_epi32(x.reg); }
 inline VInt trunc2i(VFloat x) { return _mm512_cvttps_epi32(x.reg); }
@@ -281,7 +288,7 @@ inline void sincos(VFloat a, VFloat& rs, VFloat& rc) {
 // Approximates sin(2πx) and cos(2πx)
 // Max relative error: sin=0.00721228 cos=0.000597186
 // https://publik-void.github.io/sin-cos-approximations
-inline void approx_sincos_2pi(VFloat x, VFloat& s, VFloat& c) {
+inline void sincos_2pi(VFloat x, VFloat& s, VFloat& c) {
     // Reduce range to -1/4..1/4
     //   x = x + 0.25
     //   x = abs(x - floor(x + 0.5)) - 0.25
@@ -343,18 +350,7 @@ inline VFloat4 PerspectiveDiv(const VFloat4& v) {
     return { v.x * rw, v.y * rw, v.z * rw, rw };
 }
 
-};  // namespace swr::simd
-
-// Miscellaneous
-namespace swr {
-
-using simd::VInt, simd::VFloat, simd::VMask;
-using simd::VFloat2, simd::VFloat3, simd::VFloat4;
-
-// Pixel offsets within a 4x4 tile/fragment
-//   X: [0,1,2,3, 0,1,2,3, ...]
-//   Y: [0,0,0,0, 1,1,1,1, ...]
-inline const VInt FragPixelOffsetsX = VInt::ramp() & 3, FragPixelOffsetsY = VInt::ramp() >> 2;
+};  // namespace simd
 
 template<typename T>
 struct DeleteAligned {
@@ -399,13 +395,13 @@ struct VRandom {
 
     // Returns a vector of random uniformly distributed floats in range [0..1)
     VFloat NextUnsignedFloat() {
-        VFloat frac = re2f(shrl(NextU32(), 9));
+        VFloat frac = simd::re2f(simd::shrl(NextU32(), 9));
         return (1.0f | frac) - 1.0f;
     }
 
     // Returns a vector of random uniformly distributed floats in range [-1..1)
     VFloat NextSignedFloat() {
-        VFloat frac = re2f(shrl(NextU32(), 9));
+        VFloat frac = simd::re2f(simd::shrl(NextU32(), 9));
         return (2.0f | frac) - 3.0f;
     }
 
@@ -419,19 +415,19 @@ struct VRandom {
         VInt rand = NextU32();
 
         const float randScale = (1.0f / (1 << 15));
-        VFloat y = conv2f(rand >> 16) * randScale;  // signed
-        VFloat a = conv2f(rand & 0x7FFF) * randScale;
+        VFloat y = simd::conv2f(rand >> 16) * randScale;  // signed
+        VFloat a = simd::conv2f(rand & 0x7FFF) * randScale;
 
         VFloat x, z;
-        approx_sincos_2pi(a, x, z);
-        VFloat sy = sqrt14(1.0f - y * y);
+        simd::sincos_2pi(a, x, z);
+        VFloat sy = simd::sqrt14(1.0f - y * y);
 
         return { x * sy, y, z * sy };
     }
 
     VFloat3 NextHemisphereDirection(const VFloat3& normal) {
         VFloat3 dir = NextDirection();
-        VFloat sign = dot(dir, normal) & -0.0f;
+        VFloat sign = simd::dot(dir, normal) & -0.0f;
         return { dir.x ^ sign, dir.y ^ sign, dir.z ^ sign };
     }
 
@@ -456,5 +452,3 @@ private:
         return z ^ (z >> 31);
     }
 };
-
-}; // namespace swr

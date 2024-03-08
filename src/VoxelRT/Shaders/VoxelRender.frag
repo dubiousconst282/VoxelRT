@@ -68,11 +68,10 @@ bool rayCast(vec3 origin, vec3 dir, out HitInfo hit) {
             
             return true;
         }
-        
         int k = lod - 1;
-        pos.x = dir.x<0 ? (pos.x&~k) : (pos.x|k);
-        pos.y = dir.y<0 ? (pos.y&~k) : (pos.y|k);
-        pos.z = dir.z<0 ? (pos.z&~k) : (pos.z|k);
+        pos.x = dir.x<0 ? (pos.x & ~k) : (pos.x | k);
+        pos.y = dir.y<0 ? (pos.y & ~k) : (pos.y | k);
+        pos.z = dir.z<0 ? (pos.z & ~k) : (pos.z | k);
 
         sideDist = tStart + (pos - u_WorldOrigin) * invDir;
         tmin = min(min(sideDist.x, sideDist.y), sideDist.z);

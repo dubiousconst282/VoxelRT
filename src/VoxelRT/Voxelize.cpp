@@ -78,11 +78,11 @@ void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 startPos, glm:
     for (auto& [name, tex] : model.Textures) {
         if (tex.Width <= 4 || tex.Height <= 4) continue;
 
-        const auto processTile = [&](uint32_t x, uint32_t y, swr::simd::VFloat u, swr::simd::VFloat v) {
+        const auto processTile = [&](uint32_t x, uint32_t y, VFloat u, VFloat v) {
             constexpr swr::SamplerDesc SD = { .MinFilter = swr::FilterMode::Nearest, .EnableMips = true };
             auto colors = tex.Sample<SD>(u, v, 0, 2);
 
-            for (uint32_t i = 0; i < swr::simd::VInt::Length; i++) {
+            for (uint32_t i = 0; i < VInt::Length; i++) {
                 if ((colors[i] >> 24 & 255) < 200) continue;  // skip transparent pixels
                 palette.AddColor((uint32_t)colors[i]);
             }

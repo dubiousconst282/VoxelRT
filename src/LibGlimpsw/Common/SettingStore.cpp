@@ -74,4 +74,4 @@ void SettingStore::Save(std::string_view filename) {
     }
 }
 
-};  // namespace glim::ui
+};  // namespace glim

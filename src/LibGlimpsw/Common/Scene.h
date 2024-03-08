@@ -5,7 +5,6 @@
 #include <unordered_map>
 #include <memory>
 
-#include <SwRast/Rasterizer.h>
 #include <SwRast/Texture.h>
 
 namespace glim {
@@ -72,4 +71,4 @@ public:
     }
 };
 
-};  // namespace glim::scene
+};  // namespace glim

@@ -1,10 +1,12 @@
 #pragma once
 
+#include <bit>
 #include <concepts>
 #include <functional>
+#include <memory>
+#include <string_view>
 
 #include "SIMD.h"
-#include <bit>
 
 namespace swr {
 
@@ -207,8 +209,8 @@ inline void IterateTiles(uint32_t width, uint32_t height, std::function<void(uin
 
     for (int32_t y = 0; y < height; y += 4) {
         for (int32_t x = 0; x < width; x += 4) {
-            VFloat u = simd::conv2f(x + FragPixelOffsetsX) + 0.5f;
-            VFloat v = simd::conv2f(y + FragPixelOffsetsY) + 0.5f;
+            VFloat u = simd::conv2f(x + simd::FragPixelOffsetsX) + 0.5f;
+            VFloat v = simd::conv2f(y + simd::FragPixelOffsetsY) + 0.5f;
             visitor((uint32_t)x, (uint32_t)y, u * (1.0f / width), v * (1.0f / height));
         }
     }
@@ -632,8 +634,8 @@ private:
 
         for (uint32_t y = 0; y < h; y += 4) {
             for (uint32_t x = 0; x < w; x += 4) {
-                VInt ix = ((int32_t)x + FragPixelOffsetsX) << 1;
-                VInt iy = ((int32_t)y + FragPixelOffsetsY) << 1;
+                VInt ix = ((int32_t)x + simd::FragPixelOffsetsX) << 1;
+                VInt iy = ((int32_t)y + simd::FragPixelOffsetsY) << 1;
 
                 // This will never go out of bounds if texture size is POT and >4x4.
                 // Storage is padded by +16*4 bytes so nothing bad should happen if we do.

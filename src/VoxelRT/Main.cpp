@@ -10,7 +10,6 @@
 #include <imgui_impl_opengl3.h>
 #include <ImGuizmo.h>
 
-#include <SwRast/Rasterizer.h>
 #include <SwRast/Texture.h>
 
 #include "Renderer.h"
@@ -163,7 +162,7 @@ public:
     Application() {
         ogl::EnableDebugCallback();
 
-        _shaderLib = std::make_unique<ogl::ShaderLib>("src/CpuVoxelRT/Shaders/", true);
+        _shaderLib = std::make_unique<ogl::ShaderLib>("src/VoxelRT/Shaders/", true);
 
         _map = std::make_shared<VoxelMap>();
         _map->Palette[252] = Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
@@ -283,12 +282,11 @@ public:
         glm::ivec3 brushPos = glm::floor(_cam.ViewPosition + glm::dvec3(dir) * brushDist);
         int32_t radius = 60;
 
-        using swr::VInt, swr::VMask;
         _map->RegionDispatchSIMD(brushPos - radius, brushPos + radius, true, [&](VoxelDispatchInvocationPars& pars) {
             VInt dx = pars.X - brushPos.x, dy = pars.Y - brushPos.y, dz = pars.Z - brushPos.z;
             VMask mask = dx * dx + dy * dy + dz * dz <= radius * radius;
 
-            swr::simd::set_if(mask, pars.VoxelIds, voxel.Data);
+            simd::set_if(mask, pars.VoxelIds, voxel.Data);
             return mask != 0;
         });
     }

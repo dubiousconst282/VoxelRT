@@ -5,7 +5,7 @@ set(VCPKG_BUILD_TYPE "release")
 set(CMAKE_BINARY_DIR "${CMAKE_CURRENT_LIST_DIR}/../build")
 set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
 
-project("SwRast")
+project("VoxelRT")
 
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
@@ -23,5 +23,4 @@ find_package(zstd CONFIG REQUIRED)
 add_compile_options("-march=native" "-ffast-math" "-Wno-unused" "-Wsign-conversion")
 
 add_subdirectory("LibGlimpsw/")
-add_subdirectory("CpuModelViewer/")
-add_subdirectory("CpuVoxelRT/")
+add_subdirectory("VoxelRT/")

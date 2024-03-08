@@ -220,4 +220,4 @@ Model::Model(std::string_view path) {
     RootNode = ConvertNode(*this, scene->mRootNode);
 }
 
-}; // namespace scene
+}; // namespace glim

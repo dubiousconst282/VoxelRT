@@ -1,4 +1,3 @@
-#include "Rasterizer.h"
 #include "Texture.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -84,8 +83,8 @@ HdrTexture2D LoadCubemapFromPanoramaHDR(std::string_view path, uint32_t mipLevel
         for (uint32_t y = 0; y < faceSize; y += 4) {
             for (uint32_t x = 0; x < faceSize; x += 4) {
                 float scaleUV = 1.0f / (faceSize - 1);
-                VFloat u = simd::conv2f((int32_t)x + FragPixelOffsetsX) * scaleUV;
-                VFloat v = simd::conv2f((int32_t)y + FragPixelOffsetsY) * scaleUV;
+                VFloat u = simd::conv2f((int32_t)x + simd::FragPixelOffsetsX) * scaleUV;
+                VFloat v = simd::conv2f((int32_t)y + simd::FragPixelOffsetsY) * scaleUV;
 
                 VFloat3 dir = UnprojectCubemap(u, v, (int32_t)layer);
 
@@ -105,29 +104,5 @@ HdrTexture2D LoadCubemapFromPanoramaHDR(std::string_view path, uint32_t mipLevel
 }
 
 };  // namespace texutil
-
-void Framebuffer::GetPixels(uint32_t* __restrict dest, uint32_t stride) const {
-    for (uint32_t y = 0; y < Height; y += 4) {
-        for (uint32_t x = 0; x < Width; x += 4) {
-            // Clang is doing some really funky vectorization with this loop. Manual vectorization ftw I guess...
-            // for (uint32_t sx = 0; sx < 4; sx++) {
-            //     dest[y * stride + x + sx] = src[sx];
-            // }
-            uint32_t* src = &ColorBuffer[GetPixelOffset(x, y)];
-
-            __m512i tile = _mm512_load_si512(src);
-            _mm_storeu_si128((__m128i*)&dest[(y + 0) * stride + x], _mm512_extracti32x4_epi32(tile, 0));
-            _mm_storeu_si128((__m128i*)&dest[(y + 1) * stride + x], _mm512_extracti32x4_epi32(tile, 1));
-            _mm_storeu_si128((__m128i*)&dest[(y + 2) * stride + x], _mm512_extracti32x4_epi32(tile, 2));
-            _mm_storeu_si128((__m128i*)&dest[(y + 3) * stride + x], _mm512_extracti32x4_epi32(tile, 3));
-        }
-    }
-}
-
-void Framebuffer::SaveImage(std::string_view filename) const {
-    auto pixels = std::make_unique<uint32_t[]>(Width * Height);
-    GetPixels(pixels.get(), Width);
-    stbi_write_png(filename.data(), (int)Width, (int)Height, 4, pixels.get(), (int)Width * 4);
-}
 
 };  // namespace swr

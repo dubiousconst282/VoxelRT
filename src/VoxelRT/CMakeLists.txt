@@ -24,6 +24,6 @@ target_link_libraries(CpuVoxelRT PRIVATE
     glad::glad
     assimp::assimp
     glm::glm
-    libglimpsw
+    glimpsw
     FastNoise
 )

@@ -85,4 +85,4 @@ struct Camera {
     }
 };
 
-};  // namespace glim::misc
+};  // namespace glim

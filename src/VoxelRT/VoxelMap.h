@@ -82,8 +82,8 @@ using BrickIndexer = LinearIndexer3D<2, 2, false>;      // Sector -> Brick
 using VoxelIndexer = LinearIndexer3D<3, 3, false>;      // Brick -> Voxel
 
 struct VoxelDispatchInvocationPars {
-    swr::VInt X, Y, Z;
-    swr::VInt VoxelIds;
+    VInt X, Y, Z;
+    VInt VoxelIds;
     uint32_t GroupBaseIdx;
 };
 
@@ -97,8 +97,6 @@ struct Brick {
     // Iterates over voxels within this brick.
     template<typename F>
     bool DispatchSIMD(F fn, glm::ivec3 basePos = {}) {
-        using namespace swr::simd;
-
         bool dirty = false;
         VoxelDispatchInvocationPars p;
 
@@ -198,8 +196,6 @@ struct VoxelMap {
     // Iterates over bricks within the specified region (in voxel coords).
     template<typename F>
     void RegionDispatchSIMD(glm::ivec3 regionMin, glm::ivec3 regionMax, bool createEmpty, F fn) {
-        using namespace swr::simd;
-
         glm::ivec3 brickMin = glm::max(regionMin >> glm::ivec3(VoxelIndexer::Shift), MinPos);
         glm::ivec3 brickMax = glm::min(regionMax >> glm::ivec3(VoxelIndexer::Shift), MaxPos);
 
