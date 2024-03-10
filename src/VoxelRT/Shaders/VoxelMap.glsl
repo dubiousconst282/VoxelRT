@@ -4,7 +4,7 @@ struct Material {
 struct Sector {
     uint BaseSlot;
     uint AllocMask_0;
-    uint AllocMask_32;
+    uint AllocMask_32; // TODO: replace these with uvec2 maybe
 };
 buffer ssbo_VoxelData {
     Material Palette[256];
@@ -73,55 +73,6 @@ uint getVoxel(ivec3 spos) {
     if (slot == NULL_OFFSET) return 0;
 
     return getBrickVoxelId(slot, pos);
-}
-
-int getIsotropicLod(uint mask_0, uint mask_32, uint idx) {
-    if ((mask_0 | mask_32) == 0) {
-        return 4;
-    }
-    uint currMask = idx >= 32 ? mask_32 : mask_0;
-    uint posMask = 1u << (idx & 31u);
-
-    if ((currMask & (0x00330033u << (idx & 0xAu))) == 0) {
-        return 2;
-    }
-    if ((currMask & posMask) == 0) {
-        return 1;
-    }
-    return 0;
-}
-ivec3 getAnisotropicLod(uint mask_0, uint mask_32, uint idx, vec3 dir) {
-    if ((mask_0 | mask_32) == 0) {
-        return ivec3(4);
-    }
-    uint currMask = idx >= 32 ? mask_32 : mask_0;
-    uint posMask = 1u << (idx & 31u);
-
-    if ((currMask & (0x00330033u << (idx & 0xAu))) == 0) {
-        return ivec3(2);
-    }
-    if ((currMask & posMask) == 0) {
-        return ivec3(1);
-    }
-    return 0;
-}
-int getLod(uvec3 pos, vec3 dir) {
-    uvec3 brickPos = pos / BRICK_SIZE;
-    uint brickIdx = getLinearIndex(brickPos, 4, 4);
-    Sector sector = b_VoxelData.Sectors[getLinearIndex(brickPos / 4, NUM_SECTORS_XZ, NUM_SECTORS_Y)];
-
-    int lod = getIsotropicLod(sector.AllocMask_0, sector.AllocMask_32, brickIdx);
-    if (lod != 0) {
-        return BRICK_SIZE * lod;
-    }
-
-    uint slotIdx = getBrickDataSlot(brickPos); // hopefully this will get inlined and properly CSEd
-    uint cellOffset = getLinearIndex(pos / uvec3(4, 4, 4), BRICK_SIZE / 4, BRICK_SIZE / 4) * 2;
-    uint occMask_0 = b_Occupancy.Data[slotIdx * OCC_STRIDE + cellOffset + 0];
-    uint occMask_1 = b_Occupancy.Data[slotIdx * OCC_STRIDE + cellOffset + 1];
-    int subLod = getIsotropicLod(occMask_0, occMask_1, getLinearIndex(pos, 4, 4));
-    
-    return subLod;
 }
 
 vec3 mat_GetColor(Material mat) {

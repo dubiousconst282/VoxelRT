@@ -22,6 +22,7 @@ struct GpuVoxelStorage;
 struct GpuRenderer : public Renderer {
     std::shared_ptr<ogl::Shader> _mainShader;
     bool _showHeatmap;
+    bool _useAnisotropicLods;
 
     glim::TimeStat _frameTime;
     GLuint _frameQueryObj = 0;

@@ -84,9 +84,13 @@ static swr::RgbaTexture2D* LoadTextures(Model& m, const aiMaterial* mat) {
         auto slot = m.Textures.insert({ name, swr::RgbaTexture2D(4, 4, 1, 1) });
         return &slot.first->second;
     }
-    swr::StbImage normalImg = LoadImage(m, GetTextureName(mat, aiTextureType_NORMALS));
-    swr::StbImage metalRoughImg = LoadImage(m, GetTextureName(mat, aiTextureType_DIFFUSE_ROUGHNESS));
-    swr::StbImage emissiveImg = LoadImage(m, GetTextureName(mat, aiTextureType_EMISSIVE));
+    //swr::StbImage normalImg = LoadImage(m, GetTextureName(mat, aiTextureType_NORMALS));
+    //swr::StbImage metalRoughImg = LoadImage(m, GetTextureName(mat, aiTextureType_DIFFUSE_ROUGHNESS));
+    //swr::StbImage emissiveImg = LoadImage(m, GetTextureName(mat, aiTextureType_EMISSIVE));
+
+    swr::StbImage normalImg = {};
+    swr::StbImage metalRoughImg = {};
+    swr::StbImage emissiveImg = {};
 
     bool hasNormals = normalImg.Width == baseColorImg.Width && normalImg.Height == baseColorImg.Height;
     bool hasEmissive = emissiveImg.Width == baseColorImg.Width && emissiveImg.Height == baseColorImg.Height;

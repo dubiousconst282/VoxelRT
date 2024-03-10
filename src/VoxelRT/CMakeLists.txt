@@ -6,7 +6,7 @@ add_subdirectory(../../deps/FastNoise2 ${CMAKE_BINARY_DIR}/deps EXCLUDE_FROM_ALL
 set_target_properties(FastNoise PROPERTIES COMPILE_OPTIONS "")
 
 add_executable(
-    CpuVoxelRT
+    VoxelRT
 
     Main.cpp
     VoxelMap.cpp
@@ -17,7 +17,7 @@ add_executable(
     TerrainGenerator.cpp
 )
 
-target_link_libraries(CpuVoxelRT PRIVATE
+target_link_libraries(VoxelRT PRIVATE
     imgui::imgui
     imguizmo::imguizmo
     glfw

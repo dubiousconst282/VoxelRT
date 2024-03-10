@@ -171,15 +171,17 @@ public:
         _map->Palette[255] = Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
 
         try {
-            _map->Deserialize("logs/voxels_2k.dat");
+            _map->Deserialize("logs/voxels_4k_bistro.dat");
+            //_map->Deserialize("logs/voxels_2k.dat");
         } catch (std::exception& ex) {
             std::cout << "Failed to load voxel map cache: " << ex.what() << std::endl;
 
             auto model = glim::Model("assets/models/Sponza/Sponza.gltf");
+            // auto model = glim::Model("../SwRastCPP/logs/assets/models/Bistro_GLTF/BistroExterior.gltf");
             // auto model = glim::Model("logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf");
             // auto model = glim::Model("logs/assets/models/DamagedHelmet/DamagedHelmet.gltf");
 
-            _map->VoxelizeModel(model, glm::uvec3(24), glm::uvec3(2024));
+            _map->VoxelizeModel(model, glm::uvec3(16), glm::uvec3(2048-16));
 
             _map->Serialize("logs/voxels_2k.dat");
         }

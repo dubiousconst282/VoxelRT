@@ -1,7 +1,7 @@
 #include "Renderer.h"
 #include "BrickSlotAllocator.h"
 
-static constexpr auto ViewSize = glm::uvec2(64, 32);  // XZ, Y sectors (* 4x4x4 * 8x8x8 -> 2048 XZ, 1024 Y)
+static constexpr auto ViewSize = glm::uvec2(4096, 1024) / glm::uvec2(BrickIndexer::Size * VoxelIndexer::Size);
 static const std::vector<ogl::ShaderLoadParams::PrepDef> DefaultShaderDefs = {
     { "BRICK_SIZE", std::to_string(Brick::Size.x) },
     { "NUM_SECTORS_XZ", std::to_string(ViewSize.x) },
@@ -20,6 +20,7 @@ struct GpuVoxelStorage {
         uint32_t BaseSlot;
         uint32_t AllocMask_0;
         uint32_t AllocMask_1;
+        // uint32_t ClusterDist : 8;  // Distance to nearest non-empty brick
     };
     struct GpuMeta {
         Material Palette[sizeof(VoxelMap::Palette) / sizeof(Material)];
@@ -166,6 +167,7 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 
     _mainShader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
     _mainShader->SetUniform("u_ShowTraversalHeatmap", _showHeatmap ? 1 : 0);
+    _mainShader->SetUniform("u_UseAnisotropicLods", _useAnisotropicLods ? 1 : 0);
     _mainShader->SetUniform("u_WorldOrigin", &worldOrigin.x, 3);
     _mainShader->SetUniform("ssbo_Metrics", *_metricsBuffer);
     _mainShader->DispatchFullscreen();
@@ -175,6 +177,7 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
     ImGui::SeparatorText("Renderer##GPU");
     settings.Checkbox("Traversal Heatmap", &_showHeatmap);
+    settings.Checkbox("Anisotropic LODs", &_useAnisotropicLods);
 
     ImGui::Separator();
     _frameTime.Draw("Frame Time");
@@ -188,7 +191,7 @@ void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
 
         uint32_t v2 = 0;
         for (auto & sector : _map->Sectors) {
-            v2 += std::popcount(sector.second.GetAllocationMask());
+            v2 += (uint32_t)std::popcount(sector.second.GetAllocationMask());
         }
         ImGui::Text("Bricks: %.1fK (%.1fK on CPU)", _storage->SlotAllocator.Arena.NumAllocated / 1000.0, v2 / 1000.0);
         // FIXME: figure whytf sectors don't get deleted properly
