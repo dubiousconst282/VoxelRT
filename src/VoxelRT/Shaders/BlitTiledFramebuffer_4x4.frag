@@ -5,6 +5,8 @@ readonly buffer ssbo_FrameData {
     uint Width, Height, TileStride;
     uint Pixels[];
 };
+layout(rgba16f) uniform image2D u_AccumTex;
+uniform float u_BlendWeight;
 
 uint GetPixelOffset(uint x, uint y) {
     const uint TileSize = 4, TileShift = 2, TileMask = TileSize - 1, TileNumPixels = TileSize * TileSize;
@@ -26,4 +28,13 @@ void main() {
     o_FragColor.rgb = vec3(color) * (1.0 / 255.0);
 #endif
     o_FragColor.a = 1.0;
+
+    o_FragColor *= 1 / 0.25;
+
+    vec3 prevColor = imageLoad(u_AccumTex, ivec2(pos)).rgb;
+    o_FragColor.rgb = mix(prevColor.rgb, o_FragColor.rgb, u_BlendWeight);
+    imageStore(u_AccumTex, ivec2(pos), o_FragColor);
+
+    o_FragColor*=2;
+    o_FragColor = o_FragColor / (o_FragColor + 0.155) * 1.019;
 }

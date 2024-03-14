@@ -136,8 +136,7 @@ void TerrainGenerator::WorkerFn() {
         auto sector = std::make_unique<Sector>();
         sector->Storage.reserve((uint32_t)std::popcount(mask));
 
-        for (; mask != 0; mask &= mask - 1) {
-            uint32_t i = (uint32_t)std::countr_zero(mask);
+        for (uint32_t i : BitIter(mask)) {
             *sector->GetBrick(i, true) = *workSector.GetBrick(i);
         }
         _queue->OfferResult(pos, std::move(sector));

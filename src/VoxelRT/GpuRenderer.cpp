@@ -36,7 +36,7 @@ struct GpuVoxelStorage {
         BuildOccupancyShader = shlib.LoadComp("UpdateOccupancy", DefaultShaderDefs);
     }
 
-    void SyncGpuBuffers(VoxelMap& map) {
+    void SyncBuffers(VoxelMap& map) {
         const uint32_t MaxBatchSize = 1024 * 1024 * 128 / (sizeof(Brick) * 64);
         const uint32_t MinBricksInBuffer = 1024 * 1024 * 512 / sizeof(Brick);
 
@@ -97,8 +97,7 @@ struct GpuVoxelStorage {
             glm::ivec3 sectorPos = SectorIndexer::GetPos(sectorIdx);
             auto sectorAlloc = SlotAllocator.GetSector(sectorPos);
 
-            for (uint64_t m = dirtyMask; m != 0; m &= m - 1) {
-                uint32_t brickIdx = (uint32_t)std::countr_zero(m);
+            for (uint32_t brickIdx : BitIter(dirtyMask)) {
                 uint32_t slotIdx = sectorAlloc->GetSlot(brickIdx) - 1;
 
                 assert(slotIdx < maxBricksInBuffer);
@@ -154,7 +153,7 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
         _storage->SlotAllocator = BrickSlotAllocator(ViewSize);
     }
 
-    _storage->SyncGpuBuffers(*_map);
+    _storage->SyncBuffers(*_map);
 
     _mainShader->SetUniform("ssbo_VoxelData", *_storage->StorageBuffer);
     _mainShader->SetUniform("ssbo_Occupancy", *_storage->OccupancyStorage);

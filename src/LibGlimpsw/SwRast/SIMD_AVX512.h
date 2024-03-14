@@ -20,15 +20,15 @@ struct VInt {
     SIMD_INLINE static VInt load(const void* ptr) { return _mm512_loadu_epi32(ptr); }
     SIMD_INLINE void store(void* ptr) const { _mm512_storeu_epi32(ptr, reg); }
 
-    SIMD_INLINE static VInt load_mask(const void* ptr, VMask mask) { return _mm512_mask_loadu_epi32(_mm512_set1_epi32(0), mask, ptr); }
-    SIMD_INLINE void store_mask(void* ptr, VMask mask) { _mm512_mask_storeu_epi32(ptr, mask, reg); }
+    SIMD_INLINE static VInt mask_load(const void* ptr, VMask mask) { return _mm512_mask_loadu_epi32(_mm512_set1_epi32(0), mask, ptr); }
+    SIMD_INLINE void mask_store(void* ptr, VMask mask) { _mm512_mask_storeu_epi32(ptr, mask, reg); }
 
     template<int IndexScale = 4>
     SIMD_INLINE static VInt gather(const void* basePtr, VInt indices) {
         return _mm512_i32gather_epi32(indices.reg, basePtr, IndexScale);
     }
     template<int IndexScale = 4>
-    SIMD_INLINE static VInt gather_mask(const void* basePtr, VInt indices, VMask mask) {
+    SIMD_INLINE static VInt mask_gather(const void* basePtr, VInt indices, VMask mask) {
         return _mm512_mask_i32gather_epi32(_mm512_set1_epi32(0), mask, indices.reg, basePtr, IndexScale);
     }
 
@@ -52,15 +52,15 @@ struct VFloat {
     SIMD_INLINE static VFloat load(const void* ptr) { return _mm512_loadu_ps(ptr); }
     SIMD_INLINE void store(void* ptr) const { _mm512_storeu_ps(ptr, reg); }
 
-    SIMD_INLINE static VFloat load_mask(const void* ptr, VMask mask) { return _mm512_mask_loadu_ps(_mm512_set1_ps(0.0f), mask, ptr); }
-    SIMD_INLINE void store_mask(void* ptr, VMask mask) { _mm512_mask_storeu_ps(ptr, mask, reg); }
+    SIMD_INLINE static VFloat mask_load(const void* ptr, VMask mask) { return _mm512_mask_loadu_ps(_mm512_set1_ps(0.0f), mask, ptr); }
+    SIMD_INLINE void mask_store(void* ptr, VMask mask) { _mm512_mask_storeu_ps(ptr, mask, reg); }
 
     template<int IndexScale = 4>
     SIMD_INLINE static VFloat gather(const void* basePtr, VInt indices) {
         return _mm512_i32gather_ps(indices.reg, basePtr, IndexScale);
     }
     template<int IndexScale = 4>
-    SIMD_INLINE static VFloat gather_mask(const void* basePtr, VInt indices, VMask mask) {
+    SIMD_INLINE static VFloat mask_gather(const void* basePtr, VInt indices, VMask mask) {
         return _mm512_mask_i32gather_ps(_mm512_set1_ps(0.0f), mask, indices.reg, basePtr, IndexScale);
     }
 };

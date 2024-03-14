@@ -1,7 +1,4 @@
-
-#include <chrono>
 #include <iostream>
-#include <vector>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -15,138 +12,6 @@
 #include "Renderer.h"
 
 #include "TerrainGenerator.h"
-
-
-/*
-class CpuRenderer: public Renderer {
-    std::shared_ptr<ogl::Shader> _blitShader;
-    std::unique_ptr<ogl::Buffer> _pbo;
-    std::unique_ptr<swr::Framebuffer> _fb;
-
-    std::unique_ptr<swr::HdrTexture2D> _skyBox;
-
-    uint32_t _frameNo = 0;
-
-    bool _enablePathTracer;
-    glim::TimeStat _frameTime;
-
-    glm::dvec3 _prevCameraPos;
-    glm::quat _prevCameraRot;
-
-public:
-    CpuRenderer(ogl::ShaderLib& shlib) {
-        _blitShader = shlib.LoadFrag("BlitTiledFramebuffer_4x4", { { "FORMAT_RGB10", "1" } });
-        _skyBox = std::make_unique<swr::HdrTexture2D>(swr::texutil::LoadCubemapFromPanoramaHDR("assets/skyboxes/sunflowers_puresky_4k.hdr"));
-    }
-
-    virtual void RenderFrame(VoxelMap& map, glim::Camera& cam, glm::uvec2 viewSize) {
-        viewSize &= ~3u; // round down to 4x4 steps
-
-        #ifndef NDEBUG
-        viewSize /= 4;
-        #endif
-
-        bool camChanged = false;
-        if (glm::distance(cam.ViewPosition, _prevCameraPos) > 0.1f || glm::dot(cam.ViewRotation, _prevCameraRot) < 0.999999f) {
-            camChanged = true;
-        }
-        _prevCameraPos = cam.ViewPosition;
-        _prevCameraRot = cam.ViewRotation;
-
-        if (_fb == nullptr || _fb->Width != viewSize.x || _fb->Height != viewSize.y) {
-            _fb = std::make_unique<swr::Framebuffer>(viewSize.x, viewSize.y);
-            _pbo = std::make_unique<ogl::Buffer>(viewSize.x * viewSize.y * 4 + 12, GL_DYNAMIC_STORAGE_BIT | GL_MAP_READ_BIT);
-        }
-
-        uint32_t width = _fb->Width;
-        uint32_t height = _fb->Height;
-
-        glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * cam.GetViewMatrix());
-        // Bias matrix to take UVs in range [0..screen] rather than [-1..1]
-        invProj = glm::translate(invProj, glm::vec3(-1.0f, -1.0f, 0.0f));
-        invProj = glm::scale(invProj, glm::vec3(2.0f / _fb->Width, 2.0f / _fb->Height, 1.0f));
-
-        _frameTime.Begin();
-
-        auto rows = std::ranges::iota_view(0u, (height + 3) / 4);
-        std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
-            swr::VRandom rng(rowId + _frameNo * 123456ull);
-            uint32_t y = rowId * 4;
-            swr::VFloat v = swr::simd::conv2f((int32_t)y + swr::FragPixelOffsetsY) + rng.NextUnsignedFloat() - 0.5f;
-
-            for (uint32_t x = 0; x < width; x += 4) {
-                swr::VFloat u = swr::simd::conv2f((int32_t)x + swr::FragPixelOffsetsX) + rng.NextUnsignedFloat() - 0.5f;
-
-                swr::VFloat3 origin, dir;
-                GetPrimaryRay({ u, v }, invProj, origin, dir);
-
-                swr::VFloat3 attenuation = 1.0f;
-                swr::VFloat3 incomingLight = 0.0f;
-                swr::VMask mask = (swr::VMask)~0u;
-
-                for (uint32_t i = 0; i < 3 && mask; i++) {
-                    auto hit = RayMarch(map, origin, dir, mask, i==0);
-                    auto mat = map.GetMaterial(hit.Voxels, mask);
-                    swr::VFloat3 matColor = mat.GetColor();
-                    swr::VFloat emissionStrength = mat.GetEmissionStrength();
-
-                    swr::VMask missMask = mask & ~hit.Mask;
-                    if (missMask) {
-                        constexpr swr::SamplerDesc SD = { .MinFilter = swr::FilterMode::Nearest, .EnableMips = true };
-                        swr::VFloat3 skyColor = _skyBox->SampleCube<SD>(dir);
-                        matColor.x = swr::simd::csel(missMask, skyColor.x, matColor.x);
-                        matColor.y = swr::simd::csel(missMask, skyColor.y, matColor.y);
-                        matColor.z = swr::simd::csel(missMask, skyColor.z, matColor.z);
-                        emissionStrength = swr::simd::csel(missMask, 1.0f, emissionStrength);
-                    }
-
-                    if (!_enablePathTracer) [[unlikely]] {
-                        incomingLight = matColor;
-                        break;
-                    }
-
-                    attenuation *= matColor;
-                    incomingLight += attenuation * emissionStrength;
-                    mask &= hit.Mask;
-
-                    origin = origin + dir * (hit.Dist - 1.0f / 128);
-                    swr::VFloat3 normal = hit.GetNormal(dir);
-
-                    dir = swr::simd::normalize(normal + rng.NextDirection());  // lambertian
-                }
-                // incomingLight = incomingLight / (incomingLight + 0.155) * 1.019;
-
-                uint32_t* tilePtr = &_fb->ColorBuffer[_fb->GetPixelOffset(x, y)];
-
-                auto prevColor = swr::pixfmt::RGB10u::Unpack(swr::VInt::load(tilePtr));
-
-                // float weight = 1.0f / (_frameNo + 1);
-                float weight = camChanged ? 0.5f : 0.1f;
-                auto finalColor = incomingLight * weight + prevColor * (1.0f - weight);
-                auto color = swr::pixfmt::RGB10u::Pack(finalColor);
-
-                color.store(tilePtr);
-            }
-        });
-
-        _frameTime.End();
-        _frameNo++;
-
-        static_assert(offsetof(swr::Framebuffer, Height) == offsetof(swr::Framebuffer, Width) + 4);
-        static_assert(offsetof(swr::Framebuffer, TileStride) == offsetof(swr::Framebuffer, Width) + 8);
-
-        glNamedBufferSubData(_pbo->Handle, 0, 12, &_fb->Width);
-        glNamedBufferSubData(_pbo->Handle, 12, _pbo->Size - 12, _fb->ColorBuffer.get());
-
-        _blitShader->SetUniform("ssbo_FrameData", *_pbo);
-        _blitShader->DispatchFullscreen();
-    }
-    virtual void DrawSettings(glim::SettingStore& settings) {
-        ImGui::SeparatorText("Renderer##CPU");
-        settings.Checkbox("Path Trace", &_enablePathTracer);
-        _frameTime.Draw("Frame Time");
-    }
-};*/
 
 class Application {
     glim::Camera _cam = {};
@@ -171,8 +36,8 @@ public:
         _map->Palette[255] = Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
 
         try {
-            _map->Deserialize("logs/voxels_4k_bistro.dat");
-            //_map->Deserialize("logs/voxels_2k.dat");
+            //_map->Deserialize("logs/voxels_4k_bistro.dat");
+            _map->Deserialize("logs/voxels_2k.dat");
         } catch (std::exception& ex) {
             std::cout << "Failed to load voxel map cache: " << ex.what() << std::endl;
 
@@ -185,15 +50,20 @@ public:
 
             _map->Serialize("logs/voxels_2k.dat");
         }
+
         _terrainGen = std::make_unique<TerrainGenerator>(_map);
         for (size_t y = 0; y < 12; y++) {
-            for (size_t z = 0; z < 64; z++) {
-                for (size_t x = 0; x < 64; x++) {
-                    //_terrainGen->RequestSector(glm::ivec3(x, y, z));
+            for (size_t z = 0; z < 32; z++) {
+                for (size_t x = 0; x < 32; x++) {
+                   // _terrainGen->RequestSector(glm::ivec3(x, y, z));
                 }
             }
         }
-        _terrainGen->RequestSector(glm::ivec3(1, 3, 1));
+         _terrainGen->RequestSector(glm::ivec3(1, 3, 1));
+
+        _map->Set(glm::ivec3(3, 5, 3), Voxel::Create(255));
+        _map->Set(glm::ivec3(4, 6, 3), Voxel::Create(254));
+        _map->Set(glm::ivec3(10, 6, 3), Voxel::Create(254));
 
         _cam.Position = glm::vec3(512, 128, 512);
         _cam.MoveSpeed = 180;
@@ -229,14 +99,13 @@ public:
             glfwSwapInterval(useVSync ? 1 : 0);
         }
 
-        static bool useCpuRenderer = false;
+        static bool useCpuRenderer = true;
         if (_renderer == nullptr || _settings.Checkbox("Use CPU Renderer", &useCpuRenderer)) {
             if (useCpuRenderer) {
-                _renderer = std::make_unique<CpuRenderer>(*_shaderLib);
+                _renderer = std::make_unique<CpuRenderer>(*_shaderLib, _map);
             } else {
                 _renderer = std::make_unique<GpuRenderer>(*_shaderLib, _map);
             }
-            auto fn = std::function(ImGui::InputScalarN);
         }
 
         _renderer->DrawSettings(_settings);

@@ -67,8 +67,7 @@ uint64_t Sector::GetAllocationMask() {
 uint64_t Sector::DeleteEmptyBricks(uint64_t mask) {
     uint64_t emptyMask = 0;
 
-    for (; mask != 0; mask &= mask - 1) {
-        uint32_t i = (uint32_t)std::countr_zero(mask);
+    for (uint32_t i : BitIter(mask)) {
         Brick* brick = GetBrick(i);
 
         if (brick != nullptr && brick->IsEmpty()) {
@@ -238,8 +237,7 @@ void VoxelMap::Deserialize(std::string_view filename) {
 
         sector.Storage.reserve((size_t)std::popcount(mask));
 
-        for (; mask != 0; mask &= mask - 1) {
-            uint32_t j = (uint32_t)std::countr_zero(mask);
+        for (uint32_t j : BitIter(mask)) {
             *sector.GetBrick(j, true) = gio::Read<Brick>(cst);
         }
     }
@@ -265,9 +263,8 @@ void VoxelMap::Serialize(std::string_view filename) {
         uint64_t mask = sector.GetAllocationMask();
         gio::Write<uint32_t>(cst, idx);
         gio::Write<uint64_t>(cst, mask);
-        
-        for (; mask != 0; mask &= mask - 1) {
-            uint32_t j = (uint32_t)std::countr_zero(mask);
+
+        for (uint32_t j : BitIter(mask)) {
             Brick* brick = sector.GetBrick(j);
             gio::Write(cst, *brick);
         }

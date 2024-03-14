@@ -11,10 +11,12 @@ add_executable(
     Main.cpp
     VoxelMap.cpp
     Voxelize.cpp
-    #CpuTracer.cpp
     GpuRenderer.cpp
     BrickSlotAllocator.cpp
     TerrainGenerator.cpp
+    
+    CpuRenderer/CpuRenderer.cpp
+    CpuRenderer/SparseBuffer.cpp
 )
 
 target_link_libraries(VoxelRT PRIVATE

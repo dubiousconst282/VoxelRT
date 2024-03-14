@@ -2,10 +2,12 @@
 
 #include <immintrin.h>
 
-#include <cassert>
 #include <cstdint>
+#include <cassert>
+#include <memory>
 #include <bit>
 #include <glm/mat4x4.hpp>
+#include "SwRast/SIMD.h"
 
 #define SIMD_INLINE [[gnu::always_inline]] inline
 
@@ -51,24 +53,43 @@ struct VFloat4 {
     VFloat4(const glm::vec4& v) { x = v.x, y = v.y, z = v.z, w = v.w; }
 };
 
-SIMD_INLINE VFloat2 operator+(VFloat2 a, VFloat2 b) { return { a.x + b.x, a.y + b.y }; }
-SIMD_INLINE VFloat2 operator-(VFloat2 a, VFloat2 b) { return { a.x - b.x, a.y - b.y }; }
-SIMD_INLINE VFloat2 operator*(VFloat2 a, VFloat2 b) { return { a.x * b.x, a.y * b.y }; }
-SIMD_INLINE VFloat2 operator/(VFloat2 a, VFloat2 b) { return { a.x / b.x, a.y / b.y }; }
+struct VInt3 {
+    VInt x, y, z;
 
-SIMD_INLINE VFloat3 operator+(VFloat3 a, VFloat3 b) { return { a.x + b.x, a.y + b.y, a.z + b.z }; }
-SIMD_INLINE VFloat3 operator-(VFloat3 a, VFloat3 b) { return { a.x - b.x, a.y - b.y, a.z - b.z }; }
-SIMD_INLINE VFloat3 operator*(VFloat3 a, VFloat3 b) { return { a.x * b.x, a.y * b.y, a.z * b.z }; }
-SIMD_INLINE VFloat3 operator/(VFloat3 a, VFloat3 b) { return { a.x / b.x, a.y / b.y, a.z / b.z }; }
-SIMD_INLINE VFloat3 operator+=(VFloat3& a, VFloat3 b) { return a = (a + b); }
-SIMD_INLINE VFloat3 operator*=(VFloat3& a, VFloat3 b) { return a = (a * b); }
+    VInt3() = default;
+    VInt3(int v) { x = y = z = v; }
+    VInt3(VInt v) { x = y = z = v; }
+    VInt3(VInt x_, VInt y_, VInt z_) { x = x_, y = y_, z = z_; }
+    VInt3(const glm::ivec3& v) { x = v.x, y = v.y, z = v.z; }
+};
+
+#define _SIMD_MVEC_OP_LANE2(op)
+#define _SIMD_MVEC_OP_LANE3(op) a.z op b.z
+#define _SIMD_MVEC_OP_LANE4(op) a.z op b.z, a.w op b.w
+#define _SIMD_MVEC_OP(op, vtype, size)                                                                                   \
+    SIMD_INLINE vtype operator op(vtype a, vtype b) { return { a.x op b.x, a.y op b.y, _SIMD_MVEC_OP_LANE##size(op) }; } \
+    SIMD_INLINE vtype operator op##=(vtype& a, vtype b) { return a = (a op b); }
+
+_SIMD_MVEC_OP(+, VFloat2, 2);
+_SIMD_MVEC_OP(-, VFloat2, 2);
+_SIMD_MVEC_OP(*, VFloat2, 2);
+_SIMD_MVEC_OP(/, VFloat2, 2);
+
+_SIMD_MVEC_OP(+, VFloat3, 3);
+_SIMD_MVEC_OP(-, VFloat3, 3);
+_SIMD_MVEC_OP(*, VFloat3, 3);
+_SIMD_MVEC_OP(/, VFloat3, 3);
+
+_SIMD_MVEC_OP(+, VFloat4, 4);
+_SIMD_MVEC_OP(-, VFloat4, 4);
+_SIMD_MVEC_OP(*, VFloat4, 4);
+_SIMD_MVEC_OP(/, VFloat4, 4);
+
+_SIMD_MVEC_OP(+, VInt3, 3);
+_SIMD_MVEC_OP(-, VInt3, 3);
+_SIMD_MVEC_OP(*, VInt3, 3);
 
 SIMD_INLINE VFloat3::VFloat3(const VFloat4& v) { x = v.x, y = v.y, z = v.z; }
-
-SIMD_INLINE VFloat4 operator+(VFloat4 a, VFloat4 b) { return { a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w }; }
-SIMD_INLINE VFloat4 operator-(VFloat4 a, VFloat4 b) { return { a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w }; }
-SIMD_INLINE VFloat4 operator*(VFloat4 a, VFloat4 b) { return { a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w }; }
-SIMD_INLINE VFloat4 operator/(VFloat4 a, VFloat4 b) { return { a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w }; }
 
 // Common math ops
 namespace simd {
