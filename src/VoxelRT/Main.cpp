@@ -30,14 +30,14 @@ public:
         _shaderLib = std::make_unique<ogl::ShaderLib>("src/VoxelRT/Shaders/", true);
 
         _map = std::make_shared<VoxelMap>();
+        _map->Palette[251] = Material::CreateDiffuse({ 0.3, 0.6, 0.25 }, 0.0f);
         _map->Palette[252] = Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
         _map->Palette[253] = Material::CreateDiffuse({ 0.2, 1, 0.2 }, 0.9f);
         _map->Palette[254] = Material::CreateDiffuse({ 0.2, 0.2, 1 }, 0.9f);
         _map->Palette[255] = Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
 
         try {
-            //_map->Deserialize("logs/voxels_4k_bistro.dat");
-            _map->Deserialize("logs/voxels_2k.dat");
+            _map->Deserialize("logs/voxels_2k_bistro.dat");
         } catch (std::exception& ex) {
             std::cout << "Failed to load voxel map cache: " << ex.what() << std::endl;
 
@@ -55,7 +55,7 @@ public:
         for (size_t y = 0; y < 12; y++) {
             for (size_t z = 0; z < 32; z++) {
                 for (size_t x = 0; x < 32; x++) {
-                   // _terrainGen->RequestSector(glm::ivec3(x, y, z));
+                    //_terrainGen->RequestSector(glm::ivec3(x, y, z));
                 }
             }
         }
@@ -151,7 +151,7 @@ public:
         }
 
         glm::ivec3 brushPos = glm::floor(_cam.ViewPosition + glm::dvec3(dir) * brushDist);
-        int32_t radius = 60;
+        int32_t radius = 30;
 
         _map->RegionDispatchSIMD(brushPos - radius, brushPos + radius, true, [&](VoxelDispatchInvocationPars& pars) {
             VInt dx = pars.X - brushPos.x, dy = pars.Y - brushPos.y, dz = pars.Z - brushPos.z;

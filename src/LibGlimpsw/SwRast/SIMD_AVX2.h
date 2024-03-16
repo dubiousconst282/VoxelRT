@@ -18,8 +18,8 @@ struct VInt {
         return ((int32_t*)&reg)[idx];
     }
 
-    SIMD_INLINE static VInt load(const void* ptr) { return _mm256_loadu_epi32(ptr); }
-    SIMD_INLINE void store(void* ptr) const { _mm256_storeu_epi32(ptr, reg); }
+    SIMD_INLINE static VInt load(const void* ptr) { return _mm256_loadu_epi32((__m256i*)ptr); }
+    SIMD_INLINE void store(void* ptr) const { _mm256_storeu_si256((__m256i*)ptr, reg); }
 
     SIMD_INLINE static VInt mask_load(const void* ptr, VMask mask) { return _mm256_maskload_epi32((int*)ptr, mask); }
     SIMD_INLINE void mask_store(void* ptr, VMask mask) { _mm256_maskstore_epi32((int*)ptr, mask, reg); }
@@ -102,7 +102,7 @@ SIMD_INLINE VInt operator>>(VInt a, VInt b) { return _mm256_srav_epi32(a, b); }
 SIMD_INLINE VInt operator<<(VInt a, VInt b) { return _mm256_sllv_epi32(a, b); }
 SIMD_INLINE VInt operator~(VInt a) { return a ^ ~0; }
 SIMD_INLINE VInt operator|=(VInt& a, VInt b) { return a = (a | b); }
-SIMD_INLINE VInt operator&=(VInt& a, VInt b) { return a = (a | b); }
+SIMD_INLINE VInt operator&=(VInt& a, VInt b) { return a = (a & b); }
 
 // Math ops
 namespace simd {
@@ -170,6 +170,12 @@ SIMD_INLINE VInt rotr(VInt a, uint32_t b) { return (a >> b) | (a << (32 - b)); }
 SIMD_INLINE VMask ucmp_ge(VInt a, VInt b) {
     typedef __attribute((vector_size(32))) uint32_t vuint_t;
     return ((vuint_t)a) >= ((vuint_t)b);
+}
+
+// unsigned a < b
+SIMD_INLINE VMask ucmp_lt(VInt a, VInt b) {
+    typedef __attribute((vector_size(32))) uint32_t vuint_t;
+    return ((vuint_t)a) < ((vuint_t)b);
 }
 
 // TODO

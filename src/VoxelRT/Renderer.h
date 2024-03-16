@@ -45,13 +45,8 @@ struct CpuRenderer : public Renderer {
     CpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map);
     ~CpuRenderer();
 
-#if SIMD_AVX512
     virtual void RenderFrame(glim::Camera& cam, glm::uvec2 viewSize);
     virtual void DrawSettings(glim::SettingStore& settings);
-#else
-    virtual void RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) { }
-    virtual void DrawSettings(glim::SettingStore& settings) { ImGui::Text("CPU renderer must be compiled with AVX512"); }
-#endif
 
 private:
     std::shared_ptr<VoxelMap> _map;
@@ -63,6 +58,7 @@ private:
 
     bool _enablePathTracer = false;
     uint32_t _frameNo = 0;
+    uint32_t _lastChangedFrameNo = 0;
 
     glim::TimeStat _frameTime;
 };

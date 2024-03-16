@@ -1,7 +1,6 @@
 #pragma once
 
 #include <bit>
-#include <concepts>
 #include <functional>
 #include <memory>
 #include <string_view>
@@ -230,10 +229,10 @@ HdrTexture2D LoadCubemapFromPanoramaHDR(std::string_view path, uint32_t mipLevel
 inline void IterateTiles(uint32_t width, uint32_t height, std::function<void(uint32_t, uint32_t, VFloat, VFloat)> visitor) {
     assert(width % 4 == 0 && height % 4 == 0);
 
-    for (int32_t y = 0; y < height; y += 4) {
-        for (int32_t x = 0; x < width; x += 4) {
-            VFloat u = simd::conv2f(x + simd::FragPixelOffsetsX) + 0.5f;
-            VFloat v = simd::conv2f(y + simd::FragPixelOffsetsY) + 0.5f;
+    for (int32_t y = 0; y < height; y += simd::TileHeight) {
+        for (int32_t x = 0; x < width; x += simd::TileWidth) {
+            VFloat u = simd::conv2f(x + simd::TileOffsetsX) + 0.5f;
+            VFloat v = simd::conv2f(y + simd::TileOffsetsY) + 0.5f;
             visitor((uint32_t)x, (uint32_t)y, u * (1.0f / width), v * (1.0f / height));
         }
     }
@@ -443,7 +442,7 @@ struct Texture2D {
     // Writes a 4x4 tile of packed texels to the texture buffer. Coords are in pixel space.
     void WriteTile(VInt packed, uint32_t x, uint32_t y, uint32_t layer = 0, uint32_t mipLevel = 0) {
         assert(x + 3 < Width && y + 3 < Height);
-        assert(x % 4 == 0 && y % 4 == 0);
+        assert(x % 4 == 0 && y % simd::TileHeight == 0);
         assert(layer < NumLayers && mipLevel < MipLevels);
         
         uint32_t* dst = &Data[(layer << LayerShift) + (uint32_t)_mipOffsets[mipLevel]];
@@ -535,22 +534,28 @@ struct Texture2D {
     }
 
     template<SamplerDesc SD>
-    [[gnu::pure, gnu::always_inline]] Texel::LerpedTy SampleCube(const VFloat3& dir, VFloat mipLevel = -1.0f) const {
+    [[gnu::pure, gnu::always_inline]] Texel::LerpedTy SampleCube(const VFloat3& dir) const {
         VFloat u, v;
         VInt faceIdx;
         texutil::ProjectCubemap(dir, u, v, faceIdx);
 
-        int tmp = mipLevel[0];  // __builtin_constant_p() only works with variables - https://github.com/llvm/llvm-project/issues/65741
-        if (__builtin_constant_p(tmp) && tmp < 0) {
-            return Sample<SD, true, true>(u, v, faceIdx);
-        }
+        return Sample<SD, true, true>(u, v, faceIdx);
+    }
+    template<SamplerDesc SD, bool TrilinearInterp = true>
+    [[gnu::pure, gnu::always_inline]] Texel::LerpedTy SampleCube(const VFloat3& dir, VFloat mipLevel) const {
+        VFloat u, v;
+        VInt faceIdx;
+        texutil::ProjectCubemap(dir, u, v, faceIdx);
+
         VInt baseMip = simd::trunc2i(mipLevel);
         auto baseSample = Sample<SD, false, true>(u, v, faceIdx, baseMip);
 
-        VFloat mipFrac = mipLevel - simd::conv2f(baseMip);
-        if (simd::any(mipFrac > 0.0f) && simd::any(baseMip < (int32_t)(MipLevels - 1))) {
-            auto lowerSample = Sample<SD, false, true>(u, v, faceIdx, baseMip + 1);
-            return baseSample + (lowerSample - baseSample) * mipFrac;
+        if constexpr (TrilinearInterp) {
+            VFloat mipFrac = simd::fract(mipLevel);
+            if (simd::any(mipFrac > 0.0f) && simd::any(baseMip < (int32_t)(MipLevels - 1))) {
+                auto lowerSample = Sample<SD, false, true>(u, v, faceIdx, baseMip + 1);
+                return baseSample + (lowerSample - baseSample) * mipFrac;
+            }
         }
         return baseSample;
     }
@@ -669,10 +674,10 @@ private:
         int32_t offset = (int32_t)(layer << LayerShift) + _mipOffsets[level - 1];
         uint32_t stride = RowShift - level + 1;
 
-        for (uint32_t y = 0; y < h; y += 4) {
-            for (uint32_t x = 0; x < w; x += 4) {
-                VInt ix = ((int32_t)x + simd::FragPixelOffsetsX) << 1;
-                VInt iy = ((int32_t)y + simd::FragPixelOffsetsY) << 1;
+        for (uint32_t y = 0; y < h; y += simd::TileHeight) {
+            for (uint32_t x = 0; x < w; x += simd::TileWidth) {
+                VInt ix = ((int32_t)x + simd::TileOffsetsX) << 1;
+                VInt iy = ((int32_t)y + simd::TileOffsetsY) << 1;
 
                 // This will never go out of bounds if texture size is POT and >4x4.
                 // Storage is padded by +16*4 bytes so nothing bad should happen if we do.

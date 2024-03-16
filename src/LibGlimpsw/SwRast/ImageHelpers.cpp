@@ -45,12 +45,12 @@ HdrTexture2D LoadImageHDR(std::string_view path, uint32_t mipLevels) {
 
     auto tex = HdrTexture2D((uint32_t)width, (uint32_t)height, mipLevels, 1);
 
-    for (uint32_t y = 0; y < tex.Height; y += 4) {
-        for (uint32_t x = 0; x < tex.Width; x += 4) {
+    for (uint32_t y = 0; y < tex.Height; y += simd::TileHeight) {
+        for (uint32_t x = 0; x < tex.Width; x += simd::TileWidth) {
             VFloat3 tile;
 
-            for (uint32_t sy = 0; sy < 4; sy++) {
-                for (uint32_t sx = 0; sx < 4; sx++) {
+            for (uint32_t sy = 0; sy < simd::TileHeight; sy++) {
+                for (uint32_t sx = 0; sx < simd::TileWidth; sx++) {
                     uint32_t idx = (x + sx) + (y + sy) * tex.Width;
                     tile.x[sx + sy * 4] = pixels[idx * 3 + 0];
                     tile.y[sx + sy * 4] = pixels[idx * 3 + 1];
@@ -80,11 +80,11 @@ HdrTexture2D LoadCubemapFromPanoramaHDR(std::string_view path, uint32_t mipLevel
     };
 
     for (uint32_t layer = 0; layer < 6; layer++) {
-        for (uint32_t y = 0; y < faceSize; y += 4) {
-            for (uint32_t x = 0; x < faceSize; x += 4) {
+        for (uint32_t y = 0; y < faceSize; y += simd::TileHeight) {
+            for (uint32_t x = 0; x < faceSize; x += simd::TileWidth) {
                 float scaleUV = 1.0f / (faceSize - 1);
-                VFloat u = simd::conv2f((int32_t)x + simd::FragPixelOffsetsX) * scaleUV;
-                VFloat v = simd::conv2f((int32_t)y + simd::FragPixelOffsetsY) * scaleUV;
+                VFloat u = simd::conv2f((int32_t)x + simd::TileOffsetsX) * scaleUV;
+                VFloat v = simd::conv2f((int32_t)y + simd::TileOffsetsY) * scaleUV;
 
                 VFloat3 dir = UnprojectCubemap(u, v, (int32_t)layer);
 

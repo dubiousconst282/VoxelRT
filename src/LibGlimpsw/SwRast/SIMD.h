@@ -7,7 +7,6 @@
 #include <memory>
 #include <bit>
 #include <glm/mat4x4.hpp>
-#include "SwRast/SIMD.h"
 
 #define SIMD_INLINE [[gnu::always_inline]] inline
 
@@ -96,7 +95,8 @@ namespace simd {
 // Pixel offsets within a SIMD tile
 //   X: [0,1,2,3, 0,1,2,3, ...]
 //   Y: [0,0,0,0, 1,1,1,1, ...]
-inline const VInt FragPixelOffsetsX = RampI & 3, FragPixelOffsetsY = RampI >> 2;
+inline const VInt TileOffsetsX = RampI & 3, TileOffsetsY = RampI >> 2;
+inline const uint32_t TileWidth = 4, TileHeight = VInt::Length / TileWidth;
 
 inline const float pi = 3.141592653589793f;
 inline const float tau = 6.283185307179586f;
@@ -169,7 +169,7 @@ SIMD_INLINE void sincos_2pi(VFloat x, VFloat& s, VFloat& c) {
     // Reduce range to -1/4..1/4
     //   x = x + 0.25
     //   x = abs(x - floor(x + 0.5)) - 0.25
-#if _SIMD_AVX512
+#if SIMD_AVX512
     VFloat xr = _mm512_reduce_ps(x + 0.25f, _MM_FROUND_TO_NEAREST_INT);
 #else
     x = x + 0.25f;

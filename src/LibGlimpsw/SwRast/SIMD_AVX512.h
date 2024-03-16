@@ -159,6 +159,7 @@ SIMD_INLINE VInt shrl(VInt a, VInt b) { return _mm512_srlv_epi32(a, b); }
 SIMD_INLINE VInt rotl(VInt a, uint32_t b) { return _mm512_rolv_epi32(a, _mm512_set1_epi32((int32_t)b)); }
 SIMD_INLINE VInt rotr(VInt a, uint32_t b) { return _mm512_rorv_epi32(a, _mm512_set1_epi32((int32_t)b)); }
 
+SIMD_INLINE VMask ucmp_lt(VInt a, VInt b) { return _mm512_cmplt_epu32_mask(a, b); }
 SIMD_INLINE VMask ucmp_ge(VInt a, VInt b) { return _mm512_cmpge_epu32_mask(a, b); }
 
 // Reverse bits of packed 32-bit integers.

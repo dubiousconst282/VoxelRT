@@ -19,7 +19,7 @@ uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) 
         brick->DispatchSIMD([&](VoxelDispatchInvocationPars& p) {
             VFloat noise = VFloat::gather<4>(noiseBuffer.get(), (p.X & 31) + (p.Y & 31) * 32 + (p.Z & 31) * (32 * 32));
             VMask fillMask = noise < 0.0;
-            p.VoxelIds = simd::csel(fillMask, VInt(255), VInt(0));
+            p.VoxelIds = simd::csel(fillMask, VInt(251), VInt(0));
 
             isNonEmpty |= simd::any(fillMask);
             return true;
