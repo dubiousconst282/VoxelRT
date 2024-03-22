@@ -311,8 +311,8 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
             VFloat3 origin, dir;
             GetPrimaryRay({ u, v }, invProj, origin, dir);
 
-            VFloat3 attenuation = 1.0f;
             VFloat3 finalColor = 0.0f;
+            VFloat3 throughput = 1.0f;
             VMask mask = (VMask)(~0);
 
             for (uint32_t i = 0; i < 3 && any(mask); i++) {
@@ -330,10 +330,10 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
                     };
                     VFloat3 skyColor = _skyBox.SampleCube<SD, false>(dir, i == 0 ? 1 : 3);
 
-                    matColor.x = simd::csel(missMask, skyColor.x, matColor.x);
-                    matColor.y = simd::csel(missMask, skyColor.y, matColor.y);
-                    matColor.z = simd::csel(missMask, skyColor.z, matColor.z);
-                    emissionStrength = simd::csel(missMask, 1.0f, emissionStrength);
+                    set_if(missMask, matColor.x, skyColor.x);
+                    set_if(missMask, matColor.y, skyColor.y);
+                    set_if(missMask, matColor.z, skyColor.z);
+                    set_if(missMask, emissionStrength, 1.0f);
                 }
 
                 if (!_enablePathTracer) [[unlikely]] {
@@ -341,8 +341,8 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
                     break;
                 }
 
-                attenuation *= matColor;
-                finalColor += attenuation * emissionStrength;
+                throughput *= matColor;
+                finalColor += throughput * emissionStrength;
                 mask &= hit.Mask;
 
                 origin = hit.Pos + hit.Normal * 0.01f;

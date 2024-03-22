@@ -8,6 +8,7 @@
         "stb",
         "assimp",
         "glm",
-        "zstd"
+        "zstd",
+        "magic-enum"
     ]
 }

@@ -74,23 +74,25 @@ ivec3 getAnisotropicStepPos(uvec2 mask, uint idx, ivec3 pos, vec3 dir, int scale
 bool getStepPos(inout ivec3 ipos, vec3 dir) {
     uvec3 pos = uvec3(ipos);
     uvec3 brickPos = pos / BRICK_SIZE;
-    uint brickIdx = getLinearIndex(brickPos, 4, 4);
-    Sector sector = b_VoxelData.Sectors[getLinearIndex(brickPos / 4, NUM_SECTORS_XZ, NUM_SECTORS_Y)];
+    uvec3 sectorPos = brickPos / 4;
+    uvec2 occMask = b_VoxelData.AllocMasks[getLinearIndex(sectorPos, NUM_SECTORS_XZ, NUM_SECTORS_Y)];
 
-    uvec2 occMask = uvec2(sector.AllocMask_0, sector.AllocMask_32);
-    uint maskIdx = brickIdx;
+    uint maskIdx = getLinearIndex(brickPos, 4, 4);
     int scale = BRICK_SIZE;
 
     if (isFineLod(occMask, maskIdx)) {
         uint slotIdx = getBrickDataSlot(brickPos);
-        uint cellOffset = getLinearIndex(pos / uvec3(4, 4, 4), BRICK_SIZE / 4, BRICK_SIZE / 4) * 2;
-        occMask.x = b_Occupancy.Data[slotIdx * OCC_STRIDE + cellOffset + 0];
-        occMask.y = b_Occupancy.Data[slotIdx * OCC_STRIDE + cellOffset + 1];
+        uint cellOffset = getLinearIndex(pos / 4, BRICK_SIZE / 4, BRICK_SIZE / 4);
+        occMask = b_VoxelOccupancy.Data[slotIdx * OCC_STRIDE + cellOffset];
         
         maskIdx = getLinearIndex(pos, 4, 4);
         scale = 1;
 
         if (isFineLod(occMask, maskIdx)) return false;
+    } else if (occMask == uvec2(0)) {
+        occMask = b_VoxelData.SectorOccupancy[getLinearIndex(sectorPos / 4, NUM_SECTORS_XZ / 4, NUM_SECTORS_Y / 4)];
+        maskIdx = getLinearIndex(sectorPos, 4, 4);
+        scale = BRICK_SIZE * 4;
     }
 
     if (u_UseAnisotropicLods) {
@@ -117,27 +119,30 @@ vec3 clipRayToAABB(vec3 origin, vec3 dir, vec3 bbMin, vec3 bbMax) {
 }
 
 struct HitInfo {
-    float dist;
     vec3 pos;
     vec3 norm;
     vec2 uv;
     Material mat;
     uint iters;
 };
-#define TRAVERSAL_METRICS 1
-bool rayCast(vec3 origin, vec3 dir, out HitInfo hit) {
-    vec3 invDir = 1.0 / dir;
-    vec3 tStart = (max(sign(dir), 0.0) - origin) * invDir;
-    vec3 currPos = origin;
-    vec3 sideDist = vec3(0);
-    float tmin = 0;
+
+bool rayTrace(vec3 origin, vec3 dir, out HitInfo hit) {
+    origin = clipRayToAABB(origin, dir, -u_WorldOrigin+1, vec3(GRID_SIZE_XZ, GRID_SIZE_Y,GRID_SIZE_XZ)-u_WorldOrigin-1);
     
-    currPos = clipRayToAABB(currPos, dir, -u_WorldOrigin+1, vec3(GRID_SIZE_XZ, GRID_SIZE_Y,GRID_SIZE_XZ)-u_WorldOrigin-1);
+    vec3 invDir = 1.0 / dir;
+    vec3 tStart = (step(0.0, dir) - origin) * invDir;
+    ivec3 voxelPos = u_WorldOrigin + ivec3(floor(origin));
 
     for (uint i = 0; i < 256; i++) {
-        ivec3 pos = u_WorldOrigin + ivec3(floor(currPos));
-
-        if (!isInBounds(pos)) {
+        vec3 sideDist = tStart + (voxelPos - u_WorldOrigin) * invDir;
+        float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
+        vec3 currPos = origin + tmin * dir;
+        
+        bvec3 sideMask = equal(sideDist, vec3(tmin));
+        vec3 biasedPos = mix(currPos, currPos + dir * 0.01, sideMask);
+        voxelPos = u_WorldOrigin + ivec3(floor(biasedPos));
+        
+        if (!isInBounds(voxelPos)) {
             #if TRAVERSAL_METRICS
             atomicAdd(b_Metrics.TraversalIters, uint(i));
             #endif
@@ -145,17 +150,12 @@ bool rayCast(vec3 origin, vec3 dir, out HitInfo hit) {
             hit.iters = i;
             return false;
         }
-
-        if (!getStepPos(pos, dir)) {
+        if (!getStepPos(voxelPos, dir)) {
             #if TRAVERSAL_METRICS
             atomicAdd(b_Metrics.TraversalIters, uint(i));
             #endif
 
-            uint voxelId = getVoxel(pos);
-            hit.mat = b_VoxelData.Palette[voxelId];
-
-            bvec3 sideMask = lessThanEqual(sideDist.xyz, min(sideDist.yzx, sideDist.zxy));
-            hit.dist = tmin;
+            hit.mat = getVoxelMaterial(voxelPos);
             hit.pos = currPos;
             hit.uv = fract(mix(currPos.xz, currPos.yy, sideMask.xz));
             hit.norm = mix(vec3(0), -sign(dir), sideMask);
@@ -163,15 +163,98 @@ bool rayCast(vec3 origin, vec3 dir, out HitInfo hit) {
             
             return true;
         }
-
-        sideDist = tStart + (pos - u_WorldOrigin) * invDir;
-        tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
-
-        // Bias tmin by the smallest amount that is representable by a float (BitIncrement),
-        // to avoid ray from getting stuck. Constant found by trial and error.
-        tmin = uintBitsToFloat(floatBitsToUint(tmin) + 4);
-
-        currPos = origin + tmin * dir;
     }
     return false;
 }
+/*
+
+bool getCoarseStepPos(inout ivec3 ipos, vec3 dir, int minLod) {
+    uvec3 pos = uvec3(ipos);
+    uvec3 brickPos = pos / BRICK_SIZE;
+    uint brickIdx = getLinearIndex(brickPos, 4, 4);
+    Sector sector = b_VoxelData.Sectors[getLinearIndex(brickPos / 4, NUM_SECTORS_XZ, NUM_SECTORS_Y)];
+
+    uvec2 occMask = uvec2(sector.AllocMask_0, sector.AllocMask_32);
+    uint maskIdx = brickIdx;
+    int scale = BRICK_SIZE;
+
+    if (isFineLod(occMask, maskIdx) && minLod < 8) {
+        uint slotIdx = getBrickDataSlot(brickPos);
+        uint cellOffset = getLinearIndex(pos / uvec3(4, 4, 4), BRICK_SIZE / 4, BRICK_SIZE / 4);
+        occMask = b_VoxelOccupancy.Data[slotIdx * OCC_STRIDE + cellOffset];
+        
+        maskIdx = getLinearIndex(pos, 4, 4);
+        scale = 1;
+
+        if (isFineLod(occMask, maskIdx)) return false;
+    }
+    int lod = getIsotropicLod(occMask, maskIdx) * scale;
+    if (lod >= minLod) {
+        ipos = alignToCellBoundaries(ipos, dir, lod);
+        return true;
+    }
+    if (scale == 1) {
+        uint currMask = occMask.x;
+        uint occIdx = 0;
+
+        if (occMask.x == 0) {
+            occIdx += 32;
+            currMask = occMask.y;
+        }
+        occIdx += findLSB(currMask);
+
+        ipos = alignToCellBoundaries(ipos, dir, 4);
+        ivec3 cpos=ivec3(occIdx)>>ivec3(0,4,2)&3;
+        ipos.x += dir.x < 0 ? cpos.x : cpos.x-3;
+        ipos.y += dir.y < 0 ? cpos.y : cpos.y-3;
+        ipos.z += dir.z < 0 ? cpos.z : cpos.z-3;
+    }
+
+    return false;
+}
+
+bool rayTraceCoarse(vec3 origin, vec3 dir, out HitInfo hit) {
+    origin = clipRayToAABB(origin, dir, -u_WorldOrigin+1, vec3(GRID_SIZE_XZ, GRID_SIZE_Y,GRID_SIZE_XZ)-u_WorldOrigin-1);
+
+    vec3 invDir = 1.0 / dir;
+    vec3 tStart = (max(sign(dir), 0.0) - origin) * invDir;
+    vec3 currPos = origin;
+    bvec3 sideMask = bvec3(false);
+    ivec3 voxelPos = u_WorldOrigin + ivec3(floor(origin));
+    
+
+    // Fine trace
+    for (uint i = 0; i < 64; i++) {
+        int minLod = i < 8 ? 1 : 
+                     i < 16 ? 2 : 
+                     i < 32 ? 4 : 8;
+
+        if (!isInBounds(voxelPos)) {
+            #if TRAVERSAL_METRICS
+            atomicAdd(b_Metrics.TraversalIters, uint(i));
+            #endif
+
+            return false;
+        }
+        if (!getCoarseStepPos(voxelPos, dir, minLod)) {
+            #if TRAVERSAL_METRICS
+            atomicAdd(b_Metrics.TraversalIters, uint(i));
+            #endif
+
+            hit.mat = getVoxelMaterial(voxelPos);
+            hit.pos = currPos;
+            hit.uv = fract(mix(currPos.xz, currPos.yy, sideMask.xz));
+            hit.norm = mix(vec3(0), -sign(dir), sideMask);
+            hit.iters=i;
+            return true;
+        }
+        vec3 sideDist = tStart + (voxelPos - u_WorldOrigin) * invDir;
+        float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
+        currPos = origin + tmin * dir;
+        
+        sideMask = equal(sideDist, vec3(tmin));
+        vec3 sideBias = mix(vec3(0), vec3(0.01), sideMask);
+        voxelPos = u_WorldOrigin + ivec3(floor(currPos + dir * sideBias));
+    }
+    return false;
+}*/

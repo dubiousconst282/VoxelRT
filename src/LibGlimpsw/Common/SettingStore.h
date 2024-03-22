@@ -1,9 +1,12 @@
 #pragma once
 
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <unordered_map>
 
 #include <imgui.h>
+#include <magic_enum.hpp>
 
 namespace glim {
 
@@ -32,6 +35,21 @@ struct SettingStore {
     bool Slider(std::string_view label, T* value, uint32_t numComponents, T min, T max, const char* fmt = nullptr, ImGuiSliderFlags flags = 0) {
         bool changed = ImGui::SliderScalarN(label.data(), GetDataType<T>(), value, (int)numComponents, &min, &max, fmt, flags);
         return Sync(label, value, sizeof(T) * numComponents, changed);
+    }
+    template<typename T, typename = std::enable_if<std::is_enum_v<T>>>
+    bool Combo(std::string_view label, T* value) {
+        bool changed = false;
+
+        if (ImGui::BeginCombo(label.data(), magic_enum::enum_name(*value).data())) {
+            for (auto& entry : magic_enum::enum_entries<T>()) {
+                if (ImGui::Selectable(entry.second.data(), *value == entry.first)) {
+                    *value = entry.first;
+                    changed = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        return Sync(label, &value, sizeof(T), changed);
     }
 
     // Synchronize value associated with label and GUI scope hash from/to persistent storage

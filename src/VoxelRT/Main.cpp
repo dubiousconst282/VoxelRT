@@ -99,8 +99,8 @@ public:
             glfwSwapInterval(useVSync ? 1 : 0);
         }
 
-        static bool useCpuRenderer = true;
-        if (_renderer == nullptr || _settings.Checkbox("Use CPU Renderer", &useCpuRenderer)) {
+        static bool useCpuRenderer = false;
+        if (_settings.Checkbox("Use CPU Renderer", &useCpuRenderer) || _renderer == nullptr) {
             if (useCpuRenderer) {
                 _renderer = std::make_unique<CpuRenderer>(*_shaderLib, _map);
             } else {

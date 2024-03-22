@@ -37,6 +37,13 @@ struct Material {
     }
 };
 
+static uint32_t GetLinearIndex(glm::uvec3 pos, uint32_t sizeXZ, uint32_t sizeY) {
+    assert(std::has_single_bit(sizeXZ) && std::has_single_bit(sizeY));
+    return (pos.x & (sizeXZ - 1)) +
+           (pos.z & (sizeXZ - 1)) * sizeXZ +
+           (pos.y & (sizeY - 1)) * (sizeXZ * sizeXZ);
+}
+
 template<int ShiftXZ_, int ShiftY_, bool Signed_>
 struct LinearIndexer3D {
     static const int32_t ShiftXZ = ShiftXZ_, ShiftY = ShiftY_;

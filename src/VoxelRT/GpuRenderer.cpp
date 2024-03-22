@@ -1,11 +1,15 @@
 #include "Renderer.h"
 #include "BrickSlotAllocator.h"
 
-static constexpr auto ViewSize = glm::uvec2(4096, 1024) / glm::uvec2(BrickIndexer::Size * VoxelIndexer::Size);
+static constexpr auto SectorSize = BrickIndexer::Size * VoxelIndexer::Size;
+static constexpr auto ViewSize = glm::uvec2(4096, 1024) / glm::uvec2(SectorSize);
+static constexpr uint32_t NumViewSectors = ViewSize.x * ViewSize.x * ViewSize.y;
+
 static const std::vector<ogl::ShaderLoadParams::PrepDef> DefaultShaderDefs = {
     { "BRICK_SIZE", std::to_string(Brick::Size.x) },
     { "NUM_SECTORS_XZ", std::to_string(ViewSize.x) },
     { "NUM_SECTORS_Y", std::to_string(ViewSize.y) },
+    { "TRAVERSAL_METRICS", "1" },
 };
 
 struct GpuVoxelStorage {
@@ -15,16 +19,14 @@ struct GpuVoxelStorage {
     std::shared_ptr<ogl::Shader> BuildOccupancyShader;
 
     BrickSlotAllocator SlotAllocator = { ViewSize };
+    glm::ivec3 ViewOffset; // world view offset in sector scale
 
-    struct SectorInfo {
-        uint32_t BaseSlot;
-        uint32_t AllocMask_0;
-        uint32_t AllocMask_1;
-        // uint32_t ClusterDist : 8;  // Distance to nearest non-empty brick
-    };
+    static_assert(std::endian::native == std::endian::little);
     struct GpuMeta {
         Material Palette[sizeof(VoxelMap::Palette) / sizeof(Material)];
-        SectorInfo Sectors[ViewSize.x * ViewSize.x * ViewSize.y];
+        uint32_t BaseSlots[NumViewSectors];
+        uint64_t AllocMasks[NumViewSectors];
+        uint64_t SectorOccupancy[NumViewSectors / 64];  // Occupancy masks at sector level
         Brick Bricks[];
     };
     struct UpdateRequest {
@@ -72,7 +74,7 @@ struct GpuVoxelStorage {
             map.DirtyLocs.erase(itr++);
         }
         // Initialize buffers
-        uint32_t maxBricksInBuffer = std::max(std::bit_ceil(maxSlotId * 4 / 3), MinBricksInBuffer);
+        uint32_t maxBricksInBuffer = std::bit_ceil(maxSlotId);
         size_t bufferSize = sizeof(GpuMeta) + maxBricksInBuffer * sizeof(Brick);
 
         if (StorageBuffer == nullptr || StorageBuffer->Size < bufferSize) {
@@ -112,12 +114,22 @@ struct GpuVoxelStorage {
             }
 
             // Also update sector metadata while we have it in hand.
-            auto& gpuSector = mappedStorage->Sectors[sectorAlloc - SlotAllocator.Sectors.get()];
-            gpuSector.BaseSlot = sectorAlloc->BaseSlot - 1;
-            gpuSector.AllocMask_0 = (uint32_t)(sectorAlloc->AllocMask >> 0);
-            gpuSector.AllocMask_1 = (uint32_t)(sectorAlloc->AllocMask >> 32);
+            uint32_t viewSectorIdx = sectorAlloc - SlotAllocator.Sectors.get();
+            mappedStorage->AllocMasks[viewSectorIdx] = sectorAlloc->AllocMask;
+            mappedStorage->BaseSlots[viewSectorIdx] = sectorAlloc->BaseSlot - 1;
 
+            // Sector-level occupancy mask
+            uint64_t& sectorOccMask = mappedStorage->SectorOccupancy[GetLinearIndex(sectorPos / 4, ViewSize.x / 4, ViewSize.y / 4)];
+            uint32_t sectorOccIdx = GetLinearIndex(sectorPos, 4, 4);
+            if (sectorAlloc->AllocMask != 0) {
+                sectorOccMask |= (1ull << sectorOccIdx);
+            } else {
+                sectorOccMask &= ~(1ull << sectorOccIdx);
+            }
+
+            // Erase from memory if empty
             if (actualSector.GetAllocationMask() == 0) {
+                assert(allocMask == 0);
                 map.Sectors.erase(sectorIdx);
             }
         }
@@ -126,8 +138,30 @@ struct GpuVoxelStorage {
         updateLocs.reset();
         BuildOccupancyShader->SetUniform("ssbo_UpdateLocs", updateBuffer);
         BuildOccupancyShader->SetUniform("ssbo_VoxelData", *StorageBuffer);
-        BuildOccupancyShader->SetUniform("ssbo_Occupancy", *OccupancyStorage);
+        BuildOccupancyShader->SetUniform("ssbo_VoxelOccupancy", *OccupancyStorage);
         BuildOccupancyShader->DispatchCompute(1, 1, (updateLocIdx + 63) / 64);
+    }
+
+    void ShiftView(glm::dvec3 cameraPos) {
+        double dist = glm::distance(cameraPos / glm::dvec3(SectorSize), glm::dvec3(ViewOffset) + 0.5);
+        if (dist < 2.0) return;
+
+        glm::ivec3 newOffset = glm::floor(cameraPos);
+        glm::ivec3 shift = ViewOffset - newOffset;
+        glm::ivec3 disp = glm::min(glm::abs(shift), glm::ivec3(ViewSize.x, ViewSize.y, ViewSize.x));
+        ViewOffset = newOffset;
+        
+        for (int32_t dy = 0; dy < disp.y; dy++) {
+            for (int32_t dz = 0; dz < ViewSize.x; dz++) {
+                for (int32_t dx = 0; dx < ViewSize.x; dx++) {
+                    glm::ivec3 srcPos = glm::ivec3(dx, dy, dz);
+                    auto srcSector = SlotAllocator.GetSector(srcPos);
+                    auto dstSector = SlotAllocator.GetSector(srcPos + shift);
+
+                    // TODO
+                }
+            }
+        }
     }
 };
 
@@ -156,7 +190,7 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     _storage->SyncBuffers(*_map);
 
     _mainShader->SetUniform("ssbo_VoxelData", *_storage->StorageBuffer);
-    _mainShader->SetUniform("ssbo_Occupancy", *_storage->OccupancyStorage);
+    _mainShader->SetUniform("ssbo_VoxelOccupancy", *_storage->OccupancyStorage);
 
     glm::dvec3 camPos = cam.ViewPosition;
     glm::ivec3 worldOrigin = glm::ivec3(glm::floor(camPos));
@@ -165,17 +199,20 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * viewMat);
 
     _mainShader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
-    _mainShader->SetUniform("u_ShowTraversalHeatmap", _showHeatmap ? 1 : 0);
+    _mainShader->SetUniform("u_DebugView", (int)_debugView);
     _mainShader->SetUniform("u_UseAnisotropicLods", _useAnisotropicLods ? 1 : 0);
     _mainShader->SetUniform("u_WorldOrigin", &worldOrigin.x, 3);
+    _mainShader->SetUniform("u_FrameNo", (int)_frameNo);
     _mainShader->SetUniform("ssbo_Metrics", *_metricsBuffer);
     _mainShader->DispatchFullscreen();
 
     glEndQuery(GL_TIME_ELAPSED);
+
+    _frameNo++;
 }
 void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
     ImGui::SeparatorText("Renderer##GPU");
-    settings.Checkbox("Traversal Heatmap", &_showHeatmap);
+    settings.Combo("Debug View", &_debugView);
     settings.Checkbox("Anisotropic LODs", &_useAnisotropicLods);
 
     ImGui::Separator();

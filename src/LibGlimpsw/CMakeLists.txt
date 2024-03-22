@@ -19,5 +19,6 @@ target_link_libraries(glimpsw PRIVATE
     assimp::assimp
     glm::glm
     $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static> # wtf
+    magic_enum::magic_enum
 )
 target_include_directories(glimpsw PRIVATE ${Stb_INCLUDE_DIR})

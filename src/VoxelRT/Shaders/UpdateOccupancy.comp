@@ -26,10 +26,10 @@ void main() {
         for (uint vy = 0; vy < 2; vy++)
         for (uint vz = 0; vz < 4; vz++)
         for (uint vx = 0; vx < 4; vx++) {
-            bool occupied = getBrickVoxelId(slot, uvec3(cx + vx, cy + vy, cz + vz)) != 0;
+            bool occupied = getVoxelId(slot, uvec3(cx + vx, cy + vy, cz + vz)) != 0;
             mask |= uint(occupied) << (vx + vz*4 + vy*16);
         }
         uint cellOffset = getLinearIndex(uvec3(cx, cy, cz) / uvec3(4, 4, 4), BRICK_SIZE / 4, BRICK_SIZE / 4);
-        b_Occupancy.Data[slot * OCC_STRIDE + cellOffset * 2 + (cy/2%2)] = mask;
+        b_VoxelOccupancy.Data[slot * OCC_STRIDE + cellOffset][cy / 2 % 2] = mask;
     }
 }

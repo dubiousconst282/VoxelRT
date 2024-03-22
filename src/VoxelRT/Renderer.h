@@ -30,12 +30,15 @@ struct GpuRenderer : public Renderer {
     virtual void DrawSettings(glim::SettingStore& settings);
 
 private:
+    enum class DebugView { None, Albedo, Normals, TraversalIters };
+    
     std::shared_ptr<VoxelMap> _map;
     std::unique_ptr<GpuVoxelStorage> _storage;
 
     std::shared_ptr<ogl::Shader> _mainShader;
-    bool _showHeatmap;
+    DebugView _debugView = DebugView::None;
     bool _useAnisotropicLods;
+    uint32_t _frameNo = 0;
 
     glim::TimeStat _frameTime;
     GLuint _frameQueryObj = 0;
