@@ -30,34 +30,6 @@ class Grid {
         this.df[idx] = (this.df[idx] & ~(31 << shift)) | (value << shift);
     }
 
-
-    buildMips() {
-        for (let k = 0; k < this.numLevels; k++) {
-            for (let y = 0; y < (this.height >> k); y += 2) {
-                for (let x = 0; x < (this.width >> k); x += 2) {
-                    let s00 = this.get(x + 0, y + 0, k);
-                    let s10 = this.get(x + 1, y + 0, k);
-                    let s01 = this.get(x + 0, y + 1, k);
-                    let s11 = this.get(x + 1, y + 1, k);
-                    this.set(x >> 1, y >> 1, k + 1, s00 | s10 | s01 | s11);
-                }
-            }
-        }
-        this.updateDist();
-    }
-    traverse(visitor, x = 0, y = 0, k = undefined) {
-        k ??= this.numLevels - 1;
-        visitor(x, y, k + 1);
-
-        if (k < 0 || !this.get(x >> (k + 1), y >> (k + 1), k + 1)) return;
-
-        for (let i = 0; i < 4; i++) {
-            let cx = x + ((i & 1) << k);
-            let cy = y + ((i >> 1) << k);
-
-            this.traverse(visitor, cx, cy, k - 1);
-        }
-    }
     updateDist() {
         // Splat occupancy
         for (let y = 0; y < this.height; y++) {
@@ -96,61 +68,16 @@ class Grid {
         }
     }
 
-    getCellSize(x, y) {
-        let k = 1;
-        for (; k < 8; k++) {
-            if (this.get(x >> k, y >> k, k)) break;
-        }
-        return 1 << (k - 1);
-    }
     getCellBounds(x, y, dir, ms = false) {
-        if (1 || Date.now() / 1000 & 1) {
-            let d = this.getDist(x, y, 0);
-            let Cx = dir.x / (abs(dir.x) + abs(dir.y));
-            let Cy = dir.y / (abs(dir.x) + abs(dir.y));
-            if (d > 0) {
-                x += ceil(d * Cx - max(0, Math.sign(dir.x)));
-                y += ceil(d * Cy - max(0, Math.sign(dir.y)));
-                //x += floor(d * Cx + max(0, -Math.sign(dir.x)));
-                //y += floor(d * Cy + max(0, -Math.sign(dir.y)));
-            }
-            return { x, y };
+        let d = this.getDist(x, y, 0);
+        let Cx = dir.x / (abs(dir.x) + abs(dir.y));
+        let Cy = dir.y / (abs(dir.x) + abs(dir.y));
+        if (d > 0) {
+            x += ceil(d * Cx - max(0, Math.sign(dir.x)));
+            y += ceil(d * Cy - max(0, Math.sign(dir.y)));
+            //x += floor(d * Cx + max(0, -Math.sign(dir.x)));
+            //y += floor(d * Cy + max(0, -Math.sign(dir.y)));
         }
-        let k = 0;
-        for (; k < 8; k++) {
-            if (this.get(x >> k, y >> k, k)) break;
-        }
-        k--;
-        let mask = (1 << k) - 1;
-        x = dir.x < 0 ? (x | mask) : (x & ~mask);
-        y = dir.y < 0 ? (y | mask) : (y & ~mask);
-
-        let dx = dir.x < 0 ? -1 : +1;
-        let dy = dir.y < 0 ? -1 : +1;
-
-        let cellSize = 1 << k;
-        let kx = cellSize, ky = cellSize;
-
-        // 1 2
-        // 4 8
-        let n = 15;
-        for (let i = 1; i < 4; i++) {
-            n ^= grid.get((x >> k) + dx * (i & 1), (y >> k) + dy * (i >> 1), k) << i;
-        }
-
-        if (Date.now() / 2000 & 1) {
-            if (abs(dir.x) > abs(dir.y)) {
-                kx += (n & 2) ? cellSize : 0;
-                ky += (n & 4) && (!(n & 2) || (n & 8)) ? cellSize : 0;
-            } else {
-                ky += (n & 4) ? cellSize : 0;
-                kx += (n & 2) && (!(n & 4) || (n & 8)) ? cellSize : 0;
-            }
-        }
-
-        x += (kx - 1) * dx;
-        y += (ky - 1) * dy;
-
         return { x, y };
     }
 }
@@ -175,18 +102,30 @@ function setup() {
             }
         }
     }
-    grid.buildMips();
+    grid.updateDist();
 }
 
 function draw() {
     background(220);
 
-    grid.traverse((x, y, level) => {
-        let s = (1 << level) * CellSize;
-        if (level == 0 && grid.get(x, y)) fill(128, 128, 128)
-        else fill(255, 255, 255)
-        rect(x * CellSize, y * CellSize, s, s);
-    });
+    for (let y = 0; y < grid.height; y++) {
+        for (let x = 0; x < grid.width; x++) {
+            let d = grid.getDist(x, y, 0);
+            let g = 64 + d / 15 * (255 - 64);
+
+            if (d == 0) fill(80, 80, 200)
+            else {
+                fill(g, g, g);
+            }
+
+            rect(x * CellSize, y * CellSize, CellSize, CellSize);
+
+            if (d > 0) {
+                fill(255, 255, 255);
+                text(d, x * CellSize + (CellSize - textWidth(d)) / 2, y * CellSize + 20);
+            }
+        }
+    }
 
     let gx = mouseX / CellSize | 0;
     let gy = mouseY / CellSize | 0;
@@ -224,7 +163,7 @@ function mousePressed() {
 
     if (keyIsDown(CONTROL)) {
         grid.set(gx, gy, 0, grid.get(gx, gy) ? 0 : 1);
-        grid.buildMips();
+        grid.updateDist();
     }
 }
 function mouseDragged() {
@@ -265,7 +204,7 @@ function RayCast(origin, target) {
 
         fill(32, 128, 256, 128);
         //rect(voxelX * CellSize, voxelY * CellSize, CellSize, CellSize);
-        text(i, voxelX * CellSize + 6, voxelY * CellSize + 14);
+        //text(i, voxelX * CellSize + 6, voxelY * CellSize + 14);
         //text((stepPos.x - voxelX) + " " + (stepPos.y - voxelY), voxelX * CellSize + 6, voxelY * CellSize + 28);
 
         fill(0, 255, 0, 40);

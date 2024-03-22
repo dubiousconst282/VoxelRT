@@ -49,16 +49,25 @@ vec4 trace(vec3 rayPos, vec3 rayDir, bool useDDA) {
         sideDist -= vec3(mask) * deltaDist;
     } else {
         vec3 invDir = 1.0 / rayDir;
-        vec3 tStart = (max(sign(rayDir),0.0) - rayPos)*invDir;
-        vec3 currPos = rayPos;
+        vec3 tStart = (step(0.0, rayDir) - rayPos)*invDir;
+        ivec3 voxelPos = ivec3(floor(rayPos));
 
         for (i = 0; i < MAX_RAY_STEPS; i++) {
-            ivec3 pos = ivec3(floor(currPos));
-            if (getVoxel(pos)) break;
-
-            sideDist = tStart + floor(currPos) * invDir;
-            float tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001;
-            currPos = rayPos + tmin * rayDir;
+            sideDist = tStart + vec3(voxelPos) * invDir;
+            float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
+            
+            if (true) {
+                // accurate stepping
+                vec3 currPos = rayPos + tmin * rayDir;
+            
+                bvec3 sideMask = equal(sideDist, vec3(tmin));
+                voxelPos = ivec3(floor(mix(currPos, currPos + rayDir * 0.01, sideMask)));
+            } else {
+                // approximate stepping
+                vec3 currPos = rayPos + (tmin + 0.001) * rayDir;
+                voxelPos = ivec3(floor(currPos));
+            }
+            if (getVoxel(voxelPos)) break;
         }
      }
    return vec4(sideDist, i);
@@ -76,10 +85,10 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
 	rayPos.xz = rotate2d(rayPos.xz, iTime);
 	rayDir.xz = rotate2d(rayDir.xz, iTime);
 
-    bool useDDA = fract(iTime*0.25)<0.5;
+    bool useDDA = fract(iTime/5.0)<0.5;
 	
     vec4 sideDist= vec4(0);
-    for(int i = 0; i < 32; i++) {
+    for(int i = 0; i < 64; i++) {
         sideDist += (i==15?1.0:0.0001)*trace(rayPos+vec3(i)*0.0001,rayDir,useDDA);
     }
 	
