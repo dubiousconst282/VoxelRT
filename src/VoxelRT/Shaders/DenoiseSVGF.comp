@@ -1,0 +1,54 @@
+uniform int u_PassNo;
+uniform mat4 u_InvProjMat;
+uniform mat4 u_OldProjMat; // previous frame
+uniform vec3 u_OriginDelta;
+
+uniform bool u_DiscardAccumSamples;
+
+#include "GBuffer.glsl"
+
+// https://old.cescg.org/CESCG-2020/wp-content/uploads/2018/04/Dundr-Progressive-Spatiotemporal-Variance-Guided-Filtering-2.pdf
+// https://www.shadertoy.com/view/tlXfRX
+
+void temporalReproject(inout GSample g, ivec2 pos) {
+    ivec2 resolution = imageSize(u_BackBuffer);
+    vec2 uv = vec2(pos + 0.5) * (1.0 / resolution);
+
+    vec3 rayDir, rayPos;
+    getPrimaryRay(uv, u_InvProjMat, rayPos, rayDir);
+
+    vec4 prevNDC = u_OldProjMat * vec4(rayPos + rayDir * g.depth + u_OriginDelta, 1.0);
+    vec2 prevUV = prevNDC.xy * (1.0 / prevNDC.w);
+    prevUV = prevUV * 0.5 + 0.5;
+
+    // bounds check
+    if (prevUV.x < 0 || prevUV.y < 0 || prevUV.x > 1.0 || prevUV.y > 1.0 || g.depth <= 0) return;
+
+    GSample prevG = gbufferSample(prevUV);
+
+    float weight = u_DiscardAccumSamples ? 0.25 : g.historyWeight;
+    if (dot(g.normal, prevG.normal) < 0.7) {
+        weight = 0.5;
+    }
+    g.irradiance = mix(prevG.irradiance, g.irradiance, weight);
+    g.historyWeight = max(g.historyWeight * 0.5, weight);
+}
+void applyFilter() {
+    const float[9] kernel = {
+        0.0625, 0.125, 0.0625,
+        0.1250, 0.250, 0.1250,
+        0.0625, 0.125, 0.0625,
+    };
+}
+
+layout(local_size_x = 8, local_size_y = 8) in;
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    GSample g = gbufferLoad(pos, true);
+
+    if (u_PassNo == 0) {
+        temporalReproject(g, pos);
+    }
+
+    gbufferStore(pos, g);
+}

@@ -213,7 +213,11 @@ struct StbImage {
     PixelType Type;
     std::unique_ptr<uint8_t[], decltype(&std::free)> Data = { nullptr, &std::free };
 
+    static StbImage Create(uint32_t width, uint32_t height);
     static StbImage Load(std::string_view path, PixelType type = PixelType::RGBA_U8);
+
+    // Assumes `Type == RGBA_U8`
+    void SavePng(std::string_view path);
 };
 
 namespace texutil {

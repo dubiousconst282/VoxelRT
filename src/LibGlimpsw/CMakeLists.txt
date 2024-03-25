@@ -8,6 +8,7 @@ add_library(
     Common/BinaryIO.cpp
 
     OGL/ShaderLib.cpp
+    OGL/QuickGL.cpp
 )
 target_include_directories(
     glimpsw PUBLIC

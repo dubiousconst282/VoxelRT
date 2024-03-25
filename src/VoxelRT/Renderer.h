@@ -35,7 +35,12 @@ private:
     std::shared_ptr<VoxelMap> _map;
     std::unique_ptr<GpuVoxelStorage> _storage;
 
-    std::shared_ptr<ogl::Shader> _mainShader;
+    std::shared_ptr<ogl::Shader> _renderShader, _svgfShader, _blitShader;
+    std::unique_ptr<ogl::Texture2D> _backTex, _frontTex;
+    std::unique_ptr<ogl::Texture2D> _blueNoiseScramblingTex, _blueNoiseSobolTex;
+    glm::mat4 _prevProj;
+    glm::dvec3 _prevOrigin;
+
     DebugView _debugView = DebugView::None;
     bool _useAnisotropicLods;
     uint32_t _frameNo = 0;

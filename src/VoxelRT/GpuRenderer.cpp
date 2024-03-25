@@ -129,7 +129,7 @@ struct GpuVoxelStorage {
 
             // Erase from memory if empty
             if (actualSector.GetAllocationMask() == 0) {
-                assert(allocMask == 0);
+                assert(sectorAlloc->AllocMask == 0);
                 map.Sectors.erase(sectorIdx);
             }
         }
@@ -169,7 +169,15 @@ GpuRenderer::GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
     _map = std::move(map);
     _storage = std::make_unique<GpuVoxelStorage>(shlib);
 
-    _mainShader = shlib.LoadFrag("VoxelRender", DefaultShaderDefs);
+    _renderShader = shlib.LoadComp("VoxelRender", DefaultShaderDefs);
+    _svgfShader = shlib.LoadComp("DenoiseSVGF", DefaultShaderDefs);
+    _blitShader = shlib.LoadFrag("GBufferBlit", DefaultShaderDefs);
+
+    _blueNoiseScramblingTex = ogl::Texture2D::Load("assets/bluenoise/ScramblingTile_128x128x4_1spp.png", 1, GL_RGBA8UI);
+    _blueNoiseSobolTex = ogl::Texture2D::Load("assets/bluenoise/Sobol_256x256.png", 1, GL_RGBA8UI);
+
+    _renderShader->SetUniform("u_BlueNoiseScramblingTex", *_blueNoiseScramblingTex);
+    _renderShader->SetUniform("u_BlueNoiseSobolTex", *_blueNoiseSobolTex);
 
     glCreateQueries(GL_TIME_ELAPSED, 1, &_frameQueryObj);
     _metricsBuffer = std::make_unique<ogl::Buffer>(64, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
@@ -182,29 +190,67 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     _frameTime.AddSample(frameElapsedNs / 1000000.0);
     glBeginQuery(GL_TIME_ELAPSED, _frameQueryObj);
 
+
+    glm::dvec3 camPos = cam.ViewPosition;
+    glm::ivec3 worldOrigin = glm::ivec3(glm::floor(camPos));
+    glm::vec3 originFrac = glm::fract(camPos);
+
+    glm::mat4 projMat = cam.GetProjMatrix() * cam.GetViewMatrix(false);
+    glm::mat4 invProj = glm::inverse(projMat);
+    uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
+
+    bool worldChanged = _map->DirtyLocs.size() > 0;
+
+    // Sync buffers
     if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
         _map->MarkAllDirty();
         _storage->SlotAllocator = BrickSlotAllocator(ViewSize);
     }
-
+    if (_backTex == nullptr || _backTex->Width != viewSize.x || _backTex->Height != viewSize.y) {
+        _backTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA32UI);
+        _frontTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA32UI);
+    }
     _storage->SyncBuffers(*_map);
 
-    _mainShader->SetUniform("ssbo_VoxelData", *_storage->StorageBuffer);
-    _mainShader->SetUniform("ssbo_VoxelOccupancy", *_storage->OccupancyStorage);
+    // Trace
+    _renderShader->SetUniform("ssbo_VoxelData", *_storage->StorageBuffer);
+    _renderShader->SetUniform("ssbo_VoxelOccupancy", *_storage->OccupancyStorage);
+    _renderShader->SetUniform("u_WorldOrigin", &worldOrigin.x, 3);
 
-    glm::dvec3 camPos = cam.ViewPosition;
-    glm::ivec3 worldOrigin = glm::ivec3(glm::floor(camPos));
+    _renderShader->SetUniform("ssbo_Metrics", *_metricsBuffer);
 
-    glm::mat4 viewMat = glm::translate(cam.GetViewMatrix(false), glm::vec3(glm::floor(camPos) - camPos));
-    glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * viewMat);
+    _renderShader->SetUniform("u_UseAnisotropicLods", _useAnisotropicLods ? 1 : 0);
+    _renderShader->SetUniform("u_FrameNo", (int)_frameNo);
 
-    _mainShader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
-    _mainShader->SetUniform("u_DebugView", (int)_debugView);
-    _mainShader->SetUniform("u_UseAnisotropicLods", _useAnisotropicLods ? 1 : 0);
-    _mainShader->SetUniform("u_WorldOrigin", &worldOrigin.x, 3);
-    _mainShader->SetUniform("u_FrameNo", (int)_frameNo);
-    _mainShader->SetUniform("ssbo_Metrics", *_metricsBuffer);
-    _mainShader->DispatchFullscreen();
+    _renderShader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
+    _renderShader->SetUniform("u_ProjMat", &projMat[0][0], 16);
+    _renderShader->SetUniform("u_OriginFrac", &originFrac.x, 3);
+    _renderShader->SetUniform("u_BackBuffer", *_backTex);
+    _renderShader->SetUniform("u_FrontBuffer", *_frontTex);
+    _renderShader->DispatchCompute(groupsX, groupsY, 1);
+
+    // Denoise, TAA
+    glm::vec3 originDelta = glm::vec3(camPos - _prevOrigin) - originFrac;
+    _svgfShader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
+    _svgfShader->SetUniform("u_OldProjMat", &_prevProj[0][0], 16);
+    _svgfShader->SetUniform("u_OriginFrac", &originFrac.x, 3);
+    _svgfShader->SetUniform("u_OriginDelta", &originDelta.x, 3);
+    _svgfShader->SetUniform("u_BackBuffer", *_backTex);
+    _svgfShader->SetUniform("u_FrontBuffer", *_frontTex);
+    _svgfShader->SetUniform("u_DiscardAccumSamples", worldChanged ? 1 : 0);
+
+    for (int32_t i = 0; i < 3; i++) {
+        _svgfShader->SetUniform("u_PassNo", i);
+        _svgfShader->DispatchCompute(groupsX, groupsY, 1);
+    }
+
+    // Blit to screen
+    _blitShader->SetUniform("u_BackBuffer", *_backTex);
+    _blitShader->DispatchFullscreen();
+
+    std::swap(_backTex, _frontTex);
+    _prevProj = projMat;
+    _prevOrigin = camPos;
 
     glEndQuery(GL_TIME_ELAPSED);
 

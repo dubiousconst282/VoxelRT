@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 #include <unordered_map>
 #include <functional>
@@ -173,6 +174,8 @@ struct Texture2D : public Texture {
             std::min(size.x, Width), std::min(size.y, Height), 1,
             format, type, buffer.Size, (void*)buffer.Offset);
     }
+
+    static std::unique_ptr<Texture2D> Load(std::string_view path, uint32_t mipLevels, GLenum internalFmt);
 };
 
 struct Texture3D : public Texture {

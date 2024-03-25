@@ -25,6 +25,22 @@ StbImage StbImage::Load(std::string_view path, PixelType type) {
     };
 }
 
+StbImage StbImage::Create(uint32_t width, uint32_t height) {
+    return {
+        .Width = width,
+        .Height = height,
+        .Type = PixelType::RGBA_U8,
+        .Data = { (uint8_t*)std::malloc(width * height * 4), &std::free }
+    };
+}
+
+void StbImage::SavePng(std::string_view path) {
+    if (Type != PixelType::RGBA_U8) {
+        throw std::exception("Unsupported pixel format");
+    }
+    stbi_write_png(path.data(), (int)Width, (int)Height, 4, Data.get(), (int)Width * 4);
+}
+
 namespace texutil {
 
 RgbaTexture2D LoadImage(std::string_view path, uint32_t mipLevels) {
