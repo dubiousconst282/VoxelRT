@@ -3,8 +3,8 @@
 #include <FastNoise/FastNoise.h>
 
 uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) {
-    //static auto noiseGen = FastNoise::NewFromEncodedNodeTree("EQACAAAAAAAgQBAAAAAAQBkAEwDD9Sg/DQAEAAAAAAAgQAkAAGZmJj8AAAAAPwEEAAAAAAAAAEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM3MTD4AMzMzPwAAAAA/");
-    static auto noiseGen = FastNoise::NewFromEncodedNodeTree("EQACAAAAAAAgQBAAAAAAQBkADQAEAAAAAAAgQAkAAGZmJj8AAAAAPwEEAAAAAABmZuY/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgD4ApHA9PwAAAAA/");
+    static auto noiseGen = FastNoise::NewFromEncodedNodeTree("EQACAAAAAAAgQBAAAAAAQBkAEwDD9Sg/DQAEAAAAAAAgQAkAAGZmJj8AAAAAPwEEAAAAAAAAAEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM3MTD4AMzMzPwAAAAA/");
+    //static auto noiseGen = FastNoise::NewFromEncodedNodeTree("EQACAAAAAAAgQBAAAAAAQBkADQAEAAAAAAAgQAkAAGZmJj8AAAAAPwEEAAAAAABmZuY/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgD4ApHA9PwAAAAA/");
     auto noiseBuffer = std::make_unique<float[]>(32 * 32 * 32);
 
     noiseGen->GenUniformGrid3D(noiseBuffer.get(), sectorPos.x * 32, sectorPos.y * 32 - 96, sectorPos.z * 32, 32, 32, 32, 0.004, 12345);
@@ -13,7 +13,7 @@ uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) 
 
     for (uint32_t i = 0; i < 64; i++) {
         Brick* brick = sector.GetBrick(i, true);
-        glm::ivec3 brickPos = sectorPos * BrickIndexer::Size + BrickIndexer::GetPos(i);
+        glm::ivec3 brickPos = sectorPos * MaskIndexer::Size + MaskIndexer::GetPos(i);
         bool isNonEmpty = false;
 
         brick->DispatchSIMD([&](VoxelDispatchInvocationPars& p) {
@@ -82,7 +82,7 @@ struct TerrainGenerator::RequestQueue {
 
 TerrainGenerator::TerrainGenerator(std::shared_ptr<VoxelMap> map) {
     _map = std::move(map);
-    _queue = new RequestQueue();
+    _queue = std::make_unique<RequestQueue>();
 
     uint32_t numThreads = std::max(std::thread::hardware_concurrency() * 3 / 4, 1u);
     for (uint32_t i = 0; i < numThreads; i++) {
@@ -96,7 +96,6 @@ TerrainGenerator::~TerrainGenerator() {
     _threads.clear();
 
     Log("Destroy");
-    delete _queue;
 }
 
 void TerrainGenerator::RequestSector(glm::ivec3 sectorPos) {

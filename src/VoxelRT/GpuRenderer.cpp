@@ -1,8 +1,8 @@
 #include "Renderer.h"
 #include "BrickSlotAllocator.h"
 
-static constexpr auto SectorSize = BrickIndexer::Size * VoxelIndexer::Size;
-static constexpr auto ViewSize = glm::uvec2(4096, 1024) / glm::uvec2(SectorSize);
+static constexpr auto SectorSize = MaskIndexer::Size * BrickIndexer::Size;
+static constexpr auto ViewSize = glm::uvec2(4096, 2048) / glm::uvec2(SectorSize);
 static constexpr uint32_t NumViewSectors = ViewSize.x * ViewSize.x * ViewSize.y;
 
 static const std::vector<ogl::ShaderLoadParams::PrepDef> DefaultShaderDefs = {
@@ -39,78 +39,84 @@ struct GpuVoxelStorage {
     }
 
     void SyncBuffers(VoxelMap& map) {
-        const uint32_t MaxBatchSize = 1024 * 1024 * 128 / (sizeof(Brick) * 64);
-        const uint32_t MinBricksInBuffer = 1024 * 1024 * 512 / sizeof(Brick);
+        std::vector<std::tuple<uint32_t, uint64_t>> updateBatch;
 
-        std::vector<std::tuple<uint32_t, uint64_t>> batch;
-
-        auto itr = map.DirtyLocs.begin();
         uint32_t maxSlotId = SlotAllocator.Arena.NumAllocated;
         uint32_t dirtyBricksInBatch = 0;
 
         // Allocate slots for dirty bricks
-        while (itr != map.DirtyLocs.end() && batch.size() < MaxBatchSize) {
-            auto [sectorIdx, dirtyMask] = *itr;
-
-            glm::ivec3 sectorPos = SectorIndexer::GetPos(sectorIdx);
+        for (auto [sectorIdx, dirtyMask] : map.DirtyLocs) {
+            glm::ivec3 sectorPos = WorldSectorIndexer::GetPos(sectorIdx);
             auto sectorAlloc = SlotAllocator.GetSector(sectorPos);
+            if (sectorAlloc == nullptr) continue;
 
-            if (sectorAlloc != nullptr) {
-                assert(map.Sectors.contains(sectorIdx));
-                uint64_t emptyMask = map.Sectors[sectorIdx].DeleteEmptyBricks();
+            uint64_t freeMask;
 
-                if (emptyMask != 0) {
-                    dirtyMask &= ~emptyMask;
-                    dirtyMask |= SlotAllocator.Free(sectorAlloc, emptyMask);
-                }
-                if (dirtyMask != 0) {
-                    dirtyMask |= SlotAllocator.Alloc(sectorAlloc, dirtyMask);
-                    maxSlotId = std::max(maxSlotId, sectorAlloc->BaseSlot + (uint32_t)std::popcount(sectorAlloc->AllocMask));
-                }
-                batch.push_back({ sectorIdx, dirtyMask });
+            if (map.Sectors.contains(sectorIdx)) {
+                Sector& sector = map.Sectors[sectorIdx];
+                uint64_t allocMask = sector.GetAllocationMask();
+                dirtyMask &= allocMask;
+                freeMask = sectorAlloc->AllocMask & ~allocMask;
+            } else {
+                dirtyMask = 0;
+                freeMask = ~0ull;
             }
 
-            dirtyBricksInBatch += (uint32_t)std::popcount(dirtyMask);
-            map.DirtyLocs.erase(itr++);
+            if (freeMask != 0) {
+                dirtyMask |= SlotAllocator.Free(sectorAlloc, freeMask);
+            }
+            if (dirtyMask != 0) {
+                dirtyMask |= SlotAllocator.Alloc(sectorAlloc, dirtyMask);
+                maxSlotId = std::max(maxSlotId, sectorAlloc->BaseSlot + (uint32_t)std::popcount(sectorAlloc->AllocMask));
+                dirtyBricksInBatch += (uint32_t)std::popcount(dirtyMask);
+            }
+            updateBatch.push_back({ sectorIdx, dirtyMask });
         }
+        map.DirtyLocs.clear();
+        
         // Initialize buffers
         uint32_t maxBricksInBuffer = std::bit_ceil(maxSlotId);
         size_t bufferSize = sizeof(GpuMeta) + maxBricksInBuffer * sizeof(Brick);
 
         if (StorageBuffer == nullptr || StorageBuffer->Size < bufferSize) {
-            StorageBuffer = std::make_unique<ogl::Buffer>(bufferSize, GL_MAP_WRITE_BIT);
-            OccupancyStorage = std::make_unique<ogl::Buffer>(maxBricksInBuffer * (VoxelIndexer::MaxArea / 8), 0);
+            bool isResizing = StorageBuffer != nullptr;
 
-            map.MarkAllDirty();
+            StorageBuffer = std::make_unique<ogl::Buffer>(bufferSize, GL_MAP_WRITE_BIT);
+            OccupancyStorage = std::make_unique<ogl::Buffer>(maxBricksInBuffer * (BrickIndexer::MaxArea / 8), 0);
+
+            if (isResizing || maxSlotId < 1024) {
+                map.MarkAllDirty();
+                SlotAllocator = { ViewSize };
+                return;
+            }
         }
         auto mappedStorage = StorageBuffer->Map<GpuMeta>(GL_MAP_WRITE_BIT);
         std::memcpy(mappedStorage->Palette, map.Palette, sizeof(VoxelMap::Palette));
 
-        if (dirtyBricksInBatch == 0) return;
+        if (updateBatch.empty()) return;
 
         // Upload brick data
         auto updateBuffer = ogl::Buffer(dirtyBricksInBatch * sizeof(glm::uvec3) + sizeof(UpdateRequest), GL_MAP_WRITE_BIT);
         auto updateLocs = updateBuffer.Map<UpdateRequest>(GL_MAP_WRITE_BIT);
         uint32_t updateLocIdx = 0;
 
-        for (auto [sectorIdx, dirtyMask] : batch) {
-            assert(map.Sectors.contains(sectorIdx));
-            Sector& actualSector = map.Sectors[sectorIdx];
-            glm::ivec3 sectorPos = SectorIndexer::GetPos(sectorIdx);
+        for (auto [sectorIdx, dirtyMask] : updateBatch) {
+            glm::ivec3 sectorPos = WorldSectorIndexer::GetPos(sectorIdx);
             auto sectorAlloc = SlotAllocator.GetSector(sectorPos);
 
-            for (uint32_t brickIdx : BitIter(dirtyMask)) {
-                uint32_t slotIdx = sectorAlloc->GetSlot(brickIdx) - 1;
+            if (dirtyMask != 0) {
+                Sector& sector = map.Sectors[sectorIdx];
 
-                assert(slotIdx < maxBricksInBuffer);
+                for (uint32_t brickIdx : BitIter(dirtyMask)) {
+                    uint32_t slotIdx = sectorAlloc->GetSlot(brickIdx) - 1;
+                    assert(slotIdx < maxBricksInBuffer);
 
-                Brick* brick = actualSector.GetBrick(brickIdx);
-                assert(brick != nullptr);
+                    Brick* brick = sector.GetBrick(brickIdx);
+                    mappedStorage->Bricks[slotIdx] = *brick;
 
-                mappedStorage->Bricks[slotIdx] = *brick;
-
-                glm::uvec3 brickPos = sectorPos * BrickIndexer::Size + BrickIndexer::GetPos(brickIdx);
-                updateLocs->BrickLocs[updateLocIdx++] = brickPos;
+                    glm::uvec3 brickPos = sectorPos * MaskIndexer::Size + MaskIndexer::GetPos(brickIdx);
+                    updateLocs->BrickLocs[updateLocIdx++] = brickPos;
+                }
             }
 
             // Also update sector metadata while we have it in hand.
@@ -125,12 +131,6 @@ struct GpuVoxelStorage {
                 sectorOccMask |= (1ull << sectorOccIdx);
             } else {
                 sectorOccMask &= ~(1ull << sectorOccIdx);
-            }
-
-            // Erase from memory if empty
-            if (actualSector.GetAllocationMask() == 0) {
-                assert(sectorAlloc->AllocMask == 0);
-                map.Sectors.erase(sectorIdx);
             }
         }
 
@@ -227,8 +227,11 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     _renderShader->SetUniform("u_OriginFrac", &originFrac.x, 3);
     _renderShader->SetUniform("u_BackBuffer", *_backTex);
     _renderShader->SetUniform("u_FrontBuffer", *_frontTex);
+    _renderShader->SetUniform("u_DebugView", (int)_debugView);
     _renderShader->DispatchCompute(groupsX, groupsY, 1);
 
+    glEndQuery(GL_TIME_ELAPSED);
+    
     // Denoise, TAA
     glm::vec3 originDelta = glm::vec3(camPos - _prevOrigin) - originFrac;
     _svgfShader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
@@ -252,7 +255,6 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     _prevProj = projMat;
     _prevOrigin = camPos;
 
-    glEndQuery(GL_TIME_ELAPSED);
 
     _frameNo++;
 }
@@ -265,7 +267,15 @@ void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
     _frameTime.Draw("Frame Time");
 
     auto totalIters = _metricsBuffer->Map<uint32_t>(GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
-    ImGui::Text("Traversal Iters: %.3fM", *totalIters / 1000000.0);
+    if (_backTex != nullptr) {
+        double frameMs, frameDevMs;
+        _frameTime.GetElapsedMs(frameMs, frameDevMs);
+
+        int raysPerPixel = _debugView == DebugView::None ? 3 : 1;
+        double raysPerSec = _backTex->Width * _backTex->Height * (1000 / frameMs) * raysPerPixel;
+
+        ImGui::Text("Traversal Iters: %.3fM (%.2fM rays/sec)", *totalIters / 1000000.0, raysPerSec / 1000000.0);
+    }
     *totalIters = 0;
 
     if (_storage->StorageBuffer != nullptr) {

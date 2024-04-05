@@ -8,13 +8,12 @@
 
 #include "Renderer.h"
 
-// 1024³ bricks
 // Cannot be > 2048*512*2048 because memory index is signed 32-bits
 using ViewSectorIndexer =
-    LinearIndexer3D<11 - BrickIndexer::ShiftXZ - VoxelIndexer::ShiftXZ,
-                    9 - BrickIndexer::ShiftY - VoxelIndexer::ShiftY, false>;
+    LinearIndexer3D<11 - MaskIndexer::ShiftXZ - BrickIndexer::ShiftXZ,
+                    9 - MaskIndexer::ShiftY - BrickIndexer::ShiftY, false>;
 
-using Level0Indexer = LinearIndexer3D<VoxelIndexer::ShiftXZ - 2, VoxelIndexer::ShiftY - 2, false>;
+using BrickMaskIndexer = LinearIndexer3D<BrickIndexer::ShiftXZ - 2, BrickIndexer::ShiftY - 2, false>;
 
 struct FlatVoxelStorage {
     std::unique_ptr<uint8_t[]> StorageBuffer;
@@ -23,48 +22,42 @@ struct FlatVoxelStorage {
     Material Palette[256];
 
     FlatVoxelStorage() {
-        size_t storageCap = ViewSectorIndexer::MaxArea * (BrickIndexer::MaxArea * VoxelIndexer::MaxArea);
+        size_t storageCap = ViewSectorIndexer::MaxArea * (MaskIndexer::MaxArea * BrickIndexer::MaxArea);
         // TODO: implement sparse memory alloc using VirtualAlloc? page remapping could also be useful for something
         StorageBuffer = std::make_unique<uint8_t[]>(storageCap);
         OccupancyStorage = std::make_unique<uint64_t[]>(storageCap / 64);
     }
 
     void SyncBuffers(VoxelMap& map) {
-        auto itr = map.DirtyLocs.begin();
-
-        // Allocate slots for dirty bricks
-        while (itr != map.DirtyLocs.end()) {
-            auto [sectorIdx, dirtyMask] = *itr;
-            auto& sector = map.Sectors[sectorIdx];
-
-            uint64_t emptyMask = sector.DeleteEmptyBricks();
-            uint64_t allocMask = sector.GetAllocationMask();
-
-            glm::ivec3 sectorPos = SectorIndexer::GetPos(sectorIdx);
-
-            if (ViewSectorIndexer::CheckInBounds(sectorPos)) {
-                uint32_t sectorViewIdx = ViewSectorIndexer::GetIndex(sectorPos);
-
-                for (uint32_t brickIdx : BitIter(allocMask)) {
-                    uint32_t storageOffset = sectorViewIdx * (sizeof(Brick) * 64) + brickIdx * sizeof(Brick);
-
-                    Brick* brick = sector.GetBrick(brickIdx);
-                    std::memcpy(&StorageBuffer[storageOffset], brick, sizeof(Brick));
-                    UpdateOccupancy(brick, storageOffset / 64);
-                }
-                SectorMasks[sectorViewIdx] = allocMask;
-            }
-
-            if (allocMask == 0) {
-                map.Sectors.erase(sectorIdx);
-            }
-            map.DirtyLocs.erase(itr++);
-        }
         std::memcpy(Palette, map.Palette, sizeof(Palette));
+
+        for (auto [sectorIdx, dirtyMask] : map.DirtyLocs) {
+            glm::ivec3 sectorPos = WorldSectorIndexer::GetPos(sectorIdx);
+            if (!ViewSectorIndexer::CheckInBounds(sectorPos)) continue;
+
+            uint32_t sectorViewIdx = ViewSectorIndexer::GetIndex(sectorPos);
+            if (!map.Sectors.contains(sectorIdx)) {
+                SectorMasks[sectorViewIdx] = 0;
+                continue;
+            }
+
+            Sector& sector = map.Sectors[sectorIdx];
+            uint64_t allocMask = sector.GetAllocationMask();
+            SectorMasks[sectorViewIdx] = allocMask;
+
+            for (uint32_t brickIdx : BitIter(dirtyMask & allocMask)) {
+                uint32_t storageOffset = sectorViewIdx * (sizeof(Brick) * 64) + brickIdx * sizeof(Brick);
+
+                Brick* brick = sector.GetBrick(brickIdx);
+                std::memcpy(&StorageBuffer[storageOffset], brick, sizeof(Brick));
+                UpdateOccupancy(brick, storageOffset / 64);
+            }
+        }
+        map.DirtyLocs.clear();
     }
 
     void UpdateOccupancy(Brick* brick, uint32_t storageOffset) {
-        const uint32_t BrickSize = VoxelIndexer::SizeXZ;
+        const uint32_t BrickSize = BrickIndexer::SizeXZ;
 
         uint64_t* cells = &OccupancyStorage[storageOffset];
 
@@ -77,10 +70,10 @@ struct FlatVoxelStorage {
             for (uint32_t vy = 0; vy < 4; vy++)
             for (uint32_t vz = 0; vz < 4; vz++)
             for (uint32_t vx = 0; vx < 4; vx++) {
-                bool occupied = !brick->Data[VoxelIndexer::GetIndex(cx + vx, cy + vy, cz + vz)].IsEmpty();
+                bool occupied = !brick->Data[BrickIndexer::GetIndex(cx + vx, cy + vy, cz + vz)].IsEmpty();
                 mask |= uint64_t(occupied) << (vx + vz * 4 + vy * 16);
             }
-            cells[Level0Indexer::GetIndex(glm::uvec3(cx, cy, cz) / 4u)] = mask;
+            cells[BrickMaskIndexer::GetIndex(glm::uvec3(cx, cy, cz) / 4u)] = mask;
         }
     }
 };
@@ -105,8 +98,8 @@ struct HitInfo {
     VFloat GetEmissionStrength() const { return conv2f((MaterialData >> 16) & 15) * (7.0f / 15); }
 };
 
-static const uint32_t SectorVoxelShiftXZ = BrickIndexer::ShiftXZ + VoxelIndexer::ShiftXZ;
-static const uint32_t SectorVoxelShiftY = BrickIndexer::ShiftY + VoxelIndexer::ShiftY;
+static const uint32_t SectorVoxelShiftXZ = MaskIndexer::ShiftXZ + BrickIndexer::ShiftXZ;
+static const uint32_t SectorVoxelShiftY = MaskIndexer::ShiftY + BrickIndexer::ShiftY;
 
 // Creates mask for voxel coords that are inside the brick map.
 static VMask GetInboundMask(VInt x, VInt y, VInt z) {
@@ -117,8 +110,8 @@ static VMask GetInboundMask(VInt x, VInt y, VInt z) {
 // 2 dependent gathers: >=50 latency + index calc
 static VInt GetVoxelMaterial(const FlatVoxelStorage& map, VInt3 pos, VMask mask) {
     VInt sectorIdx = ViewSectorIndexer::GetIndex(pos.x >> SectorVoxelShiftXZ, pos.y >> SectorVoxelShiftY, pos.z >> SectorVoxelShiftXZ);
-    VInt maskIdx = BrickIndexer::GetIndex(pos.x >> VoxelIndexer::ShiftXZ, pos.y >> VoxelIndexer::ShiftY, pos.z >> VoxelIndexer::ShiftXZ);
-    VInt voxelIdx = VoxelIndexer::GetIndex(pos.x,pos.y,pos.z);
+    VInt maskIdx = MaskIndexer::GetIndex(pos.x >> BrickIndexer::ShiftXZ, pos.y >> BrickIndexer::ShiftY, pos.z >> BrickIndexer::ShiftXZ);
+    VInt voxelIdx = BrickIndexer::GetIndex(pos.x,pos.y,pos.z);
 
     VInt slotIdx = sectorIdx*(sizeof(Brick)*64) + maskIdx*sizeof(Brick) + voxelIdx;
 
@@ -136,16 +129,16 @@ static VMask GetStepPos(const FlatVoxelStorage& map, VInt3& pos, VFloat3 dir, VM
     VInt mask_0 = VInt::mask_gather<8>((uint8_t*)map.SectorMasks + 0, sectorIdx, mask);
     VInt mask_32 = VInt::mask_gather<8>((uint8_t*)map.SectorMasks + 4, sectorIdx, mask);
 
-    VInt maskIdx = BrickIndexer::GetIndex(pos.x >> VoxelIndexer::ShiftXZ, pos.y >> VoxelIndexer::ShiftY, pos.z >> VoxelIndexer::ShiftXZ);
+    VInt maskIdx = MaskIndexer::GetIndex(pos.x >> BrickIndexer::ShiftXZ, pos.y >> BrickIndexer::ShiftY, pos.z >> BrickIndexer::ShiftXZ);
     VInt currMask = csel(maskIdx < 32, mask_0, mask_32);
     VMask level0 = (currMask >> (maskIdx & 31) & 1) != 0;
     VInt lod = 3;
 
     if (simd::any(level0)) {
         VInt cellIdx = (sectorIdx*(sizeof(Brick)*64) + maskIdx*sizeof(Brick))>>6;
-        cellIdx += Level0Indexer::GetIndex(pos.x >> 2, pos.y >> 2, pos.z >> 2);
+        cellIdx += BrickMaskIndexer::GetIndex(pos.x >> 2, pos.y >> 2, pos.z >> 2);
 
-        set_if(level0, maskIdx, BrickIndexer::GetIndex(pos.x, pos.y, pos.z));
+        set_if(level0, maskIdx, MaskIndexer::GetIndex(pos.x, pos.y, pos.z));
         set_if(level0, lod, 0);
 
         set_if(level0, mask_0, VInt::mask_gather<8>((uint8_t*)map.OccupancyStorage.get() + 0, cellIdx, mask & level0));
@@ -193,9 +186,9 @@ static HitInfo RayCast(const FlatVoxelStorage& map, VFloat3 origin, VFloat3 dir,
         if (!any(activeMask)) break;
 
         voxelPos -= worldOrigin;
-        sideDist.x = csel(activeMask, tStart.x + conv2f(voxelPos.x) * invDir.x, sideDist.x);
-        sideDist.y = csel(activeMask, tStart.y + conv2f(voxelPos.y) * invDir.y, sideDist.y);
-        sideDist.z = csel(activeMask, tStart.z + conv2f(voxelPos.z) * invDir.z, sideDist.z);
+        set_if(activeMask, sideDist.x, tStart.x + conv2f(voxelPos.x) * invDir.x);
+        set_if(activeMask, sideDist.y, tStart.y + conv2f(voxelPos.y) * invDir.y);
+        set_if(activeMask, sideDist.z, tStart.z + conv2f(voxelPos.z) * invDir.z);
 
         VFloat tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001f;
         currPos = origin + tmin * dir;

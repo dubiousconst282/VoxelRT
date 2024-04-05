@@ -28,7 +28,10 @@ uint64_t BrickSlotAllocator::Free(SectorInfo* sector, uint64_t mask) {
     uint32_t currSize = (uint32_t)std::popcount(sector->AllocMask);
     uint32_t newSize = (uint32_t)std::popcount(newMask);
     Arena.Free(sector->BaseSlot + newSize, currSize - newSize);
-    
+
+    if (newMask == 0) {
+        sector->BaseSlot = 0;
+    }
     sector->AllocMask = newMask;
 
     return newMask;

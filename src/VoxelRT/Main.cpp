@@ -30,14 +30,9 @@ public:
         _shaderLib = std::make_unique<ogl::ShaderLib>("src/VoxelRT/Shaders/", true);
 
         _map = std::make_shared<VoxelMap>();
-        _map->Palette[251] = Material::CreateDiffuse({ 0.3, 0.6, 0.25 }, 0.0f);
-        _map->Palette[252] = Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
-        _map->Palette[253] = Material::CreateDiffuse({ 0.2, 1, 0.2 }, 0.9f);
-        _map->Palette[254] = Material::CreateDiffuse({ 0.2, 0.2, 1 }, 0.9f);
-        _map->Palette[255] = Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
 
         try {
-            _map->Deserialize("logs/voxels_2k_bistro.dat");
+            _map->Deserialize("logs/voxels_2k.dat");
         } catch (std::exception& ex) {
             std::cout << "Failed to load voxel map cache: " << ex.what() << std::endl;
 
@@ -46,20 +41,26 @@ public:
             // auto model = glim::Model("logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf");
             // auto model = glim::Model("logs/assets/models/DamagedHelmet/DamagedHelmet.gltf");
 
-            _map->VoxelizeModel(model, glm::uvec3(16), glm::uvec3(2048-16));
+            _map->VoxelizeModel(model, glm::uvec3(0), glm::uvec3(2048));
 
             _map->Serialize("logs/voxels_2k.dat");
         }
 
+        _map->Palette[251] = Material::CreateDiffuse({ 0.3, 0.6, 0.25 }, 0.0f);
+        _map->Palette[252] = Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
+        _map->Palette[253] = Material::CreateDiffuse({ 0.2, 1, 0.2 }, 0.9f);
+        _map->Palette[254] = Material::CreateDiffuse({ 0.2, 0.2, 1 }, 0.9f);
+        _map->Palette[255] = Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
+
         _terrainGen = std::make_unique<TerrainGenerator>(_map);
-        for (size_t y = 0; y < 12; y++) {
-            for (size_t z = 0; z < 32; z++) {
-                for (size_t x = 0; x < 32; x++) {
-                    //_terrainGen->RequestSector(glm::ivec3(x, y, z));
+        for (size_t y = 0; y < 7; y++) {
+            for (size_t z = 0; z < 24; z++) {
+                for (size_t x = 0; x < 24; x++) {
+                    _terrainGen->RequestSector(glm::ivec3(x, y, z));
                 }
             }
         }
-         _terrainGen->RequestSector(glm::ivec3(1, 3, 1));
+        _terrainGen->RequestSector(glm::ivec3(1, 3, 1));
 
         _map->Set(glm::ivec3(3, 5, 3), Voxel::Create(255));
         _map->Set(glm::ivec3(4, 6, 3), Voxel::Create(254));
@@ -85,7 +86,7 @@ public:
             auto [sectorPos, sector] = _terrainGen->Poll();
             if (sector == nullptr) break;
 
-            uint32_t sectorIdx = SectorIndexer::GetIndex(sectorPos);
+            uint32_t sectorIdx = WorldSectorIndexer::GetIndex(sectorPos);
             _map->DirtyLocs[sectorIdx] = sector->GetAllocationMask();
             _map->Sectors[sectorIdx] = std::move(*sector);
         }
@@ -151,7 +152,7 @@ public:
         }
 
         glm::ivec3 brushPos = glm::floor(_cam.ViewPosition + glm::dvec3(dir) * brushDist);
-        int32_t radius = 30;
+        int32_t radius = erase ? 160 : 30;
 
         _map->RegionDispatchSIMD(brushPos - radius, brushPos + radius, true, [&](VoxelDispatchInvocationPars& pars) {
             VInt dx = pars.X - brushPos.x, dy = pars.Y - brushPos.y, dz = pars.Z - brushPos.z;
@@ -171,6 +172,7 @@ int main(int argc, char** args) {
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, 1);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "VoxelRT", NULL, NULL);
+    //GLFWwindow* window = glfwCreateWindow(960, 540, "VoxelRT", NULL, NULL);
     if (!window) {
         glfwTerminate();
         return -1;

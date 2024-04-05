@@ -84,9 +84,9 @@ struct LinearIndexer3D {
     }
 };
 
-using SectorIndexer = LinearIndexer3D<12, 8, true>;     // Map -> Sector
-using BrickIndexer = LinearIndexer3D<2, 2, false>;      // Sector -> Brick
-using VoxelIndexer = LinearIndexer3D<3, 3, false>;      // Brick -> Voxel
+using WorldSectorIndexer = LinearIndexer3D<12, 8, true>;
+using MaskIndexer = LinearIndexer3D<2, 2, false>;      // 4x4x4 64-bit masks
+using BrickIndexer = LinearIndexer3D<3, 3, false>;
 
 struct VoxelDispatchInvocationPars {
     VInt X, Y, Z;
@@ -95,9 +95,9 @@ struct VoxelDispatchInvocationPars {
 };
 
 struct Brick {
-    static constexpr glm::ivec3 Size = VoxelIndexer::Size;
+    static constexpr glm::ivec3 Size = BrickIndexer::Size;
 
-    Voxel Data[VoxelIndexer::MaxArea] = {};
+    Voxel Data[BrickIndexer::MaxArea] = {};
 
     bool IsEmpty() const;
 
@@ -107,22 +107,22 @@ struct Brick {
         bool dirty = false;
         VoxelDispatchInvocationPars p;
 
-        for (uint32_t i = 0; i < VoxelIndexer::MaxArea; i += VInt::Length) {
-            static_assert(VInt::Length <= VoxelIndexer::MaxArea);
+        for (uint32_t i = 0; i < BrickIndexer::MaxArea; i += VInt::Length) {
+            static_assert(VInt::Length <= BrickIndexer::MaxArea);
 
             VInt vi = (int32_t)i + simd::RampI;
-            p.X = (basePos.x * VoxelIndexer::SizeXZ) + (vi & VoxelIndexer::MaskXZ);
-            p.Z = (basePos.z * VoxelIndexer::SizeXZ) + (vi >> VoxelIndexer::ShiftXZ & VoxelIndexer::MaskXZ);
-            p.Y = (basePos.y * VoxelIndexer::SizeY) + (vi >> (VoxelIndexer::ShiftXZ * 2));
+            p.X = (basePos.x * BrickIndexer::SizeXZ) + (vi & BrickIndexer::MaskXZ);
+            p.Z = (basePos.z * BrickIndexer::SizeXZ) + (vi >> BrickIndexer::ShiftXZ & BrickIndexer::MaskXZ);
+            p.Y = (basePos.y * BrickIndexer::SizeY) + (vi >> (BrickIndexer::ShiftXZ * 2));
             p.GroupBaseIdx = i;
 
-#ifdef SIMD_AVX512
+#ifdef __AVX512F__
             p.VoxelIds = _mm512_cvtepu8_epi32(_mm_loadu_epi8(&Data[i]));
             if (fn(p)) {
                 _mm_storeu_epi8(&Data[i], _mm512_cvtepi32_epi8(p.VoxelIds));
                 dirty = true;
             }
-#elif SIMD_AVX2
+#else
             p.VoxelIds = _mm256_cvtepu8_epi32(_mm_loadu_si64(&Data[i]));
             if (fn(p)) {
                 auto tmp = _mm_packus_epi32(_mm256_extracti128_si256(p.VoxelIds, 0), _mm256_extracti128_si256(p.VoxelIds, 1));
@@ -140,7 +140,7 @@ struct Brick {
 //      - makes accesses difficult, need Get/Set, Gather/Scatter APIs
 //      - makes palette sharing difficult, but sector is 32³ so global sharing might still be reasonable
 struct Sector {
-    static_assert(BrickIndexer::MaxArea == 64);
+    static_assert(MaskIndexer::MaxArea == 64);
 
     std::vector<Brick> Storage;
     uint8_t BrickSlots[64]{};
@@ -156,8 +156,8 @@ struct Sector {
 };
 
 struct VoxelMap {
-    static constexpr glm::ivec3 MinPos = SectorIndexer::MinPos * BrickIndexer::Size * VoxelIndexer::Size;
-    static constexpr glm::ivec3 MaxPos = SectorIndexer::MaxPos * BrickIndexer::Size * VoxelIndexer::Size;
+    static constexpr glm::ivec3 MinPos = WorldSectorIndexer::MinPos * MaskIndexer::Size * BrickIndexer::Size;
+    static constexpr glm::ivec3 MaxPos = WorldSectorIndexer::MaxPos * MaskIndexer::Size * BrickIndexer::Size;
 
     std::unordered_map<uint32_t, Sector> Sectors;
     std::map<uint32_t, uint64_t> DirtyLocs;         // 4x4x4 masks of dirty bricks
@@ -167,28 +167,26 @@ struct VoxelMap {
     Brick* GetBrick(glm::ivec3 pos, bool create = false, bool markAsDirty = false);
 
     Voxel Get(glm::ivec3 pos) {
-        Brick* brick = GetBrick(pos >> VoxelIndexer::Shift);
-        return brick ? brick->Data[VoxelIndexer::GetIndex(pos)] : Voxel::CreateEmpty();
+        Brick* brick = GetBrick(pos >> BrickIndexer::Shift);
+        return brick ? brick->Data[BrickIndexer::GetIndex(pos)] : Voxel::CreateEmpty();
     }
     void Set(glm::ivec3 pos, Voxel voxel) {
-        Brick* brick = GetBrick(pos >> VoxelIndexer::Shift, true, true);
+        Brick* brick = GetBrick(pos >> BrickIndexer::Shift, true, true);
         if (brick == nullptr) return; // out of bounds
 
-        uint32_t idx = VoxelIndexer::GetIndex(pos);
+        uint32_t idx = BrickIndexer::GetIndex(pos);
         brick->Data[idx] = voxel;
     }
     static bool CheckInBounds(glm::ivec3 pos) {
-        pos >>= (VoxelIndexer::Shift + BrickIndexer::Shift);
-        return SectorIndexer::CheckInBounds(pos);
+        pos >>= (BrickIndexer::Shift + MaskIndexer::Shift);
+        return WorldSectorIndexer::CheckInBounds(pos);
     }
 
     void MarkAllDirty() {
         for (auto& [idx, sector] : Sectors) {
-            DirtyLocs[idx] |= sector.GetAllocationMask();
+            DirtyLocs[idx] = sector.GetAllocationMask();
         }
     }
-    // Gets and unmarks the position of the next dirty brick.
-    bool PopDirty(glm::ivec3& pos);
 
     // Slow scalar raycaster intended for picking and stuff.
     // Returns hit distance or -1 if no hit was found.
@@ -202,20 +200,43 @@ struct VoxelMap {
     // Iterates over bricks within the specified region (in voxel coords).
     template<typename F>
     void RegionDispatchSIMD(glm::ivec3 regionMin, glm::ivec3 regionMax, bool createEmpty, F fn) {
-        glm::ivec3 brickMin = glm::max(regionMin >> glm::ivec3(VoxelIndexer::Shift), MinPos);
-        glm::ivec3 brickMax = glm::min(regionMax >> glm::ivec3(VoxelIndexer::Shift), MaxPos);
+        glm::ivec3 brickMin = glm::max(regionMin >> glm::ivec3(BrickIndexer::Shift), MinPos);
+        glm::ivec3 brickMax = glm::min(regionMax >> glm::ivec3(BrickIndexer::Shift), MaxPos);
+
+        std::unordered_map<uint32_t, uint64_t> emptyBricks;
 
         for (int32_t by = brickMin.y; by <= brickMax.y; by++) {
             for (int32_t bz = brickMin.z; bz <= brickMax.z; bz++) {
                 for (int32_t bx = brickMin.x; bx <= brickMax.x; bx++) {
                     glm::ivec3 brickPos = glm::ivec3(bx, by, bz);
                     Brick* brick = GetBrick(brickPos, createEmpty);
+                    if (brick == nullptr) continue;
 
-                    if (brick != nullptr && brick->DispatchSIMD(fn, brickPos)) {
-                        uint32_t sectionIdx = SectorIndexer::GetIndex(brickPos >> BrickIndexer::Shift);
-                        DirtyLocs[sectionIdx] |= 1ull << BrickIndexer::GetIndex(brickPos);
+                    bool changed = brick->DispatchSIMD(fn, brickPos);
+                    bool isEmpty = brick->IsEmpty();
+
+                    if (changed || isEmpty) {
+                        uint32_t sectorIdx = WorldSectorIndexer::GetIndex(brickPos >> MaskIndexer::Shift);
+                        uint64_t brickMask = 1ull << MaskIndexer::GetIndex(brickPos);
+
+                        DirtyLocs[sectorIdx] |= brickMask;
+
+                        if (isEmpty) {
+                            emptyBricks[sectorIdx] |= brickMask;
+                        }
                     }
                 }
+            }
+        }
+
+        // Garbage collect
+        for (auto [sectorIdx, emptyMask] : emptyBricks) {
+            Sector& sector = Sectors[sectorIdx];
+
+            if ((sector.GetAllocationMask() & ~emptyMask) != 0) {
+                sector.DeleteBricks(emptyMask);
+            } else {
+                Sectors.erase(sectorIdx);
             }
         }
     }

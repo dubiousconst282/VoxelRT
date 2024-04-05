@@ -25,7 +25,7 @@ private:
     struct RequestQueue;
 
     std::shared_ptr<VoxelMap> _map;
-    RequestQueue* _queue;  // can't use unique_ptr on forward types
+    std::unique_ptr<RequestQueue> _queue;
     std::vector<std::jthread> _threads;
 
     void WorkerFn();

@@ -96,16 +96,16 @@ uint32_t Sector::GetBrickIndexFromSlot(uint64_t allocMask, uint32_t slotIdx) {
 }
 
 Brick* VoxelMap::GetBrick(glm::ivec3 pos, bool create, bool markAsDirty) {
-    glm::uvec3 sectorPos = pos >> BrickIndexer::Shift;
+    glm::uvec3 sectorPos = pos >> MaskIndexer::Shift;
 
-    if (!SectorIndexer::CheckInBounds(sectorPos)) {
+    if (!WorldSectorIndexer::CheckInBounds(sectorPos)) {
         return nullptr;
     }
 
     // TODO: global brick lookups aren't supposed to be glowing hot but it could be worth
     //       doing a single entry LRU cache (eg. lastBrickIdx + lackBrickPtr) to minimize hash lookups
-    uint32_t sectorIdx = SectorIndexer::GetIndex(sectorPos);
-    uint32_t brickIdx = BrickIndexer::GetIndex(pos);
+    uint32_t sectorIdx = WorldSectorIndexer::GetIndex(sectorPos);
+    uint32_t brickIdx = MaskIndexer::GetIndex(pos);
     Sector* sector = nullptr;
 
     if (auto iter = Sectors.find(sectorIdx); iter != Sectors.end()) {
@@ -120,23 +120,6 @@ Brick* VoxelMap::GetBrick(glm::ivec3 pos, bool create, bool markAsDirty) {
         DirtyLocs[sectorIdx] |= 1ull << brickIdx;
     }
     return sector->GetBrick(brickIdx, true);
-}
-
-bool VoxelMap::PopDirty(glm::ivec3& pos) {
-    auto iter = DirtyLocs.begin();
-    if (iter == DirtyLocs.end()) return false;
-
-    uint32_t brickIdx = (uint32_t)std::countr_zero(iter->second);
-    pos = SectorIndexer::GetPos(iter->first);
-    pos = pos * BrickIndexer::Size + BrickIndexer::GetPos(brickIdx);
-
-    iter->second &= ~(1ull << brickIdx);
-    if (iter->second == 0) {
-        DirtyLocs.erase(iter);
-    }
-
-    assert(GetBrick(pos) != nullptr);
-    return true;
 }
 
 static glm::dvec3 GetSideDist(glm::dvec3 pos, glm::dvec3 dir) {

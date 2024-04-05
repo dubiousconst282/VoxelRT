@@ -13,7 +13,7 @@ const uint MAX_BOUNCES = 2;
 #include "GBuffer.glsl"
 
 vec3 getSkyColor(vec3 dir) {
-    return vec3(0.8, 0.9, 0.96) * 2.5;
+    return vec3(0.8, 0.9, 0.96) * 3.0;
 }
 
 layout(local_size_x = 8, local_size_y = 8) in;
