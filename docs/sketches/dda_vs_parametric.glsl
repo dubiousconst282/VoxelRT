@@ -56,8 +56,8 @@ vec4 trace(vec3 rayPos, vec3 rayDir, bool useDDA) {
             sideDist = tStart + vec3(voxelPos) * invDir;
             float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
             
-            if (true) {
-                // accurate stepping
+            if (false) {
+                // accurate stepping (doesn't always work, ray gets stuck in some rare occasions)
                 vec3 currPos = rayPos + tmin * rayDir;
             
                 bvec3 sideMask = equal(sideDist, vec3(tmin));

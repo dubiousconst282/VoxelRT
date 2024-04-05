@@ -42,7 +42,7 @@ The classic way to ray trace voxels is by using the [Fast Voxel Traversal](https
 
 Acceleration techniques based on space skipping relies on the ray tracer being able to step by variable amounts, which is not trivial to implement in the incremental DDA efficiently - most approaches I have seen are hybrids that look somewhat susceptible to thread divergence, like switching between ray marching and DDA, or nesting multi-level DDAs (which actually seems to be used by Teardown, so it's probably not that bad?).
 
-On modern (decades old) hardware, floating-point multiply-adds are equally as cheap as individual adds or multiplies, so calculating the side distances per iteration isn't as much of a big deal as when the incremental algorithm was developed. Much like in the [slab AABB intersection algorithm](https://en.wikipedia.org/wiki/Slab_method), these distances can be computed efficiently by solving the parametric equation `P(t) = origin + dir * t`.
+On modern (decades old) hardware, floating-point multiply-adds are equally as cheap as individual adds or multiplies, so calculating the side distances per iteration isn't as much of a big deal as when the incremental algorithm was developed. Much like in the [slab AABB intersection algorithm](https://en.wikipedia.org/wiki/Slab_method), these distances can be computed efficiently by solving for the parametric equation `P(t) = origin + dir * t`.
 
 This yields a relatively compact tracing function, that is actually slightly faster than the [incremental DDA](https://www.shadertoy.com/view/4dX3zl) even without any acceleration structures - or at least that's what my very [precarious benchmark](./sketches/dda_vs_parametric.glsl) suggests.
 
@@ -54,20 +54,17 @@ bool rayTrace(vec3 origin, vec3 dir, out HitInfo hit) {
 
     for (uint i = 0; i < MAX_TRAVERSAL_ITERS; i++) {
         vec3 sideDist = tStart + vec3(voxelPos) * invDir;
-        float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
+        float tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001;
         vec3 currPos = origin + tmin * dir;
-
-        // Add bias to ensure integer pos is rounded to correct side. 
-        // Clearer as `voxelPos += sign(dir) * sideMask`, but this seems
-        // to work well and compiles down to 3x conditional MADs.
-        bvec3 sideMask = equal(sideDist, vec3(tmin));
-        vec3 biasedPos = mix(currPos, currPos + dir * 0.01, sideMask);
-        voxelPos = ivec3(floor(biasedPos));
+        
+        voxelPos = ivec3(floor(currPos));
 
         if (!isInBounds(voxelPos)) break;
         if (!getStepPos(voxelPos, dir)) {
             hit.mat = getVoxelMaterial(voxelPos);
             hit.pos = currPos;
+            
+            bvec3 sideMask = greaterThanEqual(vec3(tmin), sideDist);
             hit.uv = fract(mix(currPos.xz, currPos.yy, sideMask.xz));
             hit.norm = mix(vec3(0), -sign(dir), sideMask);
             return true;
@@ -83,8 +80,10 @@ bool getStepPos(inout ivec3 pos, vec3 dir) {
 ```
 
 A few notes:
-- The bias added to `currPos` is needed to ensure that the position always crosses through voxel boundaries, otherwise the ray will get stuck. A slightly faster but less precise alternative is to bias `tmin` directly by adding a small value (e.g. `0.001`), although that is very susceptible to floating-point precision limitations - a high bias will lead to more artifacts around voxel edges (due to hit misses), and a too small one will get rounded off on big values and have no effect.
-- The ray origin should be keept close to 0,0,0 to maximize available float precision, translation should be applied to the integer voxel coordinates instead. I've done this by keeping the view-projection matrix at `fract(actualCameraPos)` and offseting `voxelPos` by `floor(actualCameraPos)`, an ivec3 uniform passed to the shader.
+- The bias added to `tmin` is to workaround float precision limitations and ensure that the position always crosses through voxel boundaries, otherwise the ray will get stuck. This unfortunately leads to some artifacts around voxel edges (due to hit misses) that are especially visible at close-ups.
+  - Another way to bias is to instead increment `voxelPos` by `sign(dir)` depending on `sideMask`. This eliminates all edge artifacts but doesn't prevent rays from getting stuck as coordiantes get bigger (leads to isolated pixel-size misses).
+  - The [ESVO] implementation steps by manipulating the binary float representation directly, which presumably avoids any such issues, at the cost of being much harder to follow.
+- The ray origin should be keept close to 0,0,0 to maximize available float precision, translation should be applied to the world instead (integer voxel coordinates). This can be done by offseting both `voxelPos` by `floor(actualCameraPos)` and ray origin by `fract(actualCameraPos)`. Translating the view-projection matrix instead of ray origin by the fraction will cause noticeable jittering artifacts when FOV is too low and mess up with temporal reprojection (mat4 precision seems to be way lower than I thought?).
 - Rays originating from outside the grid need to be clipped to the grid bounds using an [AABB intersection algorithm](https://en.wikipedia.org/wiki/Slab_method).
 
 ## Acceleration structures
@@ -169,7 +168,7 @@ Ultimately, DFs are not quite well suitable for dynamic voxel scenes because mut
 distance fields on a parallel stream processor](https://www.sciencedirect.com/science/article/abs/pii/S0743731507001177)
 - [PC94]: [Proximity clouds — an acceleration technique for 3D grid traversal](https://link.springer.com/article/10.1007/BF01900697)
 
-[RDT00] and [ADT07] propose and interesting extension of DFs that helps mitigate the convergence issue around rays that are nearly parallel to voxels by building multiple DFs, each considering only voxels ahead of a specific direction octant. They are not very practical due to memory requirements.
+[RDT00] and [ADT07] propose an interesting extension of DFs that helps mitigate the convergence issue around rays that are nearly parallel to voxels by building multiple DFs, each considering only voxels ahead of a specific direction octant. The memory and generation costs makes them not very practical for bigger scenes.
 
 **Parabolic Euclidean Distance Transform:**
 - https://prideout.net/blog/distance_fields/
@@ -209,7 +208,7 @@ uint getOccupancy(ivec3 pos, int k) {
 }
 ```
 
-An obvious inefficiency with this code is that it needs to search for the highest non-occupied mip from scratch on every iteration. The [ESVO](#sparse-voxel-octrees-svos) paper shows an implementation that uses a stack to enter and leave octree nodes, but a similar optimization can be done more easily here by inlining getStepPos() and preserving the mip-level `k` between iterations, so the search can continue at the level found in the previous iteration. This also has the nice bonus that voxel materials only need to be queried at the end of traversal, saving precious memory bandwidth.
+An obvious inefficiency with this code is that it needs to search for the highest non-occupied mip from scratch on every iteration. The [ESVO](#sparse-voxel-octrees-svos) paper proposes the use of a stack to enter and leave octree nodes, but a similar optimization can be done more easily here by inlining getStepPos() and preserving the mip-level `k` between iterations, so the search can continue at the level found in the previous iteration. This also has the nice bonus that voxel materials only need to be queried at the end of traversal, saving precious memory bandwidth.
 
 ```glsl
     int k = 3; // arbitrary initial level
@@ -278,17 +277,23 @@ Chunking is a simple and fast way to store voxels by dividing the world into fix
 
 Minecraft uses "2D" chunks that represents vertical columns of 16³ sections, which might be more efficient when using a top-level hashmap on short worlds.
 
-### My attempt: 2-level brickmap with tiled occupancy masks
-I settled for a 2-level brickmap of 8³ bricks within 4³ sectors. (8³ feels a bit too small so might change it to 16³ at some point, or maybe add another LOD level.)
+---
 
-For GPU storage, I use a single buffer and a [free list](https://en.wikipedia.org/wiki/Free_list) to allocate brick slots. Each sector contains a _64-bit allocation mask_ and a single _base brick slot_ within the storage buffer, allowing individual brick slots to be computed implicitly (without pointers) by counting preceding allocations using a popcount instruction: `baseSlot + bitCount(allocMask >> ((1ull << brickIdx) - 1))`.
+- https://github.com/stijnherfst/BrickMap
 
-The sector allocation masks can also be used to compute 3 occupancy LODs without any extra memory fetches, which alone can speedup the traversal to surprisingly useable levels. Nevertheless, for the sake of traversal efficiency I added another OCM at the voxel-level that is generated by a compute shader after brick data is uploaded. This OCM is also tiled to 64-bit masks of 4³ voxels, so the sector LOD function can be reused for both.
+### My attempt
+I settled for a 2-level brickmap of 8³ bricks within 4³ sectors. (8³ feels a bit too small so might change it to 16³ at some point)
+
+For GPU storage, I use a single buffer and a [free list](https://en.wikipedia.org/wiki/Free_list) to allocate brick slots. Each sector contains a _64-bit allocation mask_ and a single _base brick slot_ within the storage buffer, allowing individual brick slots to be computed implicitly (without pointers) by counting preceding allocations using a popcount instruction: `baseSlot + bitCount(allocMask & ((1ull << brickIdx) - 1))`.
+
+The sector allocation masks can also be used to derive 3 occupancy LODs without any extra memory fetches, which alone can speedup the traversal to surprisingly useable levels. To further reduce traversal cost, I use two extra OCM layers - one at sector-level and the other at voxel-level. The voxel OCM is generated by a compute shader after brick data is uploaded.
+
+On tested scenes (voxelized Bistro at 4096x1024x4096 resolution), my implementation runs at around 250-350M rays per second on a Intel Xe iGPU with 96 EUs - well enough for >60FPS at 1080p assuming only primary rays are cast. Diffuse bounce rays are naturally incoherent and lead to considerable divergence and cache misses in the tracing loop, reducing throughput by around 50-70%. Binning rays based on direction could possibly help remediate this issue.
 
 ```glsl
-// 64-bit mask split into two uints as uvec2(0..31, 32..63)
+// 64-bit masks are split into uvec2(0..31, 32..63)
 int getIsotropicLod(uvec2 mask, uint idx) {
-    if ((mask.x | mask.y) == 0) {
+    if (mask == uvec2(0)) {
         return 4;
     }
     uint currMask = idx < 32 ? mask.x : mask.y;
@@ -303,15 +308,35 @@ int getIsotropicLod(uvec2 mask, uint idx) {
 }
 ```
 
-### Anisotropic LODs
+### Extra: Anisotropic LODs
 TODO
 
 Greedy expansion within 4³ bitmasks seems to have varying effectiveness across scenes, and are overall much less effective than my older OCM implementation (although having bitmasks only at voxel and brick levels might be one of the limitations).  
 The LOD expansion algorithm can be implemented using only 3 comparisons per axis, but it still turns out to be slower than just doing plain isotropic LODs. 
 
----
+### Extra: Run-length compression
+Using the same popcnt trick as sparse brick storage, voxel data can be run-length compressed very quickly in a way that allows for O(1) random accesses. Here's a simple example of how it works:
 
-- https://github.com/stijnherfst/BrickMap
+```
+      Input: 11111 22 3 444 5 6 000000...
+RestartMask: 00001 01 1 001 1 1 000000...1
+ Compressed: 1234560
+
+DecompressedValue = Compressed[popcnt64(RestartMask & ((1ull << TileVoxelIdx) - 1))];
+```
+
+I have benchmarked a rudimentary implementation, but did not finish integrating it as I concluded that LODs might be a simpler and more reliable solution for reducing GPU memory usage.
+
+- _Bistro_ and _Sponza_ are non-solid voxelized meshes and have up to 240 unique voxel types.
+- _Terrain_ is a simple terrain based on warped 3D noise and contains only one voxel type.
+- RLE sizes include overhead of 1-byte per tile for storage offsets, followed by 8 bytes per non-empty tile (indicated by a sentinel offset value). This gives a maximum compression ratio of about `64/10` - when bricks are filled with exactly one block type.
+
+| Scene         | Source     | Non-empty  | RLE        |
+|---------------|------------|------------|------------|
+| Sponza 2k     | 238.023 MB | 36.736 MB  | 50.624 MB  |
+| Bistro 4k     | 471.307 MB | 68.4949 MB | 88.8887 MB |
+| Bistro 8k     | 2034.28 MB | 282.806 MB | 364.978 MB |
+| Terrain 2k    | 417.41 MB  | 391.784 MB | 57.8487 MB |
 
 ### Sparse Voxel Octrees (SVOs)
 Oh yeah, SVOs... I can't say much about them because I have only skimmed through the ESVO paper, which is actually quite readable and has some neat ideas, but overall gives me the impression that octrees are somewhat complicated and still not flexible enough - at least not for what I care anyway.
