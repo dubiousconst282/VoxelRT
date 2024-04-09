@@ -35,6 +35,15 @@ struct Material {
                (uint32_t)glm::round(value.y * 63.0f) << 5 |
                (uint32_t)glm::round(value.z * 31.0f) << 0;
     }
+
+    glm::vec3 GetColor() const {
+        return {
+            (Data >> 11 & 31) * (1.0f / 31),
+            (Data >> 5 & 63) * (1.0f / 63),
+            (Data >> 0 & 31) * (1.0f / 31),
+        };
+    }
+    float GetEmissionStrength() const { return (Data >> 16 & 15) * (7.0f / 15); }
 };
 
 static uint32_t GetLinearIndex(glm::uvec3 pos, uint32_t sizeXZ, uint32_t sizeY) {
@@ -155,6 +164,15 @@ struct Sector {
     static uint32_t GetBrickIndexFromSlot(uint64_t allocMask, uint32_t slotIdx);
 };
 
+struct HitResult {
+    double Distance = -1.0;
+    glm::vec3 Normal;
+    glm::vec2 UV;
+    glm::ivec3 VoxelPos;
+
+    bool IsMiss() const { return Distance <= 0.0; }
+};
+
 struct VoxelMap {
     static constexpr glm::ivec3 MinPos = WorldSectorIndexer::MinPos * MaskIndexer::Size * BrickIndexer::Size;
     static constexpr glm::ivec3 MaxPos = WorldSectorIndexer::MaxPos * MaskIndexer::Size * BrickIndexer::Size;
@@ -188,9 +206,8 @@ struct VoxelMap {
         }
     }
 
-    // Slow scalar raycaster intended for picking and stuff.
-    // Returns hit distance or -1 if no hit was found.
-    double RayCast(glm::dvec3 origin, glm::vec3 dir, uint32_t maxIters);
+    // Slow scalar raycaster intended for mouse picking and stuff.
+    HitResult RayCast(glm::dvec3 origin, glm::dvec3 dir, uint32_t maxIters = 1024);
 
     void Deserialize(std::string_view filename);
     void Serialize(std::string_view filename);

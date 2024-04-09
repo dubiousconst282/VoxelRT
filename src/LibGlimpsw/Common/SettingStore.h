@@ -8,6 +8,21 @@
 #include <imgui.h>
 #include <magic_enum.hpp>
 
+// https://github.com/ocornut/imgui/issues/7081#issuecomment-1901774784
+namespace ImGui {
+    template<typename> constexpr ImGuiDataType DataTypeEnum = ImGuiDataType_COUNT;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<int8_t>   = ImGuiDataType_S8;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<uint8_t>  = ImGuiDataType_U8;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<int16_t>  = ImGuiDataType_S16;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<uint16_t> = ImGuiDataType_U16;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<int32_t>  = ImGuiDataType_S32;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<uint32_t> = ImGuiDataType_U32;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<int64_t>  = ImGuiDataType_S64;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<uint64_t> = ImGuiDataType_U64;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<float>    = ImGuiDataType_Float;
+    template<> constexpr inline ImGuiDataType DataTypeEnum<double>   = ImGuiDataType_Double;
+};  // namespace ImGui
+    
 namespace glim {
 
 struct SettingStore {
@@ -27,13 +42,18 @@ struct SettingStore {
         return Sync(label, value, sizeof(bool), changed);
     }
     template<typename T>
-    bool InputScalarN(std::string_view label, T* value, uint32_t numComponents, const char* fmt = nullptr) {
-        bool changed = ImGui::InputScalarN(label.data(), GetDataType<T>(), value, (int)numComponents, nullptr, nullptr, fmt);
+    bool Input(std::string_view label, T* value, uint32_t numComponents, const char* fmt = nullptr) {
+        bool changed = ImGui::InputScalarN(label.data(), ImGui::DataTypeEnum<T>, value, (int)numComponents, nullptr, nullptr, fmt);
         return Sync(label, value, sizeof(T) * numComponents, changed);
     }
     template<typename T>
     bool Slider(std::string_view label, T* value, uint32_t numComponents, T min, T max, const char* fmt = nullptr, ImGuiSliderFlags flags = 0) {
-        bool changed = ImGui::SliderScalarN(label.data(), GetDataType<T>(), value, (int)numComponents, &min, &max, fmt, flags);
+        bool changed = ImGui::SliderScalarN(label.data(), ImGui::DataTypeEnum<T>, value, (int)numComponents, &min, &max, fmt, flags);
+        return Sync(label, value, sizeof(T) * numComponents, changed);
+    }
+    template<typename T>
+    bool Drag(std::string_view label, T* value, uint32_t numComponents, T min, T max, float speed = 1.0f, const char* fmt = nullptr, ImGuiSliderFlags flags = 0) {
+        bool changed = ImGui::DragScalarN(label.data(), ImGui::DataTypeEnum<T>, value, (int)numComponents, speed, &min, &max, fmt, flags);
         return Sync(label, value, sizeof(T) * numComponents, changed);
     }
     template<typename T, typename = std::enable_if<std::is_enum_v<T>>>
@@ -49,7 +69,7 @@ struct SettingStore {
             }
             ImGui::EndCombo();
         }
-        return Sync(label, &value, sizeof(T), changed);
+        return Sync(label, value, sizeof(T), changed);
     }
 
     // Synchronize value associated with label and GUI scope hash from/to persistent storage
@@ -83,14 +103,6 @@ private:
     std::string _autoSavePath;
     double _lastSaveTime;
     bool _pendingSave;
-
-    template<typename T>
-    static ImGuiDataType GetDataType() {
-        if constexpr (std::is_same<T, float>()) return ImGuiDataType_Float;
-        else if constexpr (std::is_same<T, double>()) return ImGuiDataType_Double;
-        else if constexpr (std::is_same<T, int32_t>()) return ImGuiDataType_S32;
-        else static_assert(!"Unsupported scalar type");
-    }
 };
 
 struct TimeStat {

@@ -23,17 +23,15 @@ void TimeStat::AddSample(double elapsedMs) {
 void TimeStat::GetElapsedMs(double& mean, double& stdDev) const {
     uint32_t n = std::min((uint32_t)std::size(_samples), _sampleIdx);
 
-    mean = 0.0;
-    for (uint32_t i = 0; i < n; i++) {
-        mean += _samples[i];
-    }
-    mean /= n;
+    double sum1 = 0.0;
+    double sum2 = 0.0;
 
-    double variance = 0.0;
     for (uint32_t i = 0; i < n; i++) {
-        variance += (_samples[i] - mean) * (_samples[i] - mean);
+        sum1 += _samples[i];
+        sum2 += _samples[i] * _samples[i];
     }
-    stdDev = sqrt(variance / (n - 1));
+    mean = sum1 / n;
+    stdDev = sqrt((sum2 / n) - (mean * mean));
 }
 
 static const uint64_t SerMagic = 0x02'74'65'73'6d'69'6c'67;  // glimset\2
@@ -68,8 +66,8 @@ void SettingStore::Save(std::string_view filename) {
     io::Write<uint32_t>(os, KnownValues.size());
 
     for (auto& [key, value] : KnownValues) {
-        io::Write<uint32_t>(os, std::get<1>(key));
-        io::WriteStr(os, std::get<0>(key));
+        io::Write<uint32_t>(os, key.second);
+        io::WriteStr(os, key.first);
         io::WriteStr(os, value);
     }
 }

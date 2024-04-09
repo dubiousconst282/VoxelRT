@@ -2,16 +2,17 @@
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
-#include <ImGuizmo.h>
 
 #include <SwRast/Texture.h>
 
 #include "Renderer.h"
-
 #include "TerrainGenerator.h"
+#include "Brush.h"
 
 class Application {
     glim::Camera _cam = {};
@@ -23,6 +24,8 @@ class Application {
     std::unique_ptr<Renderer> _renderer;
     std::unique_ptr<TerrainGenerator> _terrainGen;
 
+    BrushSession _brush;
+
 public:
     Application() {
         ogl::EnableDebugCallback();
@@ -32,7 +35,7 @@ public:
         _map = std::make_shared<VoxelMap>();
 
         try {
-            _map->Deserialize("logs/voxels_2k.dat");
+            _map->Deserialize("logs/voxels_2k_sponza.dat");
         } catch (std::exception& ex) {
             std::cout << "Failed to load voxel map cache: " << ex.what() << std::endl;
 
@@ -43,7 +46,7 @@ public:
 
             _map->VoxelizeModel(model, glm::uvec3(0), glm::uvec3(2048));
 
-            _map->Serialize("logs/voxels_2k.dat");
+            _map->Serialize("logs/voxels_2k_sponza.dat");
         }
 
         _map->Palette[251] = Material::CreateDiffuse({ 0.3, 0.6, 0.25 }, 0.0f);
@@ -76,9 +79,10 @@ public:
     void Render(uint32_t vpWidth, uint32_t vpHeight) {
         ImGui::ShowMetricsWindow();
 
-        if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
-            MousePickVoxels();
-        } else {
+        DrawBrushParams();
+
+        if (!ApplyBrush()) {
+            _brush.Reset();
             _cam.Update();
         }
 
@@ -114,10 +118,10 @@ public:
         ImGui::Text("Total Sectors: %zu (%d pending gen)", _map->Sectors.size(), _terrainGen->GetNumPendingRequests());
 
         ImGui::SeparatorText("Camera");
-        _settings.InputScalarN("Pos", &_cam.Position.x, 3, "%.1f");
-        _settings.InputScalarN("Rot", &_cam.Euler.x, 2, "%.1f");
-        _settings.Slider("Speed", &_cam.MoveSpeed, 1, 0.5f, 500.0f, "%.1f");
-        _settings.Slider("FOV", &_cam.FieldOfView, 1, 10.0f, 120.0f, "%.1f deg");
+        _settings.Input("Pos", &_cam.Position.x, 3, "%.1f");
+        _settings.Drag("Rot", &_cam.Euler.x, 2, -3.141f, +3.141f, 0.1f, "%.1f");
+        _settings.Drag("Speed", &_cam.MoveSpeed, 1, 0.5f, 1000.0f, 1.0f, "%.1f");
+        _settings.Drag("FOV", &_cam.FieldOfView, 1, 10.0f, 120.0f, 0.5f, "%.1f deg");
         ImGui::End();
 
         _renderer->RenderFrame(_cam, glm::uvec2(vpWidth, vpHeight));
@@ -125,9 +129,93 @@ public:
         _shaderLib->Refresh();
     }
 
-    void MousePickVoxels() {
-        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) return;
+    void DrawBrushParams() {
+        if (ImGui::Begin("Brush")) {
+            _settings.Combo("Action", &_brush.Pars.Action);
+            _settings.Drag("Radius", &_brush.Pars.Radius, 1, 1.0f, 200.0f);
+            _settings.Drag("Probability", &_brush.Pars.Probability, 1, 0.0f, 1.0f, 0.005f);
+            DrawPaletteEditor(_brush.Pars.Material.Data);
+        }
+        ImGui::End();
+    }
 
+    void DrawPaletteEditor(uint8_t& selectedIdx) {
+        ImGui::SeparatorText("Material Properties");
+        {
+            auto& material = _map->Palette[selectedIdx];
+            auto color = material.GetColor();
+            float emission = material.GetEmissionStrength();
+
+            bool changed = false;
+            changed |= ImGui::ColorEdit3("Color", &color.x);
+            changed |= ImGui::DragFloat("Emission", &emission, 0.1f, 0.0f, 8.0f);
+
+            if (changed) {
+                material = Material::CreateDiffuse(color, emission);
+            }
+        }
+        int32_t cellSize = 32;
+        int32_t numCols = ImGui::GetContentRegionAvail().x / (cellSize + 1);
+        int32_t numRows = (256 + numCols - 1) / numCols;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 0));
+
+        auto tableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_NoHostExtendX | ImGuiTableFlags_SizingFixedSame | ImGuiTableFlags_ScrollY;
+
+        if (ImGui::BeginTable("##Palette", numCols, tableFlags)) {
+            for (uint32_t i = 0; i < numCols; i++) {
+                std::string text = std::format("{}", i);
+                ImGui::TableSetupColumn(text.data(), ImGuiTableColumnFlags_WidthFixed, cellSize);
+            }
+
+            for (int32_t row = 0; row < numRows; row++) {
+                ImGui::TableNextRow();
+
+                for (int32_t col = 0; col < numCols; col++) {
+                    int32_t i = row * numCols + col;
+                    if (i > 255) break;
+
+                    ImGui::TableSetColumnIndex(col);
+                    ImGui::PushID(i);
+
+                    ImGui::SetItemTooltip("%d", i);
+
+                    auto selFlags = 1 << 26;  // ImGuiSelectableFlags_NoPadWithHalfSpacing
+                    if (ImGui::Selectable("", false, selFlags, ImVec2(32, 32))) {
+                        selectedIdx = i;
+                    }
+                    auto drawList = ImGui::GetWindowDrawList();
+                    ImVec2 bbMin = ImGui::GetItemRectMin() + ImVec2(1, 1);
+                    ImVec2 bbMax = ImGui::GetItemRectMax() - ImVec2(1, 1);
+
+                    if (selectedIdx == i) {
+                        for (int32_t i = 0; i < cellSize; i += 8) {
+                            drawList->AddLine(ImVec2(bbMin.x + i, bbMin.y), ImVec2(bbMin.x + i + 4, bbMin.y), 0xFFFFFFFF, 1.5f);
+                            drawList->AddLine(ImVec2(bbMin.x + i, bbMax.y), ImVec2(bbMin.x + i + 4, bbMax.y), 0xFFFFFFFF, 1.5f);
+                            drawList->AddLine(ImVec2(bbMin.x, bbMin.y + i), ImVec2(bbMin.x, bbMin.y + i + 4), 0xFFFFFFFF, 1.5f);
+                            drawList->AddLine(ImVec2(bbMax.x, bbMin.y + i), ImVec2(bbMax.x, bbMin.y + i + 4), 0xFFFFFFFF, 1.5f);
+                        }
+
+                        static int32_t prevSelection = -1;
+                        if (i != prevSelection) {
+                            prevSelection = i;
+                            ImGui::SetScrollHereY();
+                        }
+                    }
+
+                    auto color = _map->Palette[i].GetColor();
+                    drawList->AddRectFilled(bbMin + ImVec2(1, 1), bbMax - ImVec2(1, 1),
+                                            ImGui::ColorConvertFloat4ToU32({ color.x, color.y, color.z, 1.0f }));
+
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+    }
+
+    bool ApplyBrush() {
         ImVec2 mousePos = ImGui::GetMousePos();
         ImVec2 displaySize = ImGui::GetIO().DisplaySize;
         glm::vec2 mouseUV = glm::vec2(mousePos.x / displaySize.x, 1 - mousePos.y / displaySize.y) * 2.0f - 1.0f;
@@ -137,30 +225,23 @@ public:
         glm::vec4 farPos = nearPos + glm::vec4(invProj[2]);
         glm::vec3 dir = glm::normalize(farPos * (1.0f / farPos.w));
 
-        static double brushDist = 30;
-        bool erase = ImGui::IsKeyDown(ImGuiKey_ModAlt);
-        auto voxel = erase ? Voxel::CreateEmpty() : Voxel::Create(255);
+        // Apply brush when LCtrl is pressed
+        if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
+            _brush.UpdatePosFromRay(*_map, _cam.ViewPosition, dir);
+            _brush.Dispatch(*_map);
 
-        double hitDist = _map->RayCast(_cam.ViewPosition, dir, 4096);
-        if (hitDist < 30) hitDist = 30;
-
-        glm::ivec3 hitPos = glm::floor(_cam.ViewPosition + glm::dvec3(dir) * hitDist);
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || 
-            (!erase && (hitDist > brushDist || _map->Get(hitPos).Data != voxel.Data))
-        ) {
-            brushDist = hitDist;
+            return true;
         }
+        // Update selected material to hit on double click
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().WantCaptureMouse) {
+            HitResult hit = _map->RayCast(_cam.ViewPosition, dir);
+            Voxel newMat = hit.IsMiss() ? Voxel::CreateEmpty() : _map->Get(hit.VoxelPos);
 
-        glm::ivec3 brushPos = glm::floor(_cam.ViewPosition + glm::dvec3(dir) * brushDist);
-        int32_t radius = erase ? 160 : 30;
-
-        _map->RegionDispatchSIMD(brushPos - radius, brushPos + radius, true, [&](VoxelDispatchInvocationPars& pars) {
-            VInt dx = pars.X - brushPos.x, dy = pars.Y - brushPos.y, dz = pars.Z - brushPos.z;
-            VMask mask = dx * dx + dy * dy + dz * dz <= radius * radius;
-
-            simd::set_if(mask, pars.VoxelIds, voxel.Data);
-            return simd::any(mask);
-        });
+            if (!newMat.IsEmpty()) {
+                _brush.Pars.Material = newMat;
+            }
+        }
+        return false;
     }
 };
 

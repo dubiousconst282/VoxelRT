@@ -122,34 +122,51 @@ Brick* VoxelMap::GetBrick(glm::ivec3 pos, bool create, bool markAsDirty) {
     return sector->GetBrick(brickIdx, true);
 }
 
-static glm::dvec3 GetSideDist(glm::dvec3 pos, glm::dvec3 dir) {
-    pos = glm::fract(pos);
-    return glm::mix(1.0 - pos, pos, glm::lessThan(dir, glm::dvec3(0.0)));
-    // return dir < 0.0 ? pos : 1.0 - pos;
-} 
-double VoxelMap::RayCast(glm::dvec3 origin, glm::vec3 dir, uint32_t maxIters) {
-    glm::dvec3 deltaDist = glm::abs(1.0f / dir);
-    glm::dvec3 sideDist = GetSideDist(origin, dir) * deltaDist;
-    glm::ivec3 currPos = glm::floor(origin);
+static int32_t GetStepLevel(VoxelMap* map, glm::ivec3 pos) {
+    int32_t k = MaskIndexer::ShiftXZ + BrickIndexer::ShiftXZ;
+    auto sectorIter = map->Sectors.find(WorldSectorIndexer::GetIndex(pos >> k));
 
-    while (maxIters-- > 0) {
-        if (!CheckInBounds(currPos)) break;
-        if (!Get(currPos).IsEmpty()) {
-            return glm::min(glm::min(sideDist.x, sideDist.y), sideDist.z);
-        }
-
-        if (sideDist.x < sideDist.y && sideDist.x < sideDist.z) {
-            sideDist.x += deltaDist.x;
-            currPos.x += dir.x < 0 ? -1 : +1;
-        } else if (sideDist.y < sideDist.z) {
-            sideDist.y += deltaDist.y;
-            currPos.y += dir.y < 0 ? -1 : +1;
-        } else {
-            sideDist.z += deltaDist.z;
-            currPos.z += dir.z < 0 ? -1 : +1;
-        }
+    if (sectorIter == map->Sectors.end()) {
+        return k;
     }
-    return -1.0;
+    k = BrickIndexer::ShiftXZ;
+    Brick* brick = sectorIter->second.GetBrick(MaskIndexer::GetIndex(pos >> k));
+
+    if (brick == nullptr) {
+        return k;
+    }
+    return brick->Data[BrickIndexer::GetIndex(pos)].IsEmpty() ? 0 : -1;
+}
+HitResult VoxelMap::RayCast(glm::dvec3 origin, glm::dvec3 dir, uint32_t maxIters) {
+    glm::dvec3 invDir = 1.0 / dir;
+    glm::dvec3 tStart = (glm::step(0.0, dir) - origin) * invDir;
+    glm::ivec3 pos = glm::floor(origin);
+
+    for (uint32_t i = 0; i < maxIters; i++) {
+        glm::dvec3 sideDist = tStart + glm::dvec3(pos) * invDir;
+        double tmin = glm::min(glm::min(sideDist.x, sideDist.y), sideDist.z) + 0.0001;
+        glm::dvec3 hitPos = origin + tmin * dir;
+        pos = glm::ivec3(glm::floor(hitPos));
+
+        int32_t k = GetStepLevel(this, pos);
+
+        if (k < 0) {
+            glm::bvec3 sideMask = glm::greaterThanEqual(glm::dvec3(tmin), sideDist);
+
+            return {
+                .Distance = tmin,
+                .Normal = glm::mix(glm::dvec3(0), -glm::sign(dir), sideMask),
+                .UV = glm::fract(glm::mix(glm::vec2(hitPos.x, hitPos.z), glm::vec2(hitPos.y), glm::vec2(sideMask.x, sideMask.z))),
+                .VoxelPos = pos
+            };
+        }
+
+        int32_t m = (1 << k) - 1;
+        pos.x = dir.x < 0 ? (pos.x & ~m) : (pos.x | m);
+        pos.y = dir.y < 0 ? (pos.y & ~m) : (pos.y | m);
+        pos.z = dir.z < 0 ? (pos.z & ~m) : (pos.z | m);
+    }
+    return { };
 }
 
 bool Brick::IsEmpty() const {

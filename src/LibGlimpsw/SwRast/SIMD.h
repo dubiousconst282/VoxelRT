@@ -118,6 +118,9 @@ SIMD_INLINE VFloat3 cross(VFloat3 a, VFloat3 b) {
 }
 SIMD_INLINE VFloat3 reflect(VFloat3 i, VFloat3 n) { return i - 2.0f * dot(n, i) * n; }
 
+SIMD_INLINE VFloat clamp(VFloat x, VFloat a, VFloat b) { return min(max(x, a), b); }
+SIMD_INLINE VFloat length(VFloat3 p) { return approx_sqrt(dot(p, p)); }
+
 // Sleef xfastsinf_u3500()
 SIMD_INLINE VFloat sin(VFloat a) {
     VInt q = round2i(a * inv_pi);
@@ -159,7 +162,7 @@ SIMD_INLINE void sincos(VFloat a, VFloat& rs, VFloat& rc) {
 
     VFloat qs = re2f(q << 31);
     rs = u ^ qs;  // if ((q & 1) != 0) u = -u;
-    rc = approx_rsqrt(1.0f - rs * rs) ^ qs;
+    rc = approx_sqrt(1.0f - rs * rs) ^ qs;
 }
 
 // Approximates sin(2πx) and cos(2πx)

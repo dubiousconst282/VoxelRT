@@ -15,6 +15,7 @@ add_executable(
     CpuRenderer.cpp
     BrickSlotAllocator.cpp
     TerrainGenerator.cpp
+    Brush.cpp
 )
 
 target_link_libraries(VoxelRT PRIVATE
