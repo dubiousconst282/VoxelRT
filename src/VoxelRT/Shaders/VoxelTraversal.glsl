@@ -88,7 +88,7 @@ bool getStepPos(inout ivec3 ipos, vec3 dir, bool coarse) {
     uvec3 pos = uvec3(ipos);
     uvec3 brickPos = pos / BRICK_SIZE;
     uvec3 sectorPos = brickPos / 4;
-    uvec2 occMask = b_VoxelData.AllocMasks[getLinearIndex(sectorPos, NUM_SECTORS_XZ, NUM_SECTORS_Y)];
+    uvec2 occMask = b_VoxelData.BrickMasks[getLinearIndex(sectorPos, NUM_SECTORS_XZ, NUM_SECTORS_Y)];
 
     uint maskIdx = getLinearIndex(brickPos, 4, 4);
     int scale = BRICK_SIZE;
@@ -103,7 +103,7 @@ bool getStepPos(inout ivec3 ipos, vec3 dir, bool coarse) {
 
         if (isFineLod(occMask, maskIdx)) return false;
     } else if (occMask == uvec2(0)) {
-        occMask = b_VoxelData.SectorOccupancy[getLinearIndex(sectorPos / 4, NUM_SECTORS_XZ / 4, NUM_SECTORS_Y / 4)];
+        occMask = b_VoxelData.SectorMasks[getLinearIndex(sectorPos / 4, NUM_SECTORS_XZ / 4, NUM_SECTORS_Y / 4)];
         maskIdx = getLinearIndex(sectorPos, 4, 4);
         scale = BRICK_SIZE * 4;
     }
@@ -162,7 +162,7 @@ bool rayTrace(vec3 origin, vec3 dir, out HitInfo hit) {
     for (uint i = 0; i < 256; i++) {
         vec3 sideDist = tStart + vec3(voxelPos - u_WorldOrigin) * invDir;
         float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
-        tmin += tmin < 8 ? 0.00015 : tmin < 256 ? 0.001 : 0.1;
+        tmin += tmin < 8 ? 0.00015 : tmin < 1024 ? 0.001 : 0.01;
         vec3 currPos = origin + tmin * dir;
 
         voxelPos = u_WorldOrigin + ivec3(floor(currPos));
@@ -196,7 +196,7 @@ bool rayTraceCoarse(vec3 origin, vec3 dir, out HitInfo hit) {
     vec3 tStart = (step(0.0, dir) - origin) * invDir;
     ivec3 voxelPos = u_WorldOrigin + ivec3(floor(origin));
 
-    for (uint i = 0; i < 64; i++) {
+    for (uint i = 0; i < 96; i++) {
         vec3 sideDist = tStart + (voxelPos - u_WorldOrigin) * invDir;
         float tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001;
         vec3 currPos = origin + tmin * dir;

@@ -14,8 +14,8 @@ struct Material {
 buffer ssbo_VoxelData {
     Material Palette[256];
     uint BaseSlots[NUM_SECTORS];
-    uvec2 AllocMasks[NUM_SECTORS];
-    uvec2 SectorOccupancy[NUM_SECTORS / 64];  // Occupancy masks at sector level
+    uvec2 BrickMasks[NUM_SECTORS];
+    uvec2 SectorMasks[NUM_SECTORS / 64];
     uint BrickData[];
 } b_VoxelData;
 
@@ -46,7 +46,7 @@ uint getBrickDataSlot(uvec3 brickPos) {
     uint brickIdx = getLinearIndex(brickPos, 4, 4);
     uint sectorIdx = getLinearIndex(brickPos / 4, NUM_SECTORS_XZ, NUM_SECTORS_Y);
     
-    uvec2 allocMask = b_VoxelData.AllocMasks[sectorIdx];
+    uvec2 allocMask = b_VoxelData.BrickMasks[sectorIdx];
     uint currMask = allocMask.x;
     uint slotIdx = b_VoxelData.BaseSlots[sectorIdx];
     uint brickMask = 1u << (brickIdx & 31u);
@@ -77,7 +77,8 @@ Material getVoxelMaterial(ivec3 spos) {
 
 vec3 getMaterialColor(Material mat) {
     uvec3 mask = uvec3(31, 63, 31);
-    return vec3(uvec3(mat.Data) >> uvec3(11, 5, 0) & mask) * (1.0 / vec3(mask));
+    vec3 color = vec3(uvec3(mat.Data) >> uvec3(11, 5, 0) & mask) * (1.0 / vec3(mask));
+    return color * color; // srgb gamma hack
 }
 float getMaterialEmission(Material mat) {
     return float(mat.Data >> 16 & 15u) / 2.0;

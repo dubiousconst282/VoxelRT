@@ -34,23 +34,22 @@ struct Camera {
     glm::mat4 GetProjMatrix() { return glm::perspective(glm::radians(FieldOfView), AspectRatio, NearZ, FarZ); }
 
     void Update() {
-        // TODO: decouple Camera from ImGui
         ImGuiIO& io = ImGui::GetIO();
         float sensitivity = 0.008f;
         float speed = io.DeltaTime * MoveSpeed;
         float pitchRange = glm::pi<float>() / 2.01f;         // a bit less than 90deg to prevent issues with LookAt()
         float blend = 1.0f - powf(0.7f, io.DeltaTime * 60);  // https://gamedev.stackexchange.com/a/149106
-        glm::quat destRotation = glm::eulerAngleXY(-Euler.y, -Euler.x);
+        glm::quat destRotation = glm::eulerAngleXY(-Euler.y, Euler.x);
 
         if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow)) {
             if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 float rx = io.MouseDelta.x * sensitivity;
                 float ry = io.MouseDelta.y * sensitivity;
 
-                Euler.x = NormalizeRadians(Euler.x - rx);
+                Euler.x = NormalizeRadians(Euler.x + rx);
                 Euler.y = glm::clamp(Euler.y - ry, -pitchRange, +pitchRange);
 
-                destRotation = glm::eulerAngleXY(-Euler.y, -Euler.x);
+                destRotation = glm::eulerAngleXY(-Euler.y, Euler.x);
             }
 
             if (Mode == InputMode::FirstPerson) {
@@ -60,8 +59,8 @@ struct Camera {
                 if (ImGui::IsKeyDown(ImGuiKey_S)) mv.z++;
                 if (ImGui::IsKeyDown(ImGuiKey_A)) mv.x--;
                 if (ImGui::IsKeyDown(ImGuiKey_D)) mv.x++;
-                if (ImGui::IsKeyDown(ImGuiKey_Space)) mv.y++;
-                if (ImGui::IsKeyDown(ImGuiKey_LeftShift)) mv.y--;
+                if (ImGui::IsKeyDown(ImGuiKey_Space)) Position.y += speed;
+                if (ImGui::IsKeyDown(ImGuiKey_LeftShift)) Position.y -= speed;
 
                 Position += mv * destRotation * speed;
             } else if (Mode == InputMode::Arcball) {
