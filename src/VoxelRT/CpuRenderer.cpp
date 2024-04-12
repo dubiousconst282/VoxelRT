@@ -19,7 +19,7 @@ struct FlatVoxelStorage {
     std::unique_ptr<uint8_t[]> StorageBuffer;
     std::unique_ptr<uint64_t[]> OccupancyStorage;
     uint64_t SectorMasks[ViewSectorIndexer::MaxArea] = {};
-    Material Palette[256];
+    uint64_t Palette[256];
 
     FlatVoxelStorage() {
         size_t storageCap = ViewSectorIndexer::MaxArea * (MaskIndexer::MaxArea * BrickIndexer::MaxArea);
@@ -29,7 +29,9 @@ struct FlatVoxelStorage {
     }
 
     void SyncBuffers(VoxelMap& map) {
-        std::memcpy(Palette, map.Palette, sizeof(Palette));
+        for (uint32_t i = 0; i < 256; i++) {
+            Palette[i] = map.Palette[i].GetEncoded();
+        }
 
         for (auto [sectorIdx, dirtyMask] : map.DirtyLocs) {
             glm::ivec3 sectorPos = WorldSectorIndexer::GetPos(sectorIdx);
@@ -95,7 +97,9 @@ struct HitInfo {
             conv2f((MaterialData >> 0) & 31) * (1.0f / 31),
         };
     }
-    VFloat GetEmissionStrength() const { return conv2f((MaterialData >> 16) & 15) * (7.0f / 15); }
+    VFloat GetEmissionStrength() const {
+        return swr::pixfmt::RG16f::Unpack(MaterialData).y;
+    }
 };
 
 static const uint32_t SectorVoxelShiftXZ = MaskIndexer::ShiftXZ + BrickIndexer::ShiftXZ;
@@ -119,7 +123,7 @@ static VInt GetVoxelMaterial(const FlatVoxelStorage& map, VInt3 pos, VMask mask)
     VInt voxelIds = VInt::mask_gather<4>(map.StorageBuffer.get(), slotIdx >> 2, mask);
     voxelIds = voxelIds >> ((slotIdx & 3) * 8) & 255;
 
-    return VInt::mask_gather<4>(map.Palette, voxelIds, mask);
+    return VInt::mask_gather<8>(map.Palette, voxelIds, mask);
 }
 
 // 2/4 independet gathers: >=30/60 latency + ALU

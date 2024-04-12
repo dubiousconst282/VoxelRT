@@ -9,7 +9,7 @@ const uint NUM_SECTORS = NUM_SECTORS_XZ * NUM_SECTORS_XZ * NUM_SECTORS_Y;
 const uint NULL_OFFSET = ~0u;
 
 struct Material {
-    uint Data;
+    uvec2 Data;
 };
 buffer ssbo_VoxelData {
     Material Palette[256];
@@ -77,9 +77,12 @@ Material getVoxelMaterial(ivec3 spos) {
 
 vec3 getMaterialColor(Material mat) {
     uvec3 mask = uvec3(31, 63, 31);
-    vec3 color = vec3(uvec3(mat.Data) >> uvec3(11, 5, 0) & mask) * (1.0 / vec3(mask));
+    vec3 color = vec3(uvec3(mat.Data.x) >> uvec3(11, 5, 0) & mask) * (1.0 / vec3(mask));
     return color * color; // srgb gamma hack
 }
 float getMaterialEmission(Material mat) {
-    return float(mat.Data >> 16 & 15u) / 2.0;
+    return unpackHalf2x16(mat.Data.x).y;
+}
+float getMaterialMetalFuzziness(Material mat) {
+    return float(mat.Data.y & 255u) * (1.0 / 255);
 }

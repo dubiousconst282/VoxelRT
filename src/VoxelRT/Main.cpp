@@ -49,11 +49,11 @@ public:
             _map->Serialize("logs/voxels_2k_sponza.dat");
         }
 
-        _map->Palette[251] = Material::CreateDiffuse({ 0.3, 0.6, 0.25 }, 0.0f);
-        _map->Palette[252] = Material::CreateDiffuse({ 1, 0.2, 0.2 }, 0.9f);
-        _map->Palette[253] = Material::CreateDiffuse({ 0.2, 1, 0.2 }, 0.9f);
-        _map->Palette[254] = Material::CreateDiffuse({ 0.2, 0.2, 1 }, 0.9f);
-        _map->Palette[255] = Material::CreateDiffuse({ 1, 1, 1 }, 3.0f);
+        _map->Palette[251] = { .Color = { 70, 150, 64 } };
+        _map->Palette[252] = { .Color = { 255, 48, 48 }, .Emission = 0.8f };
+        _map->Palette[253] = { .Color = { 48, 255, 48 }, .Emission = 0.8f };
+        _map->Palette[254] = { .Color = { 48, 48, 255 }, .Emission = 0.8f };
+        _map->Palette[255] = { .Color = { 255, 255, 255 }, .Emission = 4.0f };
 
         _terrainGen = std::make_unique<TerrainGenerator>(_map);
         for (size_t y = 0; y < 7; y++) {
@@ -144,15 +144,12 @@ public:
         {
             auto& material = _map->Palette[selectedIdx];
             auto color = material.GetColor();
-            float emission = material.GetEmissionStrength();
 
-            bool changed = false;
-            changed |= ImGui::ColorEdit3("Color", &color.x);
-            changed |= ImGui::DragFloat("Emission", &emission, 0.1f, 0.0f, 8.0f);
-
-            if (changed) {
-                material = Material::CreateDiffuse(color, emission);
+            if (ImGui::ColorEdit3("Color", &color.x)) {
+                material.SetColor(color);
             }
+            ImGui::DragFloat("Emission", &material.Emission, 0.1f, 0.0f, 1000.0f);
+            ImGui::DragScalar("Fuzziness", ImGuiDataType_U8, &material.MetalFuzziness);
         }
         int32_t cellSize = 32;
         int32_t numCols = ImGui::GetContentRegionAvail().x / (cellSize + 1);
@@ -202,10 +199,8 @@ public:
                             ImGui::SetScrollHereY();
                         }
                     }
-
-                    auto color = _map->Palette[i].GetColor();
-                    drawList->AddRectFilled(bbMin + ImVec2(1, 1), bbMax - ImVec2(1, 1),
-                                            ImGui::ColorConvertFloat4ToU32({ color.x, color.y, color.z, 1.0f }));
+                    auto& material = _map->Palette[i];
+                    drawList->AddRectFilled(bbMin + ImVec2(1, 1), bbMax - ImVec2(1, 1), ImU32(material.Color[0] << 0 | material.Color[1] << 8 | material.Color[2] << 16) | 0xFF000000u);
 
                     ImGui::PopID();
                 }

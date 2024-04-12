@@ -2,7 +2,7 @@
 #include "BrickSlotAllocator.h"
 
 static constexpr auto SectorSize = MaskIndexer::Size * BrickIndexer::Size;
-static constexpr auto ViewSize = glm::uvec2(4096, 2048) / glm::uvec2(SectorSize);
+static constexpr auto ViewSize = glm::uvec2(8192, 2048) / glm::uvec2(SectorSize);
 static constexpr uint32_t NumViewSectors = ViewSize.x * ViewSize.x * ViewSize.y;
 
 static const std::vector<ogl::ShaderLoadParams::PrepDef> DefaultShaderDefs = {
@@ -23,7 +23,7 @@ struct GpuVoxelStorage {
 
     static_assert(std::endian::native == std::endian::little);
     struct GpuMeta {
-        Material Palette[sizeof(VoxelMap::Palette) / sizeof(Material)];
+        uint64_t Palette[256];
         uint32_t BaseSlots[NumViewSectors];
         uint64_t AllocMasks[NumViewSectors];
         uint64_t SectorOccupancy[NumViewSectors / 64];  // Occupancy masks at sector level
@@ -91,8 +91,12 @@ struct GpuVoxelStorage {
             }
         }
         auto mappedStorage = StorageBuffer->Map<GpuMeta>(GL_MAP_WRITE_BIT);
-        std::memcpy(mappedStorage->Palette, map.Palette, sizeof(VoxelMap::Palette));
 
+        // TODO: consider not updating palette every frame 
+        for (uint32_t i = 0; i < 256; i++) {
+            mappedStorage->Palette[i] = map.Palette[i].GetEncoded();
+        }
+        
         if (updateBatch.empty()) return;
 
         // Upload brick data
@@ -242,7 +246,7 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     _svgfShader->SetUniform("u_FrontBuffer", *_frontTex);
     _svgfShader->SetUniform("u_DiscardAccumSamples", worldChanged ? 1 : 0);
 
-    for (int32_t i = 0; i < 3; i++) {
+    for (int32_t i = 0; i < 1; i++) {
         _svgfShader->SetUniform("u_PassNo", i);
         _svgfShader->DispatchCompute(groupsX, groupsY, 1);
     }

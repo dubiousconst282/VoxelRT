@@ -205,7 +205,7 @@ bool Brick::IsEmpty() const {
 namespace gio = glim::io;
 
 // TODO: This serialization format is as horrible as iostreams. switch to/design something better
-static const uint64_t SerMagic = 0x00'00'00'03'78'6f'76'63ul;  // "cvox 0003"
+static const uint64_t SerMagic = 0x00'00'00'04'78'6f'76'63ul;  // "cvox 0004"
 static const uint32_t MaxPackSize = 1024 * 1024 * 16;
 
 void VoxelMap::Deserialize(std::string_view filename) {

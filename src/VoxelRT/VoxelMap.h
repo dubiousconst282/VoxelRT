@@ -1,9 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include <Common/Scene.h>
-
 #include <map>
+#include <glm/glm.hpp>
+
+#include <Common/Scene.h>
 
 struct Voxel {
     uint8_t Data = 0;
@@ -18,32 +19,35 @@ struct Voxel {
         return { .Data = (uint8_t)materialId };
     }
 };
-struct Material {
-    // 0..15    Color (RGB565)
-    // 16..20   Emissive
-    uint32_t Data;
+struct alignas(16) Material {
+    uint8_t Color[3] = { 0, 0, 0 };
+    uint8_t MetalFuzziness = 255;
+    float Emission = 0.0f;
 
-    static Material CreateDiffuse(glm::vec3 color, float emissionStrength = 0.0f) {
-        // TODO: proper hdr emission
-        uint32_t emissionBits = glm::round(glm::clamp(emissionStrength / 7.0f, 0.0f, 1.0f) * 15.0f);
-        return { .Data = PackRGB(color) | emissionBits << 16 };
+    uint64_t GetEncoded() const {
+        // Color (RGB565): u16
+        // Emission:       f16
+        // Fuzziness:      unorm8
+        uint64_t packed = 0;
+
+        packed |= (uint64_t)Color[0] >> (8 - 5) << 11;
+        packed |= (uint64_t)Color[1] >> (8 - 6) << 5;
+        packed |= (uint64_t)Color[2] >> (8 - 5) << 0;
+        packed |= (uint64_t)glm::packHalf2x16(glm::vec2(0.0f, Emission));
+
+        packed |= (uint64_t)MetalFuzziness << 32;
+
+        return packed;
     }
 
-    static uint32_t PackRGB(glm::vec3 value) {
-        value = glm::clamp(value, 0.0f, 1.0f);
-        return (uint32_t)glm::round(value.x * 31.0f) << 11 |
-               (uint32_t)glm::round(value.y * 63.0f) << 5 |
-               (uint32_t)glm::round(value.z * 31.0f) << 0;
+    // Returns color normalized into 0..1 range
+    glm::vec3 GetColor() const { return glm::vec3(Color[0], Color[1], Color[2]) * (1.0f / 255); }
+    void SetColor(glm::vec3 value) {
+        value = glm::clamp(value * 255.0f, 0.0f, 255.0f);
+        Color[0] = glm::round(value.x);
+        Color[1] = glm::round(value.y);
+        Color[2] = glm::round(value.z);
     }
-
-    glm::vec3 GetColor() const {
-        return {
-            (Data >> 11 & 31) * (1.0f / 31),
-            (Data >> 5 & 63) * (1.0f / 63),
-            (Data >> 0 & 31) * (1.0f / 31),
-        };
-    }
-    float GetEmissionStrength() const { return (Data >> 16 & 15) * (7.0f / 15); }
 };
 
 static uint32_t GetLinearIndex(glm::uvec3 pos, uint32_t sizeXZ, uint32_t sizeY) {

@@ -94,7 +94,7 @@ void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 startPos, glm:
 
     for (uint32_t i = 0; i < palette.NumColors; i++) {
         glm::vec3 color = glm::vec3(palette.ColorR[i], palette.ColorG[i], palette.ColorB[i]);
-        Palette[i] = Material::CreateDiffuse(color * (1.0f / 255));
+        Palette[i] = Material{ .Color = { palette.ColorR[i], palette.ColorG[i], palette.ColorB[i] } };
     }
 
     glm::vec3 boundMin = glm::vec3(+INFINITY), boundMax = glm::vec3(-INFINITY);

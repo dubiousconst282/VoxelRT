@@ -51,7 +51,14 @@ void main() {
 
         for (int i = 0; i < MAX_BOUNCES; i++) {
             rayPos = hit.pos + hit.normal * 0.01;
-            rayDir = normalize(hit.normal + random_dir(i));
+
+            float fuzziness = getMaterialMetalFuzziness(hit.mat);
+            if (fuzziness < 1.0) {
+                rayDir = normalize(reflect(rayDir, hit.normal) + (fuzziness * random_dir(i)));
+                if (dot(rayDir, hit.normal) <= 0.0) break;
+            } else {
+                rayDir = normalize(hit.normal + random_dir(i));
+            }
 
             if (!rayTraceCoarse(rayPos, rayDir, hit)) {
                 color += throughput * getSkyColor(rayDir);
