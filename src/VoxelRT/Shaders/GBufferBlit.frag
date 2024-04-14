@@ -14,8 +14,8 @@ vec3 aces_approx(vec3 v) {
 }
 
 void main() {
-    ivec2 pos = ivec2(v_FragCoord * imageSize(u_BackBuffer));
-    GSample g = gbufferLoad(pos, true);
+    ivec2 pos = ivec2(v_FragCoord * imageSize(u_GBuffer));
+    GSample g = gbufferLoad(pos, false);
 
     vec3 color = g.albedo * g.irradiance;
 

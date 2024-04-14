@@ -1,6 +1,9 @@
 #include "Renderer.h"
 #include "BrickSlotAllocator.h"
 
+#include "Rendering/GBuffer.h"
+#include "Rendering/BlueNoise.h"
+
 static constexpr auto SectorSize = MaskIndexer::Size * BrickIndexer::Size;
 static constexpr auto ViewSize = glm::uvec2(8192, 2048) / glm::uvec2(SectorSize);
 static constexpr uint32_t NumViewSectors = ViewSize.x * ViewSize.x * ViewSize.y;
@@ -174,14 +177,11 @@ GpuRenderer::GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
     _storage = std::make_unique<GpuVoxelStorage>(shlib);
 
     _renderShader = shlib.LoadComp("VoxelRender", DefaultShaderDefs);
-    _svgfShader = shlib.LoadComp("DenoiseSVGF", DefaultShaderDefs);
-    _blitShader = shlib.LoadFrag("GBufferBlit", DefaultShaderDefs);
 
-    _blueNoiseScramblingTex = ogl::Texture2D::Load("assets/bluenoise/ScramblingTile_128x128x4_1spp.png", 1, GL_RGBA8UI);
-    _blueNoiseSobolTex = ogl::Texture2D::Load("assets/bluenoise/Sobol_256x256.png", 1, GL_RGBA8UI);
+    _gbuffer = std::make_unique<GBuffer>(shlib);
+    _blueNoise = std::make_unique<BlueNoise>();
 
-    _renderShader->SetUniform("u_BlueNoiseScramblingTex", *_blueNoiseScramblingTex);
-    _renderShader->SetUniform("u_BlueNoiseSobolTex", *_blueNoiseSobolTex);
+    _blueNoise->SetUniforms(*_renderShader);
 
     glCreateQueries(GL_TIME_ELAPSED, 1, &_frameQueryObj);
     _metricsBuffer = std::make_unique<ogl::Buffer>(64, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
@@ -189,20 +189,6 @@ GpuRenderer::GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
 GpuRenderer::~GpuRenderer() { glDeleteQueries(1, &_frameQueryObj); }
 
 void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
-    GLint64 frameElapsedNs;
-    glGetQueryObjecti64v(_frameQueryObj, GL_QUERY_RESULT, &frameElapsedNs);
-    _frameTime.AddSample(frameElapsedNs / 1000000.0);
-    glBeginQuery(GL_TIME_ELAPSED, _frameQueryObj);
-
-
-    glm::dvec3 camPos = cam.ViewPosition;
-    glm::ivec3 worldOrigin = glm::ivec3(glm::floor(camPos));
-    glm::vec3 originFrac = glm::fract(camPos);
-
-    glm::mat4 projMat = cam.GetProjMatrix() * cam.GetViewMatrix(false);
-    glm::mat4 invProj = glm::inverse(projMat);
-    uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
-
     bool worldChanged = _map->DirtyLocs.size() > 0;
 
     // Sync buffers
@@ -210,57 +196,32 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
         _map->MarkAllDirty();
         _storage->SlotAllocator = BrickSlotAllocator(ViewSize);
     }
-    if (_backTex == nullptr || _backTex->Width != viewSize.x || _backTex->Height != viewSize.y) {
-        _backTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA32UI);
-        _frontTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA32UI);
-    }
     _storage->SyncBuffers(*_map);
+
+    _gbuffer->SetCamera(cam, viewSize, false);
+
+    GLint64 frameElapsedNs;
+    glGetQueryObjecti64v(_frameQueryObj, GL_QUERY_RESULT, &frameElapsedNs);
+    _frameTime.AddSample(frameElapsedNs / 1000000.0);
+    glBeginQuery(GL_TIME_ELAPSED, _frameQueryObj);
 
     // Trace
     _renderShader->SetUniform("ssbo_VoxelData", *_storage->StorageBuffer);
     _renderShader->SetUniform("ssbo_VoxelOccupancy", *_storage->OccupancyStorage);
-    _renderShader->SetUniform("u_WorldOrigin", &worldOrigin.x, 3);
-
     _renderShader->SetUniform("ssbo_Metrics", *_metricsBuffer);
 
+    _renderShader->SetUniform("u_WorldOrigin", glm::ivec3(glm::floor(cam.ViewPosition)));
     _renderShader->SetUniform("u_UseAnisotropicLods", _useAnisotropicLods ? 1 : 0);
-    _renderShader->SetUniform("u_FrameNo", (int)_frameNo);
-
-    _renderShader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
-    _renderShader->SetUniform("u_ProjMat", &projMat[0][0], 16);
-    _renderShader->SetUniform("u_OriginFrac", &originFrac.x, 3);
-    _renderShader->SetUniform("u_BackBuffer", *_backTex);
-    _renderShader->SetUniform("u_FrontBuffer", *_frontTex);
     _renderShader->SetUniform("u_DebugView", (int)_debugView);
+
+    _gbuffer->SetUniforms(*_renderShader);
+
+    uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
     _renderShader->DispatchCompute(groupsX, groupsY, 1);
-
-    glEndQuery(GL_TIME_ELAPSED);
     
-    // Denoise, TAA
-    glm::vec3 originDelta = glm::vec3(camPos - _prevOrigin) - originFrac;
-    _svgfShader->SetUniform("u_InvProjMat", &invProj[0][0], 16);
-    _svgfShader->SetUniform("u_OldProjMat", &_prevProj[0][0], 16);
-    _svgfShader->SetUniform("u_OriginFrac", &originFrac.x, 3);
-    _svgfShader->SetUniform("u_OriginDelta", &originDelta.x, 3);
-    _svgfShader->SetUniform("u_BackBuffer", *_backTex);
-    _svgfShader->SetUniform("u_FrontBuffer", *_frontTex);
-    _svgfShader->SetUniform("u_DiscardAccumSamples", worldChanged ? 1 : 0);
+    glEndQuery(GL_TIME_ELAPSED);
 
-    for (int32_t i = 0; i < 1; i++) {
-        _svgfShader->SetUniform("u_PassNo", i);
-        _svgfShader->DispatchCompute(groupsX, groupsY, 1);
-    }
-
-    // Blit to screen
-    _blitShader->SetUniform("u_BackBuffer", *_backTex);
-    _blitShader->DispatchFullscreen();
-
-    std::swap(_backTex, _frontTex);
-    _prevProj = projMat;
-    _prevOrigin = camPos;
-
-
-    _frameNo++;
+    _gbuffer->DenoiseAndPresent();
 }
 void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
     ImGui::SeparatorText("Renderer##GPU");
@@ -271,14 +232,15 @@ void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
     _frameTime.Draw("Frame Time");
 
     auto totalIters = _metricsBuffer->Map<uint32_t>(GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
-    if (_backTex != nullptr) {
+    if (_gbuffer->CurrentTex != nullptr) {
         double frameMs, frameDevMs;
         _frameTime.GetElapsedMs(frameMs, frameDevMs);
 
-        int raysPerPixel = _debugView == DebugView::None ? 3 : 1;
-        double raysPerSec = _backTex->Width * _backTex->Height * (1000 / frameMs) * raysPerPixel;
+        uint32_t numPixels = _gbuffer->CurrentTex->Width * _gbuffer->CurrentTex->Height;
+        uint32_t raysPerPixel = _debugView == DebugView::None ? 3 : 1;
+        double raysPerSec = numPixels * raysPerPixel * (1000 / frameMs);
 
-        ImGui::Text("Traversal Iters: %.3fM (%.2fM rays/sec)", *totalIters / 1000000.0, raysPerSec / 1000000.0);
+        ImGui::Text("Rays/sec: %.2fM | Steps: %.3fM", raysPerSec / 1000000.0, *totalIters / 1000000.0);
     }
     *totalIters = 0;
 

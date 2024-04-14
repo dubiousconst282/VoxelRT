@@ -22,6 +22,9 @@ struct Renderer {
 struct GpuVoxelStorage;
 struct FlatVoxelStorage;
 
+struct GBuffer;
+struct BlueNoise;
+
 struct GpuRenderer : public Renderer {
     GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map);
     ~GpuRenderer();
@@ -35,15 +38,12 @@ private:
     std::shared_ptr<VoxelMap> _map;
     std::unique_ptr<GpuVoxelStorage> _storage;
 
-    std::shared_ptr<ogl::Shader> _renderShader, _svgfShader, _blitShader;
-    std::unique_ptr<ogl::Texture2D> _backTex, _frontTex;
-    std::unique_ptr<ogl::Texture2D> _blueNoiseScramblingTex, _blueNoiseSobolTex;
-    glm::mat4 _prevProj;
-    glm::dvec3 _prevOrigin;
+    std::shared_ptr<ogl::Shader> _renderShader;
+    std::unique_ptr<BlueNoise> _blueNoise;
+    std::unique_ptr<GBuffer> _gbuffer;
 
     DebugView _debugView = DebugView::None;
     bool _useAnisotropicLods;
-    uint32_t _frameNo = 0;
 
     glim::TimeStat _frameTime;
     GLuint _frameQueryObj = 0;
@@ -60,13 +60,10 @@ private:
     std::shared_ptr<VoxelMap> _map;
     std::unique_ptr<FlatVoxelStorage> _storage;
 
+    std::unique_ptr<GBuffer> _gbuffer;
     std::shared_ptr<ogl::Shader> _blitShader;
     std::shared_ptr<ogl::Buffer> _pbo;
-    std::unique_ptr<ogl::Texture2D> _accumTex;
 
     bool _enablePathTracer = false;
-    uint32_t _frameNo = 0;
-    uint32_t _lastChangedFrameNo = 0;
-
     glim::TimeStat _frameTime;
 };

@@ -1,5 +1,5 @@
-layout(rgba32ui) uniform uimage2D u_BackBuffer;
-layout(rgba32ui) uniform uimage2D u_FrontBuffer; // may be unbound
+layout(rgba32ui) uniform uimage2D u_GBuffer;
+layout(rgba32ui) uniform uimage2D u_HistoryBuffer; // may be unbound
 
 uniform vec3 u_OriginFrac;
 
@@ -8,11 +8,10 @@ struct GSample {
     vec3 normal;        // u8
     float depth;        // f32
     vec3 irradiance;    // f16 x 3
-    float variance;     // f16
 };
 
-GSample gbufferLoad(ivec2 pos, bool back) {
-    uvec4 data = back ? imageLoad(u_BackBuffer, pos) : imageLoad(u_FrontBuffer, pos);
+GSample gbufferLoad(ivec2 pos, bool history) {
+    uvec4 data = history ? imageLoad(u_HistoryBuffer, pos) : imageLoad(u_GBuffer, pos);
 
     GSample g;
     g.albedo = vec3(data.xxx >> uvec3(0, 8, 16) & 255u) * (1.0 / 255);
@@ -21,7 +20,6 @@ GSample gbufferLoad(ivec2 pos, bool back) {
 
     vec2 half_w = unpackHalf2x16(data.w);
     g.irradiance = vec3(unpackHalf2x16(data.z), half_w.x);
-    g.variance = half_w.y;
 
     return g;
 }
@@ -34,11 +32,10 @@ void gbufferStore(ivec2 pos, GSample g) {
              norm.x << 24 | norm.y << 26 | norm.z << 28;
     data.y = floatBitsToUint(g.depth);
     data.z = packHalf2x16(g.irradiance.xy);
-    data.w = packHalf2x16(vec2(g.irradiance.z, g.variance));
+    data.w = packHalf2x16(vec2(g.irradiance.z));
 
-    imageStore(u_BackBuffer, pos, data);
+    imageStore(u_GBuffer, pos, data);
 }
-
 
 void getPrimaryRay(vec2 uv, mat4 invProjMat, out vec3 rayPos, out vec3 rayDir) {
     vec4 near = invProjMat * vec4(uv * 2.0 - 1.0, 0.0, 1.0);

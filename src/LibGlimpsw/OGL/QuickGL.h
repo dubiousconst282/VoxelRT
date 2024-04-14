@@ -355,33 +355,22 @@ public:
             default: throw std::domain_error("Can only bind buffer to buffer uniform.");
         }
     }
-    // Bind float uniform
-    void SetUniform(std::string_view name, const float* values, uint32_t count) {
-        GLint loc = glGetUniformLocation(Handle, name.data());
 
-        switch (count) {
-            case 1: glProgramUniform1f(Handle, loc, *values); break;
-            case 2: glProgramUniform2fv(Handle, loc, 1, values); break;
-            case 3: glProgramUniform3fv(Handle, loc, 1, values); break;
-            case 4: glProgramUniform4fv(Handle, loc, 1, values); break;
-            case 16: glProgramUniformMatrix4fv(Handle, loc, 1, false, values); break;
-            default: throw std::exception();
-        }
-    }
-    void SetUniform(std::string_view name, const int* values, uint32_t count) {
-        GLint loc = glGetUniformLocation(Handle, name.data());
+    void SetUniform(std::string_view name, float value) { glProgramUniform1f(Handle, GetUniformLocation(name), value); }
+    void SetUniform(std::string_view name, int value) { glProgramUniform1i(Handle, GetUniformLocation(name), value); }
+    void SetUniform(std::string_view name, bool value) { glProgramUniform1i(Handle, GetUniformLocation(name), value ? 1 : 0); }
+    void SetUniform(std::string_view name, const glm::ivec2& value) { glProgramUniform2iv(Handle, GetUniformLocation(name), 1, &value.x); }
+    void SetUniform(std::string_view name, const glm::ivec3& value) { glProgramUniform3iv(Handle, GetUniformLocation(name), 1, &value.x); }
+    void SetUniform(std::string_view name, const glm::vec2& value) { glProgramUniform2fv(Handle, GetUniformLocation(name), 1, &value.x); }
+    void SetUniform(std::string_view name, const glm::vec3& value) { glProgramUniform3fv(Handle, GetUniformLocation(name), 1, &value.x); }
+    void SetUniform(std::string_view name, const glm::vec4& value) { glProgramUniform4fv(Handle, GetUniformLocation(name), 1, &value.x); }
+    void SetUniform(std::string_view name, const glm::mat4& value) { glProgramUniformMatrix4fv(Handle, GetUniformLocation(name), 1, false, &value[0][0]); }
 
-        switch (count) {
-            case 1: glProgramUniform1i(Handle, loc, *values); break;
-            case 2: glProgramUniform2iv(Handle, loc, 1, values); break;
-            case 3: glProgramUniform3iv(Handle, loc, 1, values); break;
-            case 4: glProgramUniform4iv(Handle, loc, 1, values); break;
-            default: throw std::exception();
-        }
-    }
-    void SetUniform(std::string_view name, int value) {
-        GLint loc = glGetUniformLocation(Handle, name.data());
-        glProgramUniform1i(Handle, loc, value);
+    GLint GetUniformLocation(std::string_view name) {
+        auto itr = _uniforms.find(name);
+        if (itr == _uniforms.end()) return -1;
+
+        return itr->second.Location;
     }
 
     void Attach(GLuint type, std::string_view source) {

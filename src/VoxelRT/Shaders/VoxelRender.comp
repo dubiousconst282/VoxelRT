@@ -21,7 +21,7 @@ void main() {
     random_init(uvec3(gl_GlobalInvocationID.xy, u_FrameNo));
 
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
-    vec2 uv = vec2(pos + 0.5) * (1.0 / imageSize(u_BackBuffer));
+    vec2 uv = vec2(pos + 0.5) / imageSize(u_GBuffer);
 
     vec3 rayDir, rayPos;
     getPrimaryRay(uv, u_InvProjMat, rayPos, rayDir);

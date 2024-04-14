@@ -8,6 +8,8 @@
 
 #include "Renderer.h"
 
+#include "Rendering/GBuffer.h"
+
 // Cannot be > 2048*512*2048 because memory index is signed 32-bits
 using ViewSectorIndexer =
     LinearIndexer3D<11 - MaskIndexer::ShiftXZ - BrickIndexer::ShiftXZ,
@@ -77,13 +79,15 @@ struct FlatVoxelStorage {
             }
             cells[BrickMaskIndexer::GetIndex(glm::uvec3(cx, cy, cz) / 4u)] = mask;
         }
+        // clang-format on
     }
 };
 
 using namespace simd;
 
-struct HitInfo {
+struct VHitResult {
     VInt MaterialData;
+    VFloat Distance;
     VFloat3 Pos;
     VFloat3 Normal;
     VFloat2 UV;
@@ -115,9 +119,9 @@ static VMask GetInboundMask(VInt x, VInt y, VInt z) {
 static VInt GetVoxelMaterial(const FlatVoxelStorage& map, VInt3 pos, VMask mask) {
     VInt sectorIdx = ViewSectorIndexer::GetIndex(pos.x >> SectorVoxelShiftXZ, pos.y >> SectorVoxelShiftY, pos.z >> SectorVoxelShiftXZ);
     VInt maskIdx = MaskIndexer::GetIndex(pos.x >> BrickIndexer::ShiftXZ, pos.y >> BrickIndexer::ShiftY, pos.z >> BrickIndexer::ShiftXZ);
-    VInt voxelIdx = BrickIndexer::GetIndex(pos.x,pos.y,pos.z);
+    VInt voxelIdx = BrickIndexer::GetIndex(pos.x, pos.y, pos.z);
 
-    VInt slotIdx = sectorIdx*(sizeof(Brick)*64) + maskIdx*sizeof(Brick) + voxelIdx;
+    VInt slotIdx = sectorIdx * (sizeof(Brick) * 64) + maskIdx * sizeof(Brick) + voxelIdx;
 
     // Do 4-aligned gather to avoid crossing cache/pages
     VInt voxelIds = VInt::mask_gather<4>(map.StorageBuffer.get(), slotIdx >> 2, mask);
@@ -139,7 +143,7 @@ static VMask GetStepPos(const FlatVoxelStorage& map, VInt3& pos, VFloat3 dir, VM
     VInt lod = 3;
 
     if (simd::any(level0)) {
-        VInt cellIdx = (sectorIdx*(sizeof(Brick)*64) + maskIdx*sizeof(Brick))>>6;
+        VInt cellIdx = (sectorIdx * (sizeof(Brick) * 64) + maskIdx * sizeof(Brick)) >> 6;
         cellIdx += BrickMaskIndexer::GetIndex(pos.x >> 2, pos.y >> 2, pos.z >> 2);
 
         set_if(level0, maskIdx, MaskIndexer::GetIndex(pos.x, pos.y, pos.z));
@@ -166,7 +170,7 @@ static VMask GetStepPos(const FlatVoxelStorage& map, VInt3& pos, VFloat3 dir, VM
 }
 
 // TODO: consider 2x unroll to help hide gather latency from better ILP, need to profile first
-static HitInfo RayCast(const FlatVoxelStorage& map, VFloat3 origin, VFloat3 dir, VMask activeMask, glm::ivec3 worldOrigin) {
+static VHitResult RayCast(const FlatVoxelStorage& map, VFloat3 origin, VFloat3 dir, VMask activeMask, glm::ivec3 worldOrigin) {
     VFloat3 invDir = 1.0f / dir;
     // VFloat3 tStart = (max(sign(dir), 0.0) - origin) * invDir;
     VFloat3 tStart = {
@@ -181,7 +185,7 @@ static HitInfo RayCast(const FlatVoxelStorage& map, VFloat3 origin, VFloat3 dir,
 
     for (uint32_t i = 0; i < 128; i++) {
         voxelPos = worldOrigin + VInt3(floor2i(currPos.x), floor2i(currPos.y), floor2i(currPos.z));
-        
+
         inboundMask = GetInboundMask(voxelPos.x, voxelPos.y, voxelPos.z);
         activeMask &= inboundMask;
         VMask hitMask = GetStepPos(map, voxelPos, dir, activeMask);
@@ -198,12 +202,14 @@ static HitInfo RayCast(const FlatVoxelStorage& map, VFloat3 origin, VFloat3 dir,
         currPos = origin + tmin * dir;
     }
 
-    VMask sideMaskX = sideDist.x < min(sideDist.y, sideDist.z);
-    VMask sideMaskY = sideDist.y < min(sideDist.x, sideDist.z);
+    VFloat hitDist = min(min(sideDist.x, sideDist.y), sideDist.z);
+    VMask sideMaskX = sideDist.x == hitDist;
+    VMask sideMaskY = sideDist.y == hitDist;
     VMask sideMaskZ = ~sideMaskX & ~sideMaskY;
 
     return {
         .MaterialData = GetVoxelMaterial(map, voxelPos, ~activeMask),
+        .Distance = hitDist,
         .Pos = currPos,
         .Normal = {
             csel(sideMaskX, (dir.x & -0.0f) ^ VFloat(-1.0f), 0),  // dir.x < 0 ? +1 : -1
@@ -230,25 +236,24 @@ static void GetPrimaryRay(VFloat2 uv, const glm::mat4& invProjMat, VFloat3& rayP
 CpuRenderer::CpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
     _map = std::move(map);
     _storage = std::make_unique<FlatVoxelStorage>();
+    _gbuffer = std::make_unique<GBuffer>(shlib);
 
-    _blitShader = shlib.LoadFrag("BlitTiledFramebuffer_4x4", { { "FORMAT_RGB10", "1" } });
-
+    _blitShader = shlib.LoadComp("CopyTiledFramebuffer");
     _map->MarkAllDirty();
 }
 
 CpuRenderer::~CpuRenderer() = default;
 
 struct Framebuffer {
+    struct alignas(64) Tile {
+        VInt Albedo;        // RGBA8, A = normal
+        VFloat Depth;
+        VInt IrradianceRG;  // F16
+        VInt IrradianceBX;  // F16, u16 unused
+    };
     uint32_t Width, Height, TileStride;
-    uint32_t Pixels[];
-
-    uint32_t GetPixelOffset(uint32_t x, uint32_t y) {
-        const uint32_t TileSize = 4, TileShift = 2, TileMask = TileSize - 1, TileNumPixels = TileSize * TileSize;
-
-        uint32_t tileId = (x >> TileShift) + (y >> TileShift) * TileStride;
-        uint32_t pixelOffset = (x & TileMask) + (y & TileMask) * TileSize;
-        return tileId * TileNumPixels + pixelOffset;
-    }
+    uint32_t TileShiftX, TileShiftY;
+    Tile Tiles[];
 };
 
 void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
@@ -257,58 +262,54 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 #endif
     viewSize &= ~3u;  // round down to 4x4 steps
 
-
-    static glm::dvec3 prevCameraPos;
-    static glm::quat prevCameraRot;
-    bool camChanged = false;
-    bool worldChanged = _map->DirtyLocs.size() > 0;
-
-    if (glm::distance(cam.ViewPosition, prevCameraPos) > 0.1f || glm::dot(cam.ViewRotation, prevCameraRot) < 0.999999f) {
-        camChanged = true;
-    }
-    prevCameraPos = cam.ViewPosition;
-    prevCameraRot = cam.ViewRotation;
-
     _storage->SyncBuffers(*_map);
 
-    if (_pbo == nullptr || _pbo->Size < viewSize.y * viewSize.y * 4 + 12) {
-        _pbo = std::make_unique<ogl::Buffer>(viewSize.x * viewSize.y * 4 + 12, GL_MAP_WRITE_BIT);
-    }
-    if (_accumTex == nullptr || _accumTex->Width != viewSize.x || _accumTex->Height != viewSize.y) {
-        _accumTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA16F);
+    uint32_t tilesX = viewSize.x / simd::TileWidth;
+    uint32_t tilesY = viewSize.y / simd::TileHeight;
+    size_t fbSize = (tilesX * tilesY * sizeof(Framebuffer::Tile)) + sizeof(Framebuffer);
+    if (_pbo == nullptr || _pbo->Size < fbSize) {
+        _pbo = std::make_unique<ogl::Buffer>(fbSize, GL_DYNAMIC_STORAGE_BIT | GL_MAP_WRITE_BIT);
     }
 
-    glm::dvec3 camPos = cam.ViewPosition;
-    glm::ivec3 worldOrigin = glm::ivec3(glm::floor(camPos));
+    _gbuffer->SetCamera(cam, viewSize, false);
 
-    glm::mat4 viewMat = glm::translate(cam.GetViewMatrix(false), glm::vec3(glm::floor(camPos) - camPos));
-    glm::mat4 invProj = glm::inverse(cam.GetProjMatrix() * viewMat);
+    glm::mat4 invProj = _gbuffer->CurrentInvProj;
     // Bias matrix to take UVs in range [0..screen] rather than [-1..1]
     invProj = glm::translate(invProj, glm::vec3(-1.0f, -1.0f, 0.0f));
     invProj = glm::scale(invProj, glm::vec3(2.0f / viewSize.x, 2.0f / viewSize.y, 1.0f));
 
+    // Writing to memory mapping is ~1ms slower than local buffer at 1080p,
+    // but temp buffer + BufferSubData() is even slower... though probably faster for dGPUs?
+    // auto fb = (Framebuffer*)_fbData.get();
     auto fb = _pbo->Map<Framebuffer>(GL_MAP_WRITE_BIT);
     fb->Width = viewSize.x;
     fb->Height = viewSize.y;
-    fb->TileStride = viewSize.x / 4;
+    fb->TileStride = viewSize.x / simd::TileWidth;
+    fb->TileShiftX = (uint32_t)std::countr_zero(simd::TileWidth);
+    fb->TileShiftY = (uint32_t)std::countr_zero(simd::TileHeight);
 
     _frameTime.Begin();
 
     static swr::HdrTexture2D _skyBox = swr::texutil::LoadCubemapFromPanoramaHDR("assets/skyboxes/evening_road_01_puresky_4k.hdr");
+    glm::ivec3 worldOrigin = glm::floor(cam.ViewPosition);
 
     auto rows = std::ranges::iota_view(0u, viewSize.y / simd::TileHeight);
     std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
-        VRandom rng(rowId + _frameNo * 123456ull);
+        VRandom rng(rowId + _gbuffer->FrameNo * 123456ull);
         uint32_t y = rowId * simd::TileHeight;
+        auto tile = &fb->Tiles[(y / simd::TileHeight) * fb->TileStride];
 
         for (uint32_t x = 0; x < viewSize.x; x += simd::TileWidth) {
-            VFloat u = simd::conv2f((int32_t)x + simd::TileOffsetsX) + rng.NextUnsignedFloat() - 0.5f;
-            VFloat v = simd::conv2f((int32_t)y + simd::TileOffsetsY) + rng.NextUnsignedFloat() - 0.5f;
+            VFloat u = simd::conv2f((int32_t)x + simd::TileOffsetsX) + 0.5f; // + rng.NextUnsignedFloat() - 0.5f;
+            VFloat v = simd::conv2f((int32_t)y + simd::TileOffsetsY) + 0.5f; // + rng.NextUnsignedFloat() - 0.5f;
 
             VFloat3 origin, dir;
             GetPrimaryRay({ u, v }, invProj, origin, dir);
+            origin += VFloat3(glm::fract(_gbuffer->CurrentPos));
 
-            VFloat3 finalColor = 0.0f;
+            VInt albedo;
+            VFloat depth;
+            VFloat3 irradiance = 0.0f;
             VFloat3 throughput = 1.0f;
             VMask mask = (VMask)(~0);
 
@@ -332,39 +333,46 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
                     set_if(missMask, matColor.z, skyColor.z);
                     set_if(missMask, emissionStrength, 1.0f);
                 }
+                if (i == 0) {
+                    VInt packedNorm = (round2i(hit.Normal.x) + 1) << 24 |
+                                      (round2i(hit.Normal.y) + 1) << 26 |
+                                      (round2i(hit.Normal.z) + 1) << 28;
+                    albedo = swr::pixfmt::RGBA8u::Pack({ matColor, 0.0f }) | packedNorm;
+                    depth = hit.Distance;
 
-                if (!_enablePathTracer) [[unlikely]] {
-                    finalColor = matColor;
-                    break;
+                    if (!_enablePathTracer) {
+                        irradiance = 1.0f;
+                        break;
+                    }
+                } else {
+                    throughput *= matColor;
                 }
-
-                throughput *= matColor;
-                finalColor += throughput * emissionStrength;
+                irradiance += throughput * emissionStrength;
                 mask &= hit.Mask;
 
                 origin = hit.Pos + hit.Normal * 0.01f;
                 dir = simd::normalize(hit.Normal + rng.NextDirection());  // lambertian
             }
-            VInt color = swr::pixfmt::RGB10u::Pack(finalColor * 0.25);
-            color.store(&fb->Pixels[fb->GetPixelOffset(x, y)]);
+            // Write out entire tile at once in hopes for better write-combining or whatever
+            *tile++ = {
+                .Albedo = albedo,
+                .Depth = depth,
+                .IrradianceRG = swr::pixfmt::RG16f::Pack({ irradiance.x, irradiance.y }),
+                .IrradianceBX = swr::pixfmt::RG16f::Pack({ irradiance.z }),
+            };
         }
     });
 
     _frameTime.End();
-    _frameNo++;
-    if (camChanged) {
-        _lastChangedFrameNo = _frameNo;
-    } else if (worldChanged) {
-        _lastChangedFrameNo = std::max(_frameNo, 8u) - 8;
-    }
 
+    // Present
+    _gbuffer->SetUniforms(*_blitShader);
     _blitShader->SetUniform("ssbo_FrameData", *_pbo);
-    _blitShader->SetUniform("u_AccumTex", *_accumTex);
 
-    uint32_t numAccumFrames = std::min(_frameNo - _lastChangedFrameNo, 1024u);
-    float blendWeight = 1.0f / (numAccumFrames + 1);
-    _blitShader->SetUniform("u_BlendWeight", &blendWeight, 1);
-    _blitShader->DispatchFullscreen();
+    uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
+    _blitShader->DispatchCompute(groupsX, groupsY, 1);
+
+    _gbuffer->DenoiseAndPresent();
 }
 void CpuRenderer::DrawSettings(glim::SettingStore& settings) {
     ImGui::SeparatorText("Renderer##CPU");
@@ -372,5 +380,15 @@ void CpuRenderer::DrawSettings(glim::SettingStore& settings) {
 
     ImGui::Separator();
     _frameTime.Draw("Frame Time");
-    ImGui::Text("Accum Frames: %d", _frameNo - _lastChangedFrameNo);
+
+    if (_gbuffer->CurrentTex != nullptr) {
+        double frameMs, frameDevMs;
+        _frameTime.GetElapsedMs(frameMs, frameDevMs);
+
+        uint32_t numPixels = _gbuffer->CurrentTex->Width * _gbuffer->CurrentTex->Height;
+        uint32_t raysPerPixel = _enablePathTracer ? 3 : 1;
+        double raysPerSec = numPixels * raysPerPixel * (1000 / frameMs);
+
+        ImGui::Text("Rays/sec: %.2fM", raysPerSec / 1000000.0);
+    }
 }

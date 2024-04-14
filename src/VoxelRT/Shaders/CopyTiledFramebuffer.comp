@@ -1,0 +1,33 @@
+#include "GBuffer.glsl"
+
+readonly buffer ssbo_FrameData {
+    uint Width, Height, Stride;
+    uint TileShiftX, TileShiftY;
+    uint Padding[11];
+    uint PixelData[];
+};
+
+GSample unpackPixel(uvec2 pos) {
+    uint FieldStride = 1u << (TileShiftX + TileShiftY);
+    uint TileStride = (FieldStride * 4 + 15) & ~15;
+    uint TileMaskX = (1u << TileShiftX) - 1;
+    uint TileMaskY = (1u << TileShiftY) - 1;
+
+    uint tileId = (pos.x >> TileShiftX) + (pos.y >> TileShiftY) * Stride;
+    uint pixelOffset = (pos.x & TileMaskX) + ((pos.y & TileMaskY) << TileShiftX);
+    uint offset = tileId * TileStride + pixelOffset;
+
+    GSample g;
+    g.albedo = unpackUnorm4x8(PixelData[offset + FieldStride * 0]).rgb;
+    g.normal = vec3(uvec3(PixelData[offset + FieldStride * 0]) >> uvec3(24, 26, 28) & 3u) - 1;
+    g.depth = uintBitsToFloat(PixelData[offset + FieldStride * 1]);
+    g.irradiance.rg = unpackHalf2x16(PixelData[offset + FieldStride * 2]);
+    g.irradiance.b = unpackHalf2x16(PixelData[offset + FieldStride * 3]).r;
+    return g;
+}
+
+layout(local_size_x = 8, local_size_y = 8) in;
+void main() {
+    GSample g = unpackPixel(gl_GlobalInvocationID.xy);
+    gbufferStore(ivec2(gl_GlobalInvocationID.xy), g);
+}
