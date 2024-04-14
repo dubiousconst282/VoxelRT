@@ -162,11 +162,18 @@ bool rayTrace(vec3 origin, vec3 dir, out HitInfo hit) {
     for (uint i = 0; i < 256; i++) {
         vec3 sideDist = tStart + vec3(voxelPos - u_WorldOrigin) * invDir;
         float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
-        tmin += tmin < 8 ? 0.00015 : tmin < 1024 ? 0.001 : 0.01;
+        tmin = uintBitsToFloat(floatBitsToUint(tmin) + 5);
         vec3 currPos = origin + tmin * dir;
 
+        // Accurate DDA masks, helps in a few cases but hurts on others.
+        //sideMask.x = sideDist.x < sideDist.y && sideDist.x < sideDist.z;
+        //sideMask.y = !sideMask.x && sideDist.y < sideDist.z;
+        //sideMask.z = !sideMask.x && !sideMask.y;
+
+        // Accurate stepping, helps when using small bias but alone isn't enough to prevent ray from getting stuck.
+        //voxelPos = u_WorldOrigin + ivec3(floor(mix(currPos, currPos + dir*0.01, sideMask)));
         voxelPos = u_WorldOrigin + ivec3(floor(currPos));
-        
+
         if (!isInBounds(voxelPos)) {
             hit.iters = i;
             TRAVERSAL_METRIC_ITER_ADD;
@@ -176,7 +183,7 @@ bool rayTrace(vec3 origin, vec3 dir, out HitInfo hit) {
             hit.mat = getVoxelMaterial(voxelPos);
             hit.dist = tmin;
             hit.pos = currPos;
-            
+
             bvec3 sideMask = greaterThanEqual(vec3(tmin), sideDist);
             hit.uv = fract(mix(currPos.xz, currPos.yy, sideMask.xz));
             hit.normal = mix(vec3(0), -sign(dir), sideMask);

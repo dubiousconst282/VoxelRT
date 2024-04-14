@@ -1,18 +1,18 @@
 # Voxel ray tracing notes
 
 **Key points:**
-- Parametric voxel traversal algorithm (as per [ESVO](#sparse-voxel-octrees-svos) and [ADT07])
+- Parametric voxel traversal algorithm (as per [ESVO](#sparse-voxel-octrees-svos-and-dags), [ADT07], and others)
   - Easy to accelerate with space skipping
   - Faster than standard incremental DDA
+  - Needs workarounds to deal with limited float precision
 - 64-bit occupancy bitmasks within 4x4x4 tiles
   - Useful for sparse storage allocation and space skipping LODs
   - Provides up to 3 LODs with a single 64-bit access
 
----
+## Introductory fluff
+A natural approach for rendering voxels on a GPU is by rasterizing meshes that represent the voxel geometry. It's a proven method that works reasonably well and is very flexible, but can be relatively complicated to scale up - from my outsider view, this would probably mean stuff like minimizing draw calls, compressing vertices, multi-threading the mesher because it's slow af, occlusion culling, and probably getting cursed by greedy meshing at some point...
 
-A natural approach for rendering voxels on a GPU is by using meshes. It's a proven method that works reasonably well and is very flexible, but can be complicated to scale up - think LODs, draw calls, buffer management, overdraw, chunk occlusion, greedy meshing (and its too many curses) ...the kind of stuff that actually makes for a pretty good way to learn graphics APIs and programming, if you manage to keep your sanity during the process I guess.
-
-Ray tracing is not easier to implement efficiently either ~~(big revelation)~~, but conceptually much simpler and allows for very nice looking (and expansive) lighting effects. Even without any acceleration structures, it can be surprisingly fast, as demonstrated by these remarkable shadertoys:
+Ray tracing isn't without its problems and difficulties of course, but arguably a lot simpler to get started - simply mem-copy voxel data as is to a GPU buffer and start casting rays through it in a shader. Even without any acceleration structures, it can be surprisingly fast, as demonstrated by these remarkable shadertoys:
 
 <table align="center">
     <tr align="center">
@@ -31,8 +31,7 @@ Ray tracing is not easier to implement efficiently either ~~(big revelation)~~, 
     </tr>
 </table>
 
----
-
+## Ray Casting Voxels
 The classic way to ray trace voxels is by using the [Fast Voxel Traversal](https://github.com/cgyurgyik/fast-voxel-traversal-algorithm/blob/master/overview/FastVoxelTraversalOverview.md) algorithm, which is a simple DDA loop that incrementally traverses through all intersecting voxels by comparing plane intersection distances and stepping through whichever side has progressed least at each iteration:
 
 <div align="center">
@@ -40,14 +39,14 @@ The classic way to ray trace voxels is by using the [Fast Voxel Traversal](https
   <p><i>2D DDA animation. <b>dx</b> and <b>dy</b> are the "side distances" or "tMax".</i></p>
 </div>
 
-Acceleration techniques based on space skipping relies on the ray tracer being able to step by variable amounts, which is not trivial to implement in the incremental DDA efficiently - most approaches I have seen are hybrids that look somewhat susceptible to thread divergence, like switching between ray marching and DDA, or nesting multi-level DDAs (which actually seems to be used by Teardown, so it's probably not that bad?).
+Acceleration techniques based on space skipping relies on the ray caster being able to step by variable amounts, which is not trivial to implement in the incremental DDA efficiently - most approaches I have seen are hybrids that look somewhat susceptible to thread divergence, like switching between ray marching and DDA, or nesting multi-level DDAs (which actually seems to be used by Teardown, so it's probably not that bad?).
 
 On modern (decades old) hardware, floating-point multiply-adds are equally as cheap as individual adds or multiplies, so calculating the side distances per iteration isn't as much of a big deal as when the incremental algorithm was developed. Much like in the [slab AABB intersection algorithm](https://en.wikipedia.org/wiki/Slab_method), these distances can be computed efficiently by solving for the parametric equation `P(t) = origin + dir * t`.
 
-This yields a relatively compact tracing function, that is actually slightly faster than the [incremental DDA](https://www.shadertoy.com/view/4dX3zl) even without any acceleration structures - or at least that's what my very [precarious benchmark](./sketches/dda_vs_parametric.glsl) suggests.
+This yields a relatively compact casting function, that is actually slightly faster than the [incremental DDA](https://www.shadertoy.com/view/4dX3zl) even without any acceleration structures - or at least that's what my very [precarious benchmark](./sketches/dda_vs_parametric.glsl) suggests.
 
 ```glsl
-bool rayTrace(vec3 origin, vec3 dir, out HitInfo hit) {
+bool rayCast(vec3 origin, vec3 dir, out HitInfo hit) {
     vec3 invDir = 1.0 / dir;
     vec3 tStart = (step(0.0, dir) - origin) * invDir;
     ivec3 voxelPos = ivec3(floor(origin));
@@ -79,15 +78,25 @@ bool getStepPos(inout ivec3 pos, vec3 dir) {
 }
 ```
 
-A few notes:
-- The bias added to `tmin` is to workaround float precision limitations and ensure that the position always crosses through voxel boundaries, otherwise the ray will get stuck. This unfortunately leads to some artifacts around voxel edges (due to hit misses) that are especially visible at close-ups.
-  - Another way to bias is to instead increment `voxelPos` by `sign(dir)` depending on `sideMask`. This eliminates all edge artifacts but doesn't prevent rays from getting stuck as coordiantes get bigger (leads to isolated pixel-size misses).
-  - The [ESVO] implementation steps by manipulating the binary float representation directly, which presumably avoids any such issues, at the cost of being much harder to follow.
+The bias added to `tmin` is needed to ensure that the resulting intersection position gets rounded _through_ voxel boundaries, otherwise the ray will get stuck. Sadly, this leads to some artifacts around rays that are either too near or too far from voxels, in which case edges are missed _or_ the bias gets rounded off due to limited float precision.
+
+<div align="center">
+  <img src="VoxelNotes/prt_precision_near.png" width="48%">
+  <img src="VoxelNotes/prt_precision_far.png" width="33.6%">
+</div>
+
+---
+
+Instead of using a constant, I found that biasing by a few ULPs is enough to get rid of 99% artifacts: `tmin = uintBitsToFloat(floatBitsToUint(tmin) + 5);`. This is essentially adding a small value that varies according to the float magnitude. Shader specs demand some minimum precision around float ops, but this might not work universally (and it does in fact fail on my CPU AVX implementation, although `-ffast-math` may be to blame).
+
+Like in [ESVO](#sparse-voxel-octrees-svos-and-dags), a possibly better approach would be to use normalized coordinates across a finite grid, to  emulate a fixed-point format without resorting to integers (which typically have half throughput on GPUs). This would at least allow the bias to be embedded in `tStart` instead of inside the loop.
+
+There's a few more things:
 - The ray origin should be keept close to 0,0,0 to maximize available float precision, translation should be applied to the world instead (integer voxel coordinates). This can be done by offseting both `voxelPos` by `floor(actualCameraPos)` and ray origin by `fract(actualCameraPos)`. Translating the view-projection matrix instead of ray origin by the fraction will cause noticeable jittering artifacts when FOV is too low and mess up with temporal reprojection (mat4 precision seems to be way lower than I thought?).
 - Rays originating from outside the grid need to be clipped to the grid bounds using an [AABB intersection algorithm](https://en.wikipedia.org/wiki/Slab_method).
 
 ## Acceleration structures
-Voxel grids are usually very sparse, so most of the time spent by the ray tracer will be wasted stepping through empty space. There exists many acceleration techniques that help mitigate this issue and enable real-time tracing on even lower-end GPUs.
+Voxel grids are usually very sparse, so most of the time spent by the ray tracer will be wasted stepping through empty space. Thankfully, there exists many acceleration techniques that help mitigate this issue and enable real-time tracing on even lower-end GPUs.
 
 ### Distance Fields (DFs)
 Distance fields are perhaps the simplest such acceleration structure, and they're quite effective at it. The idea is that for every empty voxel, the distance to the nearest occupied voxel is stored along with it, so the ray tracer can step to a new position by offseting the current position along the ray based on that distance.
@@ -208,7 +217,7 @@ uint getOccupancy(ivec3 pos, int k) {
 }
 ```
 
-An obvious inefficiency with this code is that it needs to search for the highest non-occupied mip from scratch on every iteration. The [ESVO](#sparse-voxel-octrees-svos) paper proposes the use of a stack to enter and leave octree nodes, but a similar optimization can be done more easily here by inlining getStepPos() and preserving the mip-level `k` between iterations, so the search can continue at the level found in the previous iteration. This also has the nice bonus that voxel materials only need to be queried at the end of traversal, saving precious memory bandwidth.
+An obvious inefficiency with this code is that it needs to search for the highest non-occupied mip from scratch on every iteration. The [ESVO](#sparse-voxel-octrees-svos-and-dags) paper proposes the use of a stack to enter and leave octree nodes, but a similar optimization can be done more easily here by inlining getStepPos() and preserving the mip-level `k` between iterations, so the search can continue at the level found in the previous iteration.
 
 ```glsl
     int k = 3; // arbitrary initial level
@@ -243,7 +252,7 @@ Similarly to greedy meshing, this can be implemented by expanding the cell size 
 
 I didn't spend too much time tuning the code because the actual performance gains weren't that promising, although the global number of iterations decreases significantly by around 1/2 and 1/3 on average - which to be fair is not that surprising given that most cells are grown to twice their original size. Taking 7 extra memory fetches per iteration is clearly not quite worth it, or at least not for primary rays that are very coherent.
 
-I'll describe a better implementation of OCMs using 64-bit masks in the [brickmap section](#anisotropic-lods).
+I'll describe a better implementation of OCMs using 64-bit masks in the [brickmap section](#brickmaps_chunking).
 
 ```glsl
     // 0 1   8 16   x+
@@ -282,11 +291,11 @@ Minecraft uses "2D" chunks that represents vertical columns of 16³ sections, wh
 - https://github.com/stijnherfst/BrickMap
 
 ### My attempt
-I settled for a 2-level brickmap of 8³ bricks within 4³ sectors. (8³ feels a bit too small so might change it to 16³ at some point)
+I settled for a 2-level brickmap of 8³ bricks within 4³ sectors. (8³ feels a bit too small and 16³ feels too big without having more LOD levels, although in retrospective, the later is probably still a better choice for bigger scenes.)
 
 For GPU storage, I use a single buffer and a [free list](https://en.wikipedia.org/wiki/Free_list) to allocate brick slots. Each sector contains a _64-bit allocation mask_ and a single _base brick slot_ within the storage buffer, allowing individual brick slots to be computed implicitly (without pointers) by counting preceding allocations using a popcount instruction: `baseSlot + bitCount(allocMask & ((1ull << brickIdx) - 1))`.
 
-The sector allocation masks can also be used to derive 3 occupancy LODs without any extra memory fetches, which alone can speedup the traversal to surprisingly useable levels. To further reduce traversal cost, I use two extra OCM layers - one at sector-level and the other at voxel-level. The voxel OCM is generated by a compute shader after brick data is uploaded.
+The sector allocation masks can also be used to derive 3 occupancy LODs without any extra memory fetches, which alone can speedup the traversal to surprisingly useable levels. To further reduce traversal cost, I use two extra OCM layers - one at sector level and the other at voxel level. The voxel OCM is generated by a compute shader after brick data is uploaded.
 
 On tested scenes (voxelized Bistro at 4096x1024x4096 resolution), my implementation runs at around 250-350M rays per second on a Intel Xe iGPU with 96 EUs - well enough for >60FPS at 1080p assuming only primary rays are cast. Diffuse bounce rays are naturally incoherent and lead to considerable divergence and cache misses in the tracing loop, reducing throughput by around 50-70%. Binning rays based on direction could possibly help remediate this issue.
 
@@ -306,13 +315,41 @@ int getIsotropicLod(uvec2 mask, uint idx) {
     }
     return 0;
 }
+
+// Voxel data used for rendering
+buffer ssbo_VoxelData {
+    Material Palette[256];
+    // For addressing BrickData and VoxelMasks.
+    uint BaseSlots[NUM_SECTORS];
+    // OCMs at brick level, aka. AllocMasks.
+    uvec2 BrickMasks[NUM_SECTORS];
+    // OCMs at sector level for skipping when BrickMask is fully empty.
+    uvec2 SectorMasks[NUM_SECTORS / 64];
+    uint BrickData[];
+};
+
+buffer ssbo_VoxelMasks {
+    uvec2 VoxelMasks[];
+};
 ```
 
 ### Extra: Anisotropic LODs
-TODO
+Anisotropic LODs restricted to 4³ bitmasks and only 2-3 levels were considerably less effective than my older OCM implementation. The simplest solution I could come up to sample the bitmasks was through a series of [comparisons per axis](https://github.com/dubiousconst282/VoxelRT/blob/247079bef4d3e0fa5ccff6ba1a82e77b02e924c9/src/VoxelRT/Shaders/VoxelTraversal.glsl#L36), but that was still not fast enough to beat plain isotropic sampling - overall, the number of iterations decreases by around 60% while traversal time increases by 10-15%.
 
-Greedy expansion within 4³ bitmasks seems to have varying effectiveness across scenes, and are overall much less effective than my older OCM implementation (although having bitmasks only at voxel and brick levels might be one of the limitations).  
-The LOD expansion algorithm can be implemented using only 3 comparisons per axis, but it still turns out to be slower than just doing plain isotropic LODs. 
+<table align="center">
+    <tr>
+        <th> <p align="center">Isotropic</p> </th>
+        <th> <p align="center">Anisotropic</p> </th>
+    </tr>
+    <tr>
+        <td> <img src="VoxelNotes/aniso/mask_lod_iso1.png"> </td>
+        <td> <img src="VoxelNotes/aniso/mask_lod_ani1.png"> </td>
+    </tr>
+    <tr>
+        <td> <img src="VoxelNotes/aniso/mask_lod_iso2.png"> </td>
+        <td> <img src="VoxelNotes/aniso/mask_lod_ani2.png"> </td>
+    </tr>
+</table>
 
 ### Extra: Run-length compression
 Using the same popcnt trick as sparse brick storage, voxel data can be run-length compressed very quickly in a way that allows for O(1) random accesses. Here's a simple example of how it works:
@@ -338,24 +375,31 @@ I have benchmarked a rudimentary implementation, but did not finish integrating 
 | Bistro 8k     | 2034.28 MB | 282.806 MB | 364.978 MB |
 | Terrain 2k    | 417.41 MB  | 391.784 MB | 57.8487 MB |
 
-### Sparse Voxel Octrees (SVOs)
-Oh yeah, SVOs... I can't say much about them because I have only skimmed through the ESVO paper, which is actually quite readable and has some neat ideas, but overall gives me the impression that octrees are somewhat complicated and still not flexible enough - at least not for what I care anyway.
+### Sparse Voxel Octrees (SVOs) and DAGs
+These are evidently the most influencial and state of the art data structures for voxel storage, but I can't say much about them because I have only skimmed through the papers... I guess they might be very well worth for micro-voxels, but are too complicated otherwise.
 
 ---
 
 - [Efficient Sparse Voxel Octrees - Analysis, Extensions, and Implementation](https://research.nvidia.com/publication/2010-02_efficient-sparse-voxel-octrees-analysis-extensions-and-implementation)
+- [Editing Compressed High-resolution Voxel Scenes with Attributes](https://onlinelibrary.wiley.com/doi/10.1111/cgf.14757)
+  - Most recent(?) paper on SVDAGs. Combines geometry SVDAG with decoupled and chunked attribute data.
+
+Complementary:
 - [Advanced Octrees 2: node representations](https://geidav.wordpress.com/2014/08/18/advanced-octrees-2-node-representations/)
 - https://github.com/DavidWilliams81/cubiquity
-  - SVO-DAG impl: https://github.com/DavidWilliams81/cubiquity/blob/master/src/application/commands/view/glsl/pathtracing.frag#L333
+  - https://github.com/DavidWilliams81/cubiquity/blob/master/src/application/commands/view/glsl/pathtracing.frag#L333
 
-## Extra: Ray-Aligned Occupancy Maps
+
+## Extra resources
+
+### Ray-Aligned Occupancy Maps
 [ROMA23] presents a very interesting approach for approximate ray tracing in close to O(1) complexity by exploiting [bit-scan instructions](https://en.wikipedia.org/wiki/Find_first_set). The idea is to create several occupancy maps that are each rotated by a random direction, so ray tracing can choose the one that is most aligned to the ray direction and then use the bit-scan instructions to compute step sizes.
 
 Since grid rotations are lossy, ROMAs can only approximate intersections and are only suitable for diffuse light rays when used in conjunction to temporal accumulation. (Though it may be possible to use a conservative rotation algorithm that over-fills to avoid over-steps for primary rays.)
 
 - [ROMA23]: [Ray-aligned Occupancy Map Array for Fast Approximate Ray Tracing](https://zheng95z.github.io/publications/roma23)
 
-## Extra: Parallax Ray Marching
+### Parallax Ray Marching
 Parallax Ray Marching avoids most of the acceleration problem by first rasterizing opaque bounding-boxes at a coarser voxel resolution, so a initial ray origin can be set to the world-space position given to the fragment shader.
 
 The ESVO paper proposes a similar approach to PRM called "Beam Optimization", to first render the scene at some fraction of the native resolution over coarser LODs to generate depth values for origin estimation.
@@ -364,8 +408,9 @@ Of course, these methods only work for the primary camera ray, so renderers need
 
 - [Drawing MILLIONS of voxels on an integrated GPU with parallax ray marching [Voxel Devlog #4]](https://youtu.be/h81I8hR56vQ&t=243)
 - [Teardown Frame Teardown](https://acko.net/blog/teardown-frame-teardown)
+- [Teardown Teardown](https://juandiegomontoya.github.io/teardown_breakdown.html) (more detailed)
 
-## Extra: Greedy Binary Meshing, Global Lattice (N+N+N planes)
+### Greedy Binary Meshing, Global Lattice (N+N+N planes)
 Greedy meshing is typically restricted to voxels and lighting of the same type, but a more compact mesh can be generated by considering only binary occupancy states. The actual voxel types can be sampled in the fragment shader from a 3D texture or buffer. Texture UVs and normals can be easily derived from the interpolated world space position (using fract() and screen-space derivatives), so vertices only need to store position and possibly lighting information.
 
 This idea can be further extended into the "global lattice" method, where no voxel mesh needs to be generated at all and instead N*3 static planes can be drawn directly. One problem with this method is the significant overdraw caused by drawing thousands of overlapping planes, which could perform worse than plain DDA ray tracing.
@@ -374,7 +419,7 @@ This idea can be further extended into the "global lattice" method, where no vox
 - https://www.reddit.com/r/VoxelGameDev/comments/nip02b/comment/gz3urmf
 - https://www.youtube.com/watch?v=40JzyaOYJeY - Voxel Meshing Optimizations
 
-## Extra: Octree Splatting
+### Octree Splatting
 Another way to render voxel octrees is by recursively projecting and filling octree nodes to screen coordinates.
 
 - https://github.com/dairin0d/OctreeSplatting/blob/main/Notes/Overview.md
