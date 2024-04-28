@@ -146,11 +146,11 @@ static VMask GetStepPos(const FlatVoxelStorage& map, VInt3& pos, VFloat3 dir, VM
         VInt cellIdx = (sectorIdx * (sizeof(Brick) * 64) + maskIdx * sizeof(Brick)) >> 6;
         cellIdx += BrickMaskIndexer::GetIndex(pos.x >> 2, pos.y >> 2, pos.z >> 2);
 
-        set_if(level0, maskIdx, MaskIndexer::GetIndex(pos.x, pos.y, pos.z));
-        set_if(level0, lod, 0);
+        maskIdx.set_if(level0, MaskIndexer::GetIndex(pos.x, pos.y, pos.z));
+        lod.set_if(level0, 0);
 
-        set_if(level0, mask_0, VInt::mask_gather<8>((uint8_t*)map.OccupancyStorage.get() + 0, cellIdx, mask & level0));
-        set_if(level0, mask_32, VInt::mask_gather<8>((uint8_t*)map.OccupancyStorage.get() + 4, cellIdx, mask & level0));
+        mask_0.set_if(level0, VInt::mask_gather<8>((uint8_t*)map.OccupancyStorage.get() + 0, cellIdx, mask & level0));
+        mask_32.set_if(level0, VInt::mask_gather<8>((uint8_t*)map.OccupancyStorage.get() + 4, cellIdx, mask & level0));
 
         currMask = csel(maskIdx < 32, mask_0, mask_32);
         level0 = (currMask >> (maskIdx & 31) & 1) != 0;
@@ -162,9 +162,9 @@ static VMask GetStepPos(const FlatVoxelStorage& map, VInt3& pos, VFloat3 dir, VM
 
     VInt cellMask = (1 << lod) - 1;
     // TODO: can this be optimized to 1x ternlog using shift to get dir sign? bypass latency probably cheaper than cmp
-    set_if(mask, pos.x, csel(dir.x < 0, (pos.x & ~cellMask), (pos.x | cellMask)));
-    set_if(mask, pos.y, csel(dir.y < 0, (pos.y & ~cellMask), (pos.y | cellMask)));
-    set_if(mask, pos.z, csel(dir.z < 0, (pos.z & ~cellMask), (pos.z | cellMask)));
+    pos.x.set_if(mask, csel(dir.x < 0, (pos.x & ~cellMask), (pos.x | cellMask)));
+    pos.y.set_if(mask, csel(dir.y < 0, (pos.y & ~cellMask), (pos.y | cellMask)));
+    pos.z.set_if(mask, csel(dir.z < 0, (pos.z & ~cellMask), (pos.z | cellMask)));
 
     return level0;
 }
@@ -194,9 +194,9 @@ static VHitResult RayCast(const FlatVoxelStorage& map, VFloat3 origin, VFloat3 d
         if (!any(activeMask)) break;
 
         voxelPos -= worldOrigin;
-        set_if(activeMask, sideDist.x, tStart.x + conv2f(voxelPos.x) * invDir.x);
-        set_if(activeMask, sideDist.y, tStart.y + conv2f(voxelPos.y) * invDir.y);
-        set_if(activeMask, sideDist.z, tStart.z + conv2f(voxelPos.z) * invDir.z);
+        sideDist.x.set_if(activeMask, tStart.x + conv2f(voxelPos.x) * invDir.x);
+        sideDist.y.set_if(activeMask, tStart.y + conv2f(voxelPos.y) * invDir.y);
+        sideDist.z.set_if(activeMask, tStart.z + conv2f(voxelPos.z) * invDir.z);
 
         VFloat tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001f;
         currPos = origin + tmin * dir;
@@ -328,10 +328,10 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
                     };
                     VFloat3 skyColor = _skyBox.SampleCube<SD, false>(dir, i == 0 ? 1 : 3);
 
-                    set_if(missMask, matColor.x, skyColor.x);
-                    set_if(missMask, matColor.y, skyColor.y);
-                    set_if(missMask, matColor.z, skyColor.z);
-                    set_if(missMask, emissionStrength, 1.0f);
+                    matColor.x.set_if(missMask, skyColor.x);
+                    matColor.y.set_if(missMask, skyColor.y);
+                    matColor.z.set_if(missMask, skyColor.z);
+                    emissionStrength.set_if(missMask, 1.0f);
                 }
                 if (i == 0) {
                     VInt packedNorm = (round2i(hit.Normal.x) + 1) << 24 |

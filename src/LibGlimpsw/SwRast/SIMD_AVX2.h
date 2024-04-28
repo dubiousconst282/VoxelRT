@@ -4,8 +4,6 @@ struct VInt;
 using VMask = VInt;
 
 struct VInt {
-    static inline const uint32_t Length = sizeof(__m256i) / sizeof(int32_t);
-
     __m256i reg;
 
     SIMD_INLINE VInt() { reg = _mm256_set1_epi32(0); }
@@ -14,9 +12,12 @@ struct VInt {
     SIMD_INLINE operator __m256i() const { return reg; }
 
     SIMD_INLINE int32_t& operator[](size_t idx) const {
-        assert(idx < Length);
+        assert(idx < (sizeof(__m256i) / sizeof(int32_t)));
         return ((int32_t*)&reg)[idx];
     }
+
+    // if (cond) this = x
+    SIMD_INLINE void set_if(VMask cond, VInt x) { reg = _mm256_blendv_epi8(reg, x.reg, cond); }
 
     SIMD_INLINE static VInt load(const void* ptr) { return _mm256_loadu_epi32((__m256i*)ptr); }
     SIMD_INLINE void store(void* ptr) const { _mm256_storeu_si256((__m256i*)ptr, reg); }
@@ -36,8 +37,6 @@ struct VInt {
     SIMD_INLINE static VInt shuffle(VInt table, VInt index) { return _mm256_permutevar8x32_epi32(table, index); }
 };
 struct VFloat {
-    static inline const uint32_t Length = sizeof(__m256) / sizeof(float);
-
     __m256 reg;
 
     SIMD_INLINE VFloat() { reg = _mm256_set1_ps(0.0f); }
@@ -46,9 +45,12 @@ struct VFloat {
     SIMD_INLINE operator __m256() const { return reg; }
 
     SIMD_INLINE float& operator[](size_t idx) const {
-        assert(idx < Length);
+        assert(idx < (sizeof(__m256i) / sizeof(float)));
         return ((float*)&reg)[idx];
     }
+
+    // if (cond) this = x
+    SIMD_INLINE void set_if(VMask cond, VFloat x) { reg = _mm256_blendv_ps(reg, x.reg, cond); }
 
     SIMD_INLINE static VFloat load(const void* ptr) { return _mm256_loadu_ps((float*)ptr); }
     SIMD_INLINE void store(void* ptr) const { _mm256_storeu_ps((float*)ptr, reg); }
@@ -106,7 +108,7 @@ SIMD_INLINE VInt operator&=(VInt& a, VInt b) { return a = (a & b); }
 
 // Math ops
 namespace simd {
-inline const VInt RampI = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+inline const VInt LaneIdx = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
 
 SIMD_INLINE VInt round2i(VFloat x) { return _mm256_cvtps_epi32(x.reg); }
 SIMD_INLINE VInt trunc2i(VFloat x) { return _mm256_cvttps_epi32(x.reg); }

@@ -94,11 +94,13 @@ SIMD_INLINE VFloat3::VFloat3(const VFloat4& v) { x = v.x, y = v.y, z = v.z; }
 
 // Common math ops
 namespace simd {
+inline const uint32_t VectorWidth = sizeof(VInt) / sizeof(int32_t);
+
 // Pixel offsets within a SIMD tile
 //   X: [0,1,2,3, 0,1,2,3, ...]
 //   Y: [0,0,0,0, 1,1,1,1, ...]
-inline const VInt TileOffsetsX = RampI & 3, TileOffsetsY = RampI >> 2;
-inline const uint32_t TileWidth = 4, TileHeight = VInt::Length / TileWidth;
+inline const VInt TileOffsetsX = LaneIdx & 3, TileOffsetsY = LaneIdx >> 2;
+inline const uint32_t TileWidth = 4, TileHeight = VectorWidth / TileWidth;
 
 inline const float pi = 3.141592653589793f;
 inline const float tau = 6.283185307179586f;
@@ -221,6 +223,9 @@ SIMD_INLINE VFloat4 PerspectiveDiv(const VFloat4& v) {
     VFloat rw = 1.0f / v.w;
     return { v.x * rw, v.y * rw, v.z * rw, rw };
 }
+
+SIMD_INLINE VFloat csel(VMask mask, float a, float b) { return csel(mask, VFloat(a), VFloat(b)); }
+SIMD_INLINE VInt csel(VMask mask, int32_t a, int32_t b) { return csel(mask, VInt(a), VInt(b)); }
 
 };  // namespace simd
 

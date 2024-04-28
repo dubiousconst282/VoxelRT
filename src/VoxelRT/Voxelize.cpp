@@ -82,7 +82,7 @@ void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 startPos, glm:
             constexpr swr::SamplerDesc SD = { .MinFilter = swr::FilterMode::Nearest, .EnableMips = true };
             auto colors = tex.Sample<SD>(u, v, 0, 2);
 
-            for (uint32_t i = 0; i < VInt::Length; i++) {
+            for (uint32_t i = 0; i < simd::VectorWidth; i++) {
                 if ((colors[i] >> 24 & 255) < 200) continue;  // skip transparent pixels
                 palette.AddColor((uint32_t)colors[i]);
             }

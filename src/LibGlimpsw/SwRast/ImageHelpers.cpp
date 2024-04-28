@@ -106,7 +106,7 @@ HdrTexture2D LoadCubemapFromPanoramaHDR(std::string_view path, uint32_t mipLevel
 
                 VFloat3 dir = UnprojectCubemap(u, v, (int32_t)layer);
 
-                for (uint32_t i = 0; i < VFloat::Length; i++) {
+                for (uint32_t i = 0; i < simd::VectorWidth; i++) {
                     u[i] = atan2f(dir.z[i], dir.x[i]) / simd::tau + 0.5f;
                     v[i] = asinf(-dir.y[i]) / simd::pi + 0.5f;
                 }

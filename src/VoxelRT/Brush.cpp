@@ -21,12 +21,10 @@ void BrushSession::Dispatch(VoxelMap& map) {
         if (Pars.Probability < 1.0f) {
             mask &= rng.NextUnsignedFloat() < Pars.Probability;
         }
-        VInt materialIds = Pars.Material.Data;
-
         if (Pars.Action == BrushAction::Replace) {
             mask &= invoc.VoxelIds != 0;
         }
-        simd::set_if(mask, invoc.VoxelIds, materialIds);
+        invoc.VoxelIds.set_if(mask, Pars.Material.Data);
 
         return simd::any(mask);
     });

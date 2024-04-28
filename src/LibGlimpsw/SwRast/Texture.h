@@ -116,9 +116,15 @@ struct RG16f {
     }
 #elif SIMD_AVX2
     static VFloat2 Unpack(VInt packed) {
+        auto tmp = _mm256_shuffle_epi8(packed, _mm256_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13,    //
+                                                                2, 3, 6, 7, 10, 11, 14, 15,  //
+                                                                0, 1, 4, 5, 8, 9, 12, 13,    //
+                                                                2, 3, 6, 7, 10, 11, 14, 15));
+        tmp = _mm256_permute4x64_epi64(tmp, 0b11'01'10'00);
+        
         return {
-            _mm256_cvtph_ps(_mm256_cvtepi32_epi16(packed)),
-            _mm256_cvtph_ps(_mm256_cvtepi32_epi16(packed >> 16)),
+            _mm256_cvtph_ps(_mm256_extracti128_si256(tmp, 0)),
+            _mm256_cvtph_ps(_mm256_extracti128_si256(tmp, 1)),
         };
     }
     static VInt Pack(const VFloat2& value) {
@@ -406,7 +412,7 @@ struct Texture2D {
         MipLevels = 0;
         uint32_t layerSize = 0;
 
-        for (; MipLevels < std::min(mipLevels, VInt::Length); MipLevels++) {
+        for (; MipLevels < std::min(mipLevels, simd::VectorWidth); MipLevels++) {
             uint32_t i = MipLevels;
             if ((Width >> i) < 4 || (Height >> i) < 4) break;
 

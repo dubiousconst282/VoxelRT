@@ -120,10 +120,10 @@ struct Brick {
         bool dirty = false;
         VoxelDispatchInvocationPars p;
 
-        for (uint32_t i = 0; i < BrickIndexer::MaxArea; i += VInt::Length) {
-            static_assert(VInt::Length <= BrickIndexer::MaxArea);
+        for (uint32_t i = 0; i < BrickIndexer::MaxArea; i += simd::VectorWidth) {
+            static_assert(simd::VectorWidth <= BrickIndexer::MaxArea);
 
-            VInt vi = (int32_t)i + simd::RampI;
+            VInt vi = (int32_t)i + simd::LaneIdx;
             p.X = (basePos.x * BrickIndexer::SizeXZ) + (vi & BrickIndexer::MaskXZ);
             p.Z = (basePos.z * BrickIndexer::SizeXZ) + (vi >> BrickIndexer::ShiftXZ & BrickIndexer::MaskXZ);
             p.Y = (basePos.y * BrickIndexer::SizeY) + (vi >> (BrickIndexer::ShiftXZ * 2));
