@@ -208,10 +208,11 @@ using HdrTexture2D = Texture2D<pixfmt::R11G11B10f>;
 
 struct StbImage {
     enum class PixelType { Empty, RGBA_U8, RGB_F32 };
+    using Deleter = void(*)(void*);
 
     uint32_t Width, Height;
     PixelType Type;
-    std::unique_ptr<uint8_t[], decltype(&std::free)> Data = { nullptr, &std::free };
+    std::unique_ptr<uint8_t[], Deleter> Data = { nullptr, &std::free };
 
     static StbImage Create(uint32_t width, uint32_t height);
     static StbImage Load(std::string_view path, PixelType type = PixelType::RGBA_U8);

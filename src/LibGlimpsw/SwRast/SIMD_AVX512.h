@@ -3,7 +3,7 @@
 using VMask = uint16_t;
 
 struct VInt {
-    static const uint32_t Length = sizeof(__m512i) / sizeof(int32_t);
+    static inline const uint32_t Length = sizeof(__m512i) / sizeof(int32_t);
 
     __m512i reg;
 
@@ -35,7 +35,7 @@ struct VInt {
     SIMD_INLINE static VInt shuffle(VInt table, VInt index) { return _mm512_permutexvar_epi32(index, table); }
 };
 struct VFloat {
-    static const uint32_t Length = sizeof(__m512) / sizeof(float);
+    static inline const uint32_t Length = sizeof(__m512) / sizeof(float);
 
     __m512 reg;
 
@@ -165,7 +165,7 @@ SIMD_INLINE VMask ucmp_ge(VInt a, VInt b) { return _mm512_cmpge_epu32_mask(a, b)
 // Reverse bits of packed 32-bit integers.
 // https://wunkolo.github.io/post/2020/11/gf2p8affineqb-bit-reversal/
 SIMD_INLINE VInt bitrev(VInt x) {
-    const auto A = _mm512_set1_epi64(0b10000000'01000000'00100000'00010000'00001000'00000100'00000010'00000001LL);
+    const auto A = _mm512_set1_epi64((int64_t)0x8040'2010'0804'0201LL);
     const auto B = _mm_setr_epi8(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
 
     auto rev8 = _mm512_gf2p8affine_epi64_epi8(x, A, 0);

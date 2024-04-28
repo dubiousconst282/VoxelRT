@@ -97,7 +97,7 @@ void VoxelMap::VoxelizeModel(const glim::Model& model, glm::uvec3 startPos, glm:
         Palette[i] = Material{ .Color = { palette.ColorR[i], palette.ColorG[i], palette.ColorB[i] } };
     }
 
-    glm::vec3 boundMin = glm::vec3(+INFINITY), boundMax = glm::vec3(-INFINITY);
+    glm::vec3 boundMin = glm::vec3(+FLT_MIN), boundMax = glm::vec3(-FLT_MAX);
 
     model.Traverse([&](const glim::ModelNode& node, const glm::mat4& modelMat) {
         for (size_t i = 0; i < 2; i++) {

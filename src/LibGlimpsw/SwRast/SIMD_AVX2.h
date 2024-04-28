@@ -4,7 +4,7 @@ struct VInt;
 using VMask = VInt;
 
 struct VInt {
-    static const uint32_t Length = sizeof(__m256i) / sizeof(int32_t);
+    static inline const uint32_t Length = sizeof(__m256i) / sizeof(int32_t);
 
     __m256i reg;
 
@@ -36,7 +36,7 @@ struct VInt {
     SIMD_INLINE static VInt shuffle(VInt table, VInt index) { return _mm256_permutevar8x32_epi32(table, index); }
 };
 struct VFloat {
-    static const uint32_t Length = sizeof(__m256) / sizeof(float);
+    static inline const uint32_t Length = sizeof(__m256) / sizeof(float);
 
     __m256 reg;
 

@@ -1,11 +1,13 @@
 #pragma once
 
-#include <immintrin.h>
-
 #include <cstdint>
+#include <cstring>
 #include <cassert>
 #include <memory>
 #include <bit>
+
+#include <immintrin.h>
+
 #include <glm/mat4x4.hpp>
 
 #define SIMD_INLINE [[gnu::always_inline]] inline

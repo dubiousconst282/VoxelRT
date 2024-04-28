@@ -1,5 +1,7 @@
 #include "ShaderLib.h"
+
 #include <fstream>
+#include <stdexcept>
 
 namespace ogl {
 
@@ -84,7 +86,7 @@ void ShaderLib::ReadSource(std::string& source, std::string_view filename, std::
             size_t pathEnd = line.find('"', pathStart + 1);
 
             if (pathStart == std::string::npos || pathEnd == std::string::npos) {
-                throw std::format_error("Malformed include directive");
+                throw std::runtime_error("Malformed include directive");
             }
 
             auto includeName = GetRelativePath(BasePath / filename, std::string_view(&line[pathStart + 1], &line[pathEnd]));
@@ -216,7 +218,8 @@ FileWatcher::FileWatcher(const std::filesystem::path& path) {
 };
 FileWatcher::~FileWatcher() {
 }
-
+void FileWatcher::PollChanges(std::vector<std::filesystem::path>& changedFiles) {
+}
 #endif
 
 };  // namespace ogl::detail

@@ -3,3 +3,4 @@
 .cache/
 build/
 logs/
+deps/

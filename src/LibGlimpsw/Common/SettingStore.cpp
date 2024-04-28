@@ -1,8 +1,9 @@
-#include <fstream>
-#include <chrono>
-
 #include "SettingStore.h"
 #include "BinaryIO.h"
+
+#include <fstream>
+#include <chrono>
+#include <cmath>
 
 namespace glim {
 

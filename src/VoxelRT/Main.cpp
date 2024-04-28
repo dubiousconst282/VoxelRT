@@ -152,7 +152,7 @@ public:
             ImGui::DragScalar("Fuzziness", ImGuiDataType_U8, &material.MetalFuzziness);
         }
         int32_t cellSize = 32;
-        int32_t numCols = ImGui::GetContentRegionAvail().x / (cellSize + 1);
+        int32_t numCols = std::max(ImGui::GetContentRegionAvail().x, 100.0f) / (cellSize + 1);
         int32_t numRows = (256 + numCols - 1) / numCols;
 
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 0));
@@ -161,7 +161,7 @@ public:
 
         if (ImGui::BeginTable("##Palette", numCols, tableFlags)) {
             for (uint32_t i = 0; i < numCols; i++) {
-                std::string text = std::format("{}", i);
+                std::string text = std::to_string(i);
                 ImGui::TableSetupColumn(text.data(), ImGuiTableColumnFlags_WidthFixed, cellSize);
             }
 

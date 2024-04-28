@@ -82,7 +82,7 @@ struct SettingStore {
             storage.assign(valueSV);
             _pendingSave = true;
         } else if (ImGui::GetFrameCount() == _loadSyncId) {
-            std::memcpy(value, storage.data(), size);
+            memcpy(value, storage.data(), size);
             changed = true;
         }
 

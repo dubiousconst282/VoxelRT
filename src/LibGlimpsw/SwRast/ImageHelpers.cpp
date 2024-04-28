@@ -1,5 +1,7 @@
 #include "Texture.h"
 
+#include <stdexcept>
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -15,7 +17,7 @@ StbImage StbImage::Load(std::string_view path, PixelType type) {
                                                    nullptr;
 
     if (pixels == nullptr) {
-        throw std::exception("Failed to load image");
+        throw std::runtime_error("Failed to load image");
     }
     return {
         .Width = (uint32_t)width,
@@ -36,7 +38,7 @@ StbImage StbImage::Create(uint32_t width, uint32_t height) {
 
 void StbImage::SavePng(std::string_view path) {
     if (Type != PixelType::RGBA_U8) {
-        throw std::exception("Unsupported pixel format");
+        throw std::runtime_error("Unsupported pixel format");
     }
     stbi_write_png(path.data(), (int)Width, (int)Height, 4, Data.get(), (int)Width * 4);
 }
@@ -105,8 +107,8 @@ HdrTexture2D LoadCubemapFromPanoramaHDR(std::string_view path, uint32_t mipLevel
                 VFloat3 dir = UnprojectCubemap(u, v, (int32_t)layer);
 
                 for (uint32_t i = 0; i < VFloat::Length; i++) {
-                    u[i] = std::atan2f(dir.z[i], dir.x[i]) / simd::tau + 0.5f;
-                    v[i] = std::asinf(-dir.y[i]) / simd::pi + 0.5f;
+                    u[i] = atan2f(dir.z[i], dir.x[i]) / simd::tau + 0.5f;
+                    v[i] = asinf(-dir.y[i]) / simd::pi + 0.5f;
                 }
 
                 VFloat3 tile = panoTex.Sample<PanoSampler>(u, v, (int32_t)layer);

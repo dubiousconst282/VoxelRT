@@ -1,11 +1,12 @@
-#include "Scene.h"
-
 #include <unordered_map>
 #include <filesystem>
+#include <stdexcept>
 
 #include <assimp/scene.h>
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
+
+#include "Scene.h"
 
 namespace glim {
 
@@ -118,7 +119,7 @@ ModelNode ConvertNode(const Model& model, aiNode* node) {
     //FIXME: apply transform on node AABBs
     ModelNode cn = {
         .Transform = glm::transpose(*(glm::mat4*)&node->mTransformation),
-        .Bounds = { glm::vec3(INFINITY), glm::vec3(-INFINITY) }
+        .Bounds = { glm::vec3(FLT_MIN), glm::vec3(-FLT_MAX) }
     };
 
     for (uint32_t i = 0; i < node->mNumMeshes; i++) {
@@ -153,7 +154,7 @@ Model::Model(std::string_view path) {
     const aiScene* scene = imp.ReadFile(path.data(), processFlags);
 
     if (!scene || !scene->HasMeshes()) {
-        throw std::exception("Could not import scene");
+        throw std::runtime_error("Could not import scene");
     }
 
     BasePath = std::filesystem::path(path).parent_path().string();
@@ -190,7 +191,7 @@ Model::Model(std::string_view path) {
             .VertexOffset = vertexPos,
             .IndexOffset = indexPos,
             .Material = &Materials[mesh->mMaterialIndex],
-            .Bounds = { glm::vec3(INFINITY), glm::vec3(-INFINITY) },
+            .Bounds = { glm::vec3(FLT_MIN), glm::vec3(-FLT_MAX) },
         });
 
         for (uint32_t j = 0; j < mesh->mNumVertices; j++) {

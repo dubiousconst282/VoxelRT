@@ -1,5 +1,7 @@
 #include "BrickSlotAllocator.h"
 
+#include <stdexcept>
+
 uint64_t BrickSlotAllocator::Alloc(SectorInfo* sector, uint64_t mask) {
     uint64_t newMask = sector->AllocMask | mask;
     if (newMask == sector->AllocMask) return 0;
@@ -10,7 +12,7 @@ uint64_t BrickSlotAllocator::Alloc(SectorInfo* sector, uint64_t mask) {
 
     if (newBase == 0) {
         // TODO: defrag storage? and/or maybe add heuristics in FreeList::Realloc to minimize fragmentation
-        throw std::exception("Could not allocate brick slots");
+        throw std::runtime_error("Could not allocate brick slots");
     }
     sector->BaseSlot = newBase;
     sector->AllocMask = newMask;
