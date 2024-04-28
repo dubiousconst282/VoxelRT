@@ -23,7 +23,6 @@ struct GpuVoxelStorage;
 struct FlatVoxelStorage;
 
 struct GBuffer;
-struct BlueNoise;
 
 struct GpuRenderer : public Renderer {
     GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map);
@@ -39,7 +38,7 @@ private:
     std::unique_ptr<GpuVoxelStorage> _storage;
 
     std::shared_ptr<ogl::Shader> _renderShader;
-    std::unique_ptr<BlueNoise> _blueNoise;
+    std::unique_ptr<ogl::Texture2D> _blueNoiseTex;
     std::unique_ptr<GBuffer> _gbuffer;
 
     DebugView _debugView = DebugView::None;

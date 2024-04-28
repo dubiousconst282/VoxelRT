@@ -95,11 +95,12 @@ struct VHitResult {
     VMask Mask;
 
     VFloat3 GetColor() const {
-        return {
+        VFloat3 color = {
             conv2f((MaterialData >> 11) & 31) * (1.0f / 31),
             conv2f((MaterialData >> 5) & 63) * (1.0f / 63),
             conv2f((MaterialData >> 0) & 31) * (1.0f / 31),
         };
+        return color * color;
     }
     VFloat GetEmissionStrength() const {
         return swr::pixfmt::RG16f::Unpack(MaterialData).y;
@@ -233,16 +234,69 @@ static void GetPrimaryRay(VFloat2 uv, const glm::mat4& invProjMat, VFloat3& rayP
     rayDir = normalize(rayDir);
 }
 
-CpuRenderer::CpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
-    _map = std::move(map);
-    _storage = std::make_unique<FlatVoxelStorage>();
-    _gbuffer = std::make_unique<GBuffer>(shlib);
+struct alignas(64) VBlueNoise {
+    uint16_t Data[128 * 128 * 64];  // Tiled to simd size
 
-    _blitShader = shlib.LoadComp("CopyTiledFramebuffer");
-    _map->MarkAllDirty();
+    VBlueNoise() {
+        auto image = swr::StbImage::Load("assets/bluenoise/stbn_vec2_2Dx1D_128x128x64_combined.png");
+        uint16_t* ptr = Data;
+
+        for (uint32_t y = 0; y < 128 * 64; y += simd::TileHeight) {
+            for (uint32_t x = 0; x < 128; x += simd::TileWidth) {
+                for (uint32_t i = 0; i < simd::VectorWidth; i++) {
+                    uint32_t sx = x + (i % simd::TileWidth);
+                    uint32_t sy = y + (i / simd::TileWidth);
+                    uint8_t* s = &image.Data[(sx + sy * 128) * 4];
+                    *ptr++ = s[0] | s[1] << 8;
+                }
+            }
+        }
+    }
+
+    VFloat2 Sample(glm::uvec2 pos, uint32_t frameIdx, uint32_t sampleIdx) const {
+        assert(pos.x % simd::TileWidth == 0);
+        assert(pos.y % simd::TileHeight == 0);
+
+        glm::vec2 sampleOffset = glm::fract(float(sampleIdx) * glm::vec2(0.75487766624669276005f, 0.56984029099805326591f) + 0.5f);
+        pos = (pos + glm::uvec2(sampleOffset * 128.0f)) & 127u;
+        pos.y += (frameIdx & 63) * 128;
+
+        uint32_t offset = (pos.x / simd::TileWidth) + (pos.y / simd::TileHeight) * (128 / simd::TileWidth);
+        offset = offset * simd::VectorWidth;
+#if SIMD_AVX512
+        VInt values = _mm512_cvtepu16_epi32(_mm256_load_epi32(&Data[offset]));
+#else  // SIMD_AVX2
+        VInt values = _mm256_cvtepu16_epi32(_mm_load_si128((__m128i*)&Data[offset]));
+#endif
+        return VFloat2(conv2f(values & 255), conv2f(values >> 8)) * (1.0 / 255);
+    }
+};
+
+static VFloat3 SampleDirection(VFloat2 sample) {
+    // azimuth = rand() * PI * 2
+    // y = rand() * 2 - 1
+    // sin_elevation = sqrt(1 - y * y)
+    // x = sin_elevation * cos(azimuth);
+    // z = sin_elevation * sin(azimuth);
+    // 
+    // VInt rand = NextU32();
+    // const float randScale = (1.0f / (1 << 15));
+    // VFloat y = simd::conv2f(rand >> 16) * randScale;  // signed
+    // VFloat a = simd::conv2f(rand & 0x7FFF) * randScale;
+    VFloat y = sample.y * 2.0f - 1.0f;
+
+    VFloat x, z;
+    simd::sincos_2pi(sample.x, x, z);
+    VFloat sy = simd::approx_sqrt(1.0f - y * y);
+
+    return { x * sy, y, z * sy };
 }
 
-CpuRenderer::~CpuRenderer() = default;
+static VFloat3 SampleHemisphere(VFloat2 sample, const VFloat3& normal) {
+    VFloat3 dir = SampleDirection(sample);
+    VFloat sign = simd::dot(dir, normal) & -0.0f;
+    return { dir.x ^ sign, dir.y ^ sign, dir.z ^ sign };
+}
 
 struct Framebuffer {
     struct alignas(64) Tile {
@@ -255,6 +309,17 @@ struct Framebuffer {
     uint32_t TileShiftX, TileShiftY;
     Tile Tiles[];
 };
+
+CpuRenderer::CpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
+    _map = std::move(map);
+    _storage = std::make_unique<FlatVoxelStorage>();
+    _gbuffer = std::make_unique<GBuffer>(shlib);
+
+    _blitShader = shlib.LoadComp("CopyTiledFramebuffer");
+    _map->MarkAllDirty();
+}
+
+CpuRenderer::~CpuRenderer() = default;
 
 void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 #ifndef NDEBUG  // debug builds are slow af
@@ -291,11 +356,13 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     _frameTime.Begin();
 
     static swr::HdrTexture2D _skyBox = swr::texutil::LoadCubemapFromPanoramaHDR("assets/skyboxes/evening_road_01_puresky_4k.hdr");
+    static VBlueNoise _blueNoise = VBlueNoise();
+    
     glm::ivec3 worldOrigin = glm::floor(cam.ViewPosition);
 
     auto rows = std::ranges::iota_view(0u, viewSize.y / simd::TileHeight);
     std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
-        VRandom rng(rowId + _gbuffer->FrameNo * 123456ull);
+        // VRandom rng(rowId + _gbuffer->FrameNo * 123456ull);
         uint32_t y = rowId * simd::TileHeight;
         auto tile = &fb->Tiles[(y / simd::TileHeight) * fb->TileStride];
 
@@ -351,7 +418,9 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
                 mask &= hit.Mask;
 
                 origin = hit.Pos + hit.Normal * 0.01f;
-                dir = simd::normalize(hit.Normal + rng.NextDirection());  // lambertian
+
+                VFloat2 bn = _blueNoise.Sample(glm::uvec2(x, y), _gbuffer->FrameNo, i);
+                dir = simd::normalize(hit.Normal + SampleDirection(bn));  // lambertian
             }
             // Write out entire tile at once in hopes for better write-combining or whatever
             *tile++ = {

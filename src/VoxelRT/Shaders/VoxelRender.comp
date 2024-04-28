@@ -54,10 +54,10 @@ void main() {
 
             float fuzziness = getMaterialMetalFuzziness(hit.mat);
             if (fuzziness < 1.0) {
-                rayDir = normalize(reflect(rayDir, hit.normal) + (fuzziness * random_dir(i)));
+                rayDir = normalize(reflect(rayDir, hit.normal) + (fuzziness * random_dir(u_FrameNo, i)));
                 if (dot(rayDir, hit.normal) <= 0.0) break;
             } else {
-                rayDir = normalize(hit.normal + random_dir(i));
+                rayDir = normalize(hit.normal + random_dir(u_FrameNo, i));
             }
 
             if (!rayTraceCoarse(rayPos, rayDir, hit)) {

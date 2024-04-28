@@ -77,9 +77,9 @@ struct Buffer : public Object {
     GLuint Handle;
     size_t Size;
 
-    Buffer(size_t numBytes, GLbitfield flags) {
+    Buffer(size_t numBytes, GLbitfield flags, const void* data = nullptr) {
         glCreateBuffers(1, &Handle);
-        glNamedBufferStorage(Handle, numBytes, nullptr, flags);
+        glNamedBufferStorage(Handle, numBytes, data, flags);
 
         Size = numBytes;
     }

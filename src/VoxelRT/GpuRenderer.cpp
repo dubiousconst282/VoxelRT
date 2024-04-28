@@ -2,10 +2,9 @@
 #include "BrickSlotAllocator.h"
 
 #include "Rendering/GBuffer.h"
-#include "Rendering/BlueNoise.h"
 
 static constexpr auto SectorSize = MaskIndexer::Size * BrickIndexer::Size;
-static constexpr auto ViewSize = glm::uvec2(8192, 2048) / glm::uvec2(SectorSize);
+static constexpr auto ViewSize = glm::uvec2(4096, 2048) / glm::uvec2(SectorSize);
 static constexpr uint32_t NumViewSectors = ViewSize.x * ViewSize.x * ViewSize.y;
 
 static const std::vector<ogl::ShaderLoadParams::PrepDef> DefaultShaderDefs = {
@@ -84,7 +83,7 @@ struct GpuVoxelStorage {
         if (StorageBuffer == nullptr || StorageBuffer->Size < bufferSize) {
             bool isResizing = StorageBuffer != nullptr;
 
-            StorageBuffer = std::make_unique<ogl::Buffer>(bufferSize, GL_MAP_WRITE_BIT);
+            StorageBuffer = std::make_unique<ogl::Buffer>(bufferSize, GL_MAP_WRITE_BIT | GL_MAP_READ_BIT);
             OccupancyStorage = std::make_unique<ogl::Buffer>(maxBricksInBuffer * (BrickIndexer::MaxArea / 8), 0);
 
             if (isResizing || maxSlotId < 1024) {
@@ -93,7 +92,7 @@ struct GpuVoxelStorage {
                 return;
             }
         }
-        auto mappedStorage = StorageBuffer->Map<GpuMeta>(GL_MAP_WRITE_BIT);
+        auto mappedStorage = StorageBuffer->Map<GpuMeta>(GL_MAP_WRITE_BIT | GL_MAP_READ_BIT);
 
         // TODO: consider not updating palette every frame 
         for (uint32_t i = 0; i < 256; i++) {
@@ -179,9 +178,9 @@ GpuRenderer::GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
     _renderShader = shlib.LoadComp("VoxelRender", DefaultShaderDefs);
 
     _gbuffer = std::make_unique<GBuffer>(shlib);
-    _blueNoise = std::make_unique<BlueNoise>();
-
-    _blueNoise->SetUniforms(*_renderShader);
+    
+    _blueNoiseTex = ogl::Texture2D::Load("assets/bluenoise/stbn_vec2_2Dx1D_128x128x64_combined.png", 1, GL_RG8UI);
+    _renderShader->SetUniform("u_STBlueNoiseTex", *_blueNoiseTex);
 
     glCreateQueries(GL_TIME_ELAPSED, 1, &_frameQueryObj);
     _metricsBuffer = std::make_unique<ogl::Buffer>(64, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);

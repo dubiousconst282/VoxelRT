@@ -1,5 +1,4 @@
-layout(rgba8ui) uniform uimage2D u_BlueNoiseScramblingTex;
-layout(rgba8ui) uniform uimage2D u_BlueNoiseSobolTex;
+layout(rg8ui) uniform uimage2D u_STBlueNoiseTex;
 
 uint _pcg_state;
 
@@ -24,28 +23,24 @@ void random_init_uv(vec2 uv, uint time) {
     _pcg_state = random_u32() ^ floatBitsToUint(uv.y) ^ time;
 }
 
-// Generate 2 blue noise samples (1spp / 128 dims)
-// https://belcour.github.io/blog/research/publication/2019/06/17/sampling-bluenoise.html
-vec2 blueNoise(ivec2 pos, int idx, int dim) {
-	pos &= 127;
-	idx &= 255;
-	dim &= 127;
-
-	uvec4 value = imageLoad(u_BlueNoiseSobolTex, ivec2(idx, dim >> 1));
-    value ^= imageLoad(u_BlueNoiseScramblingTex, pos);
-
-    if ((dim & 1) != 0) value.xy = value.zw;
-
-	return (0.5 + value.xy) / 256.0;
+// Generate 2 blue noise samples
+// https://developer.nvidia.com/blog/rendering-in-real-time-with-spatiotemporal-blue-noise-textures-part-1/
+vec2 blueNoise(ivec2 pos, int frameIdx, int sampleIdx) {
+    // R2 quasirandom sequence
+    vec2 sampleOffset = fract(sampleIdx * vec2(0.75487766624669276005, 0.56984029099805326591) + 0.5);
+    pos = (pos + ivec2(sampleOffset * 128)) & 127;
+    pos.y += (frameIdx & 63) * 128;
+    
+    return (imageLoad(u_STBlueNoiseTex, pos).xy + 0.5) / 256.0;
 }
 
-vec3 random_dir(int sampleIdx) {
+vec3 random_dir(int frameIdx, int sampleIdx) {
     // int rand = int(random_u32());
     // const float randScale = (1.0 / (1 << 15));
     // float y = float(rand >> 16) * randScale;  // signed
     // float a = float(rand & 0x7FFFu) * (randScale * 6.283185307179586);
 
-    vec2 n = blueNoise(ivec2(gl_GlobalInvocationID.xy), u_FrameNo, sampleIdx);
+    vec2 n = blueNoise(ivec2(gl_GlobalInvocationID.xy), frameIdx, sampleIdx);
     float y = n.x * 2 - 1;
     float a = n.y * 6.283185307179586;
 

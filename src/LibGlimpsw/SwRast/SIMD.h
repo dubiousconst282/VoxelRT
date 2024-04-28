@@ -286,32 +286,6 @@ struct VRandom {
         return (2.0f | frac) - 3.0f;
     }
 
-    // Returns a random spherical direction
-    VFloat3 NextDirection() {
-        // azimuth = rand() * PI * 2
-        // y = rand() * 2 - 1
-        // sin_elevation = sqrt(1 - y * y)
-        // x = sin_elevation * cos(azimuth);
-        // z = sin_elevation * sin(azimuth);
-        VInt rand = NextU32();
-
-        const float randScale = (1.0f / (1 << 15));
-        VFloat y = simd::conv2f(rand >> 16) * randScale;  // signed
-        VFloat a = simd::conv2f(rand & 0x7FFF) * randScale;
-
-        VFloat x, z;
-        simd::sincos_2pi(a, x, z);
-        VFloat sy = simd::approx_sqrt(1.0f - y * y);
-
-        return { x * sy, y, z * sy };
-    }
-
-    VFloat3 NextHemisphereDirection(const VFloat3& normal) {
-        VFloat3 dir = NextDirection();
-        VFloat sign = simd::dot(dir, normal) & -0.0f;
-        return { dir.x ^ sign, dir.y ^ sign, dir.z ^ sign };
-    }
-
     VInt NextU32() {
         VInt s0 = s[0];
         VInt s1 = s[1] ^ s0;

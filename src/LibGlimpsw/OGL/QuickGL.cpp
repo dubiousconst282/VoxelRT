@@ -8,7 +8,7 @@ std::unique_ptr<Texture2D> Texture2D::Load(std::string_view path, uint32_t mipLe
     auto tex = std::make_unique<Texture2D>(img.Width, img.Height, mipLevels, internalFmt);
 
     // Why the fuck?
-    GLenum fmt = internalFmt == GL_RGBA8I || internalFmt == GL_RGBA8UI ? GL_RGBA_INTEGER : GL_RGBA;
+    GLenum fmt = internalFmt != GL_RGBA8 && internalFmt != GL_RG8 ? GL_RGBA_INTEGER : GL_RGBA;
     tex->SetPixels(fmt, GL_UNSIGNED_BYTE, img.Data.get());
     return tex;
 }
