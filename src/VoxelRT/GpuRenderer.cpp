@@ -171,6 +171,26 @@ struct GpuVoxelStorage {
     }
 };
 
+// Based on https://www.youtube.com/watch?v=P2bGF6GPmfc
+static void GenerateRayCellInteractionMaskLUT(uint64_t table[64 * 8]) {
+    for (uint64_t dirOct = 0; dirOct < 8; dirOct++) {
+        glm::ivec3 dir = (glm::ivec3(dirOct) >> glm::ivec3(0, 1, 2) & 1) * 2 - 1;
+
+        for (uint64_t originIdx = 0; originIdx < 64; originIdx++) {
+            uint64_t mask = 0;
+
+            for (uint64_t j = 0; j < 64; j++) {
+                glm::ivec3 pos = MaskIndexer::GetPos(originIdx) + MaskIndexer::GetPos(j) * dir;
+
+                if (MaskIndexer::CheckInBounds(pos)) {
+                    mask |= 1ull << MaskIndexer::GetIndex(pos);
+                }
+            }
+            table[originIdx + dirOct * 64] = mask;
+        }
+    }
+}
+
 GpuRenderer::GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
     _map = std::move(map);
     _storage = std::make_unique<GpuVoxelStorage>(shlib);
@@ -181,6 +201,11 @@ GpuRenderer::GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
     
     _blueNoiseTex = ogl::Texture2D::Load("assets/bluenoise/stbn_vec2_2Dx1D_128x128x64_combined.png", 1, GL_RG8UI);
     _renderShader->SetUniform("u_STBlueNoiseTex", *_blueNoiseTex);
+
+    uint64_t interactionMaskLUT[64 * 8];
+    GenerateRayCellInteractionMaskLUT(interactionMaskLUT);
+    _rayCellInteractionMaskLUT = std::make_unique<ogl::Buffer>(sizeof(interactionMaskLUT), 0, interactionMaskLUT);
+    _renderShader->SetUniform("ssbo_RayCellInteractionMaskLUT", *_rayCellInteractionMaskLUT);
 
     glCreateQueries(GL_TIME_ELAPSED, 1, &_frameQueryObj);
     _metricsBuffer = std::make_unique<ogl::Buffer>(64, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);

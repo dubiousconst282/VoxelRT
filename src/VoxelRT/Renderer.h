@@ -39,6 +39,7 @@ private:
 
     std::shared_ptr<ogl::Shader> _renderShader;
     std::unique_ptr<ogl::Texture2D> _blueNoiseTex;
+    std::unique_ptr<ogl::Buffer> _rayCellInteractionMaskLUT;
     std::unique_ptr<GBuffer> _gbuffer;
 
     DebugView _debugView = DebugView::None;

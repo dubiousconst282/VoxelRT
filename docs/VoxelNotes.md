@@ -10,9 +10,9 @@
   - Provides up to 3 LODs with a single 64-bit access
 
 ## Introductory fluff
-A natural approach for rendering voxels on a GPU is by rasterizing meshes that represent the voxel geometry. It's a proven method that works reasonably well and is very flexible, but can be relatively complicated to scale up - from my outsider view, this would probably mean stuff like minimizing draw calls, compressing vertices, multi-threading the mesher because it's slow af, occlusion culling, and probably getting cursed by greedy meshing at some point...
+A natural approach for rendering voxels on a GPU is by rasterizing meshes that represent the voxel geometry. It's a proven method that works reasonably well and is very flexible, but can be relatively complicated to scale up - from my outsider view, this would probably involve stuff like minimizing draw calls, compressing vertices, multi-threading the mesher because it's slow af, occlusion culling, and probably getting cursed by greedy meshing at some point...
 
-Ray tracing isn't without its problems and difficulties of course, but arguably a lot simpler to get started - simply mem-copy voxel data as is to a GPU buffer and start casting rays through it in a shader. Even without any acceleration structures, it can be surprisingly fast, as demonstrated by these remarkable shadertoys:
+Ray tracing isn't without its problems and difficulties of course, but arguably a lot simpler to get working - simply mem-copy voxel data as is to a GPU buffer and start casting rays through it in a shader. Even without any acceleration structures, it can be surprisingly fast, as demonstrated by these remarkable shadertoys:
 
 <table align="center">
     <tr align="center">
@@ -32,16 +32,18 @@ Ray tracing isn't without its problems and difficulties of course, but arguably 
 </table>
 
 ## Ray Casting Voxels
-The classic way to ray trace voxels is by using the [Fast Voxel Traversal](https://github.com/cgyurgyik/fast-voxel-traversal-algorithm/blob/master/overview/FastVoxelTraversalOverview.md) algorithm, which is a simple DDA loop that incrementally traverses through all intersecting voxels by comparing plane intersection distances and stepping through whichever side has progressed least at each iteration:
+The classic way to cast rays through voxels is by using the [Fast Voxel Traversal](https://github.com/cgyurgyik/fast-voxel-traversal-algorithm/blob/master/overview/FastVoxelTraversalOverview.md) algorithm by Amanatides and Woo, which boils down to a simple DDA loop that incrementally traverses through all intersecting voxels by comparing plane intersection distances and stepping through whichever side has progressed least at each iteration:
 
 <div align="center">
   <img src="VoxelNotes/dda_anim.gif" width="33%">
   <p><i>2D DDA animation. <b>dx</b> and <b>dy</b> are the "side distances" or "tMax".</i></p>
 </div>
 
+---
+
 Acceleration techniques based on space skipping relies on the ray caster being able to step by variable amounts, which is not trivial to implement in the incremental DDA efficiently - most approaches I have seen are hybrids that look somewhat susceptible to thread divergence, like switching between ray marching and DDA, or nesting multi-level DDAs (which actually seems to be used by Teardown, so it's probably not that bad?).
 
-On modern (decades old) hardware, floating-point multiply-adds are equally as cheap as individual adds or multiplies, so calculating the side distances per iteration isn't as much of a big deal as when the incremental algorithm was developed. Much like in the [slab AABB intersection algorithm](https://en.wikipedia.org/wiki/Slab_method), these distances can be computed efficiently by solving for the parametric equation `P(t) = origin + dir * t`.
+On modern (decades old) hardware, floating-point multiply-adds are equally as cheap as individual adds or multiplies, so calculating the side distances per iteration isn't as much of a big deal as when the incremental algorithm was developed. Much like in the [slab AABB intersection algorithm](https://en.wikipedia.org/wiki/Slab_method), these distances can be computed efficiently by solving for the parametric equation `P(t) = origin + dir * t`. The trick here is that, like in DDA, only the distances to the 3 front faces need to be computed.
 
 This yields a relatively compact casting function, that is actually slightly faster than the [incremental DDA](https://www.shadertoy.com/view/4dX3zl) even without any acceleration structures - or at least that's what my very [precarious benchmark](./sketches/dda_vs_parametric.glsl) suggests.
 
@@ -89,23 +91,27 @@ The bias added to `tmin` is needed to ensure that the resulting intersection pos
 
 Instead of using a constant, I found that biasing by a few ULPs is enough to get rid of 99% artifacts: `tmin = uintBitsToFloat(floatBitsToUint(tmin) + 5);`. This is essentially adding a small value that varies according to the float magnitude. Shader specs demand some minimum precision around float ops, but this might not work universally (and it does in fact fail on my CPU AVX implementation, although `-ffast-math` may be to blame).
 
-Like in [ESVO](#sparse-voxel-octrees-svos-and-dags), a possibly better approach would be to use normalized coordinates across a finite grid, to  emulate a fixed-point format without resorting to integers (which typically have half throughput on GPUs). This would at least allow the bias to be embedded in `tStart` instead of inside the loop.
+Like in [ESVO](#sparse-voxel-octrees-svos-and-dags), a possibly better approach would be to use normalized coordinates across a finite grid, to  emulate a fixed-point format without resorting to integers (which usually have lower throughput on GPUs). This would at the very least allow the bias to be embedded in `tStart` instead of inside the loop, and possibly make it easier to implement _sub-voxels_.
 
 There's a few more things:
-- The ray origin should be keept close to 0,0,0 to maximize available float precision, translation should be applied to the world instead (integer voxel coordinates). This can be done by offseting both `voxelPos` by `floor(actualCameraPos)` and ray origin by `fract(actualCameraPos)`. Translating the view-projection matrix instead of ray origin by the fraction will cause noticeable jittering artifacts when FOV is too low and mess up with temporal reprojection (mat4 precision seems to be way lower than I thought?).
+- The ray origin should be kept close to 0,0,0 to maximize available float precision, translation should be applied to the world instead (integer voxel coordinates). This can be done by offsetting both `voxelPos` by `floor(actualCameraPos)` and ray origin by `fract(actualCameraPos)`. Translating the view-projection matrix instead of ray origin by the fraction will cause noticeable jittering artifacts when FOV is too low and mess up with temporal reprojection (mat4 precision seems to be way lower than I thought?).
 - Rays originating from outside the grid need to be clipped to the grid bounds using an [AABB intersection algorithm](https://en.wikipedia.org/wiki/Slab_method).
 
 ## Acceleration structures
-Voxel grids are usually very sparse, so most of the time spent by the ray tracer will be wasted stepping through empty space. Thankfully, there exists many acceleration techniques that help mitigate this issue and enable real-time tracing on even lower-end GPUs.
+Voxel grids are usually very sparse, so most of the time spent by the ray tracer will be wasted stepping through empty space. Acceleration structures help minimize this problem and enable real-time rendering on even lower-end GPUs.
 
 ### Distance Fields (DFs)
-Distance fields are perhaps the simplest such acceleration structure, and they're quite effective at it. The idea is that for every empty voxel, the distance to the nearest occupied voxel is stored along with it, so the ray tracer can step to a new position by offseting the current position along the ray based on that distance.
+Distance fields are perhaps the simplest such acceleration structure, and they're quite effective at it. The idea is that for every empty voxel, the distance to the nearest occupied voxel is stored along with it, so the ray caster can step to a new position by offsetting the current position along the ray based on that distance, very much like ray marching.
+
+The main issue with DFs is that they're hard to update incrementally, as even a single change could invalidate the entire field. One idea to limit this problem would be to have fixed-size DF chunks that are independent of each other, but that would limit efficiency around borders in a similar way as octrees, as I will show in the next section.
 
 <div align="center">
   <img src="VoxelNotes/distfield_demo.png" width="33%">
 </div>
 
-DFs based on the Manhattan or Chebyshev metrics can be generated in linear complexity by propagating distances along individual rows over one pass per axis. A similar algorithm for generation of squared Euclidean DFs exists, but [PC94] shows that Manhattan DFs actually provide jump steps that are on average 3.7% longer than Euclidean DFs, leaving few reasons to bother using it.
+---
+
+DFs based on the Manhattan or Chebyshev metrics can be generated in linear complexity by propagating distances along individual rows over one pass per axis. A similar algorithm for generation of squared Euclidean DFs exists, but [PC94] shows that Manhattan DFs actually provide jump steps that are on average 3.7% longer than Euclidean DFs, which combined with the much simpler implementation, makes it a much more appealing choice.
 
 ```glsl
 layout(r8ui) uniform uimage3D u_DistField;
@@ -149,7 +155,7 @@ void main() {
 }
 ```
 
-Steps from non-Euclidean distances can be computed as follow:
+Step positions from Manhattan or Chebyshev distances can be calculated by scaling with the projection of the ray direction ([PC94], [RDT00]):
 
 ```glsl
 bool getStepPos(inout ivec3 pos, vec3 dir) {
@@ -167,10 +173,6 @@ bool getStepPos(inout ivec3 pos, vec3 dir) {
 
 ---
 
-Ultimately, DFs are not quite well suitable for dynamic voxel scenes because mutations require recomputation of the entire DF or use of an iterative worklist algorithm for propagation between voxels/bricks up to a set distance limit. (Although they could also be isolated within individual bricks/sectors at the cost of decreased effectiveness.)
-
----
-
 **Papers:**
 - [RDT00]: [Fast ray-tracing of rectilinear volume data using distance transforms](https://www.researchgate.net/publication/3410902_Fast_ray-tracing_of_rectilinear_volume_data_using_distance_transforms)
 - [ADT07]: [Accelerated regular grid traversals using extended anisotropic chessboard
@@ -185,7 +187,7 @@ distance fields on a parallel stream processor](https://www.sciencedirect.com/sc
 - https://github.com/seung-lab/euclidean-distance-transform-3d
 
 ### Occupancy Maps (OCMs)
-These are simply bitmaps where each bit tells the presence of a voxel. Creating mipmaps of OCMs makes for a structure that is identical to octrees, but without all the indirection and sparseness.
+These are simply bitmaps where each bit tells the presence of a voxel. Creating an hierarchy of OCMs makes for a structure that is identical to octrees, but without all the indirection and sparseness.
 
 They're cheap and trivial to generate, and still make for a very effective acceleration structure (but not quite as DFs). Here's a simple implementation in terms of `getStepPos()`:
 
@@ -252,8 +254,6 @@ Similarly to greedy meshing, this can be implemented by expanding the cell size 
 
 I didn't spend too much time tuning the code because the actual performance gains weren't that promising, although the global number of iterations decreases significantly by around 1/2 and 1/3 on average - which to be fair is not that surprising given that most cells are grown to twice their original size. Taking 7 extra memory fetches per iteration is clearly not quite worth it, or at least not for primary rays that are very coherent.
 
-I'll describe a better implementation of OCMs using 64-bit masks in the [brickmap section](#brickmaps_chunking).
-
 ```glsl
     // 0 1   8 16   x+
     // 2 4  32 64   y+
@@ -281,26 +281,25 @@ I'll describe a better implementation of OCMs using 64-bit masks in the [brickma
   <p><i>3D occupancy map traversal heatmap (grayscale between 0..64+ iterations). Isotropic traversal on the left, greedy anisotropic correction on the right.</i></p>
 </div>
 
-## Brickmaps / Chunking
-Chunking is a simple and fast way to store voxels by dividing the world into fixed-size chunks, allowing memory to be allocated only to non-empty chunks. It can be thought as a compromise between flat grids and octrees.
+## Augmenting brickmaps with OCMs for efficient space skipping
+So far I had been using flat grids for voxel storage, but they become impractical extremely quickly for even moderately bigger dimensions - at 1 byte per voxel, a 2048³ grid already requires 8GB of memory, which is the cap where many current consumer GPUs are at.
 
-Minecraft uses "2D" chunks that represents vertical columns of 16³ sections, which might be more efficient when using a top-level hashmap on short worlds.
+For simplicity, the structure I settled for is a 2-level grid consisting of 8³ voxel bricks within 4³ sectors, similarly to [RTEV15]. (In retrospective, 8³ feels a bit too small and 16³ feels too big without having more LOD levels, although the later is probably still a better choice for bigger scenes due to reduced overhead.)
+
+For GPU storage, I use a single buffer and a [free list](https://en.wikipedia.org/wiki/Free_list) to allocate brick slots (addresses). Each sector contains a _64-bit allocation mask_ and a single _base brick slot_ within the storage buffer, allowing individual brick slots to be computed implicitly (without pointers) by counting preceding allocations using a popcount instruction: `baseSlot + bitCount(allocMask & ((1ull << brickIdx) - 1))`. (On the GPU, this is actually implemented using two popcount instructions, as they don't seem to provide a 64-bit version of it.)
+
+The key realization I had is that the sector allocation masks can also be used to derive 3 occupancy LODs without any extra memory fetches, which alone can speedup the traversal to surprisingly useable levels. To further reduce traversal cost, I have two extra layers of these occupancy masks - one at sector level and the other at voxel level. The voxel OCM is generated by a compute shader after brick data is uploaded.
+
+A potential issue with this structure however, is that reallocations may lead to fragmentation over time. I have not found this to be a major issue yet, but presumably a smarter allocation algorithm would help. For very long running applications facing frequent reallocations, a defragmentation procedure might be inevitable. (anecdotal as VMA supports manual defragmentation.)
 
 ---
 
-- https://github.com/stijnherfst/BrickMap
-
-### My attempt
-I settled for a 2-level brickmap of 8³ bricks within 4³ sectors. (8³ feels a bit too small and 16³ feels too big without having more LOD levels, although in retrospective, the later is probably still a better choice for bigger scenes.)
-
-For GPU storage, I use a single buffer and a [free list](https://en.wikipedia.org/wiki/Free_list) to allocate brick slots. Each sector contains a _64-bit allocation mask_ and a single _base brick slot_ within the storage buffer, allowing individual brick slots to be computed implicitly (without pointers) by counting preceding allocations using a popcount instruction: `baseSlot + bitCount(allocMask & ((1ull << brickIdx) - 1))`.
-
-The sector allocation masks can also be used to derive 3 occupancy LODs without any extra memory fetches, which alone can speedup the traversal to surprisingly useable levels. To further reduce traversal cost, I use two extra OCM layers - one at sector level and the other at voxel level. The voxel OCM is generated by a compute shader after brick data is uploaded.
-
-On tested scenes (voxelized Bistro at 4096x1024x4096 resolution), my implementation runs at around 250-350M rays per second on a Intel Xe iGPU with 96 EUs - well enough for >60FPS at 1080p assuming only primary rays are cast. Diffuse bounce rays are naturally incoherent and lead to considerable divergence and cache misses in the tracing loop, reducing throughput by around 50-70%. Binning rays based on direction could possibly help remediate this issue.
+On tested scenes (voxelized Bistro at 4096x1024x4096 resolution), my implementation runs at around 250-350M rays per second on a Intel Xe iGPU with 96 EUs - well enough for >60FPS at 1080p assuming only primary rays are cast. Diffuse bounce rays are naturally incoherent and lead to considerable divergence and cache misses in the tracing loop, reducing throughput by around 50-70%. A possible mitigation for this issue would be to [bin rays](https://interplayoflight.wordpress.com/2022/05/08/increasing-wave-coherence-with-ray-binning/) based on their direction and position to increase wave coherence.
 
 ```glsl
-// 64-bit masks are split into uvec2(0..31, 32..63)
+// Given an occupancy mask and starting position (as a linear index in a 4³ grid),
+// returns the size of the biggest empty LOD.
+// The mask is split into lower and upper bits - uvec2(0..31, 32..63).
 int getIsotropicLod(uvec2 mask, uint idx) {
     if (mask == uvec2(0)) {
         return 4;
@@ -315,23 +314,16 @@ int getIsotropicLod(uvec2 mask, uint idx) {
     }
     return 0;
 }
-
-// Voxel data used for rendering
-buffer ssbo_VoxelData {
-    Material Palette[256];
-    // For addressing BrickData and VoxelMasks.
-    uint BaseSlots[NUM_SECTORS];
-    // OCMs at brick level, aka. AllocMasks.
-    uvec2 BrickMasks[NUM_SECTORS];
-    // OCMs at sector level for skipping when BrickMask is fully empty.
-    uvec2 SectorMasks[NUM_SECTORS / 64];
-    uint BrickData[];
-};
-
-buffer ssbo_VoxelMasks {
-    uvec2 VoxelMasks[];
-};
 ```
+
+---
+
+**Refs:**
+- [RTEV15]: [Real-time Ray tracing and Editing of Large Voxel Scenes](https://studenttheses.uu.nl/handle/20.500.12932/20460)
+  - https://github.com/stijnherfst/BrickMap
+
+### Extra: Surface LODs and culling
+TODO - Similar to the brickmap paper, my rough idea is to bit-pack LOD and a ray-visited flag in the BaseSlot field (2 + 1 bits). If the visited flag is false, append sector position into a request buffer for CPU read back. Unsure how to deallocate non-visible bricks.
 
 ### Extra: Anisotropic LODs
 Anisotropic LODs restricted to 4³ bitmasks and only 2-3 levels were considerably less effective than my older OCM implementation. The simplest solution I could come up to sample the bitmasks was through a series of [comparisons per axis](https://github.com/dubiousconst282/VoxelRT/blob/247079bef4d3e0fa5ccff6ba1a82e77b02e924c9/src/VoxelRT/Shaders/VoxelTraversal.glsl#L36), but that was still not fast enough to beat plain isotropic sampling - overall, the number of iterations decreases by around 60% while traversal time increases by 10-15%.
@@ -350,6 +342,97 @@ Anisotropic LODs restricted to 4³ bitmasks and only 2-3 levels were considerabl
         <td> <img src="VoxelNotes/aniso/mask_lod_ani2.png"> </td>
     </tr>
 </table>
+
+---
+
+[Doubling the speed of my game's graphics](https://www.youtube.com/watch?v=P2bGF6GPmfc) by Douglas Dwyer presents a related approach called "mask optimization", to filter the occupancy state using a pre-generated table of _interaction masks_ that cover all voxels where a given ray direction and starting position could possibly intersect with.
+
+Generating these masks is simple enough, and so is sampling, as the following snippets show. I noticed that using a constant array for the table made the shader _excruciatingly_ slow, so I used an uniform buffer instead, which is created at the same time as the shader. (The least worrying explanation for this would be a driver bug or missed optimization, which is not to be unexpected from Intel's OpenGL Windows drivers.)
+
+The performance improvement varies depending on view angle and how geometry aligns to LOD cells, but from my tests the gains range around 5-15%. The impact is much more profound when the masks are used for skipping exclusively in 4³ or 1³ size steps.
+
+```cpp
+// Based on https://www.youtube.com/watch?v=P2bGF6GPmfc
+static void GenerateRayInteractionMaskLUT(uint64_t table[64 * 8]) {
+    for (uint64_t dirOct = 0; dirOct < 8; dirOct++) {
+        glm::ivec3 dir = (glm::ivec3(dirOct) >> glm::ivec3(0, 1, 2) & 1) * 2 - 1;
+
+        for (uint64_t originIdx = 0; originIdx < 64; originIdx++) {
+            uint64_t mask = 0;
+
+            for (uint64_t j = 0; j < 64; j++) {
+                glm::ivec3 pos = MaskIndexer::GetPos(originIdx) + MaskIndexer::GetPos(j) * dir;
+
+                if (MaskIndexer::CheckInBounds(pos)) {
+                    mask |= 1ull << MaskIndexer::GetIndex(pos);
+                }
+            }
+            table[originIdx + dirOct * 64] = mask;
+        }
+    }
+}
+```
+
+Masking before LOD derivation:
+```glsl
+    uint dirOctant = (dir.x < 0 ? 0 : 1) + (dir.y < 0 ? 0 : 2) + (dir.z < 0 ? 0 : 4);
+    occMask &= RayInteractionMaskLUT[maskIdx + dirOctant * 64];
+```
+
+---
+
+Generating a larger table that is more fine grained around ray directions might help, but evidently not much, since the origin cell position also has a significant impact over how "fine" the mask can be - it must be conservative and cover all voxels that could possibly intersect the ray at any given origin, and at the coarseness of integer coordinates, it doesn't get much finer than when considering only ray octants.
+
+My sketches implementing this idea are available in [ray_filter_mask.js](./sketches/ray_filter_mask.js) and [RayMaskFilterLUT.cpp](./sketches/RayMaskFilterLUT.cpp).
+
+---
+
+A nested DDA traversal over the bitmask could prove to be helpful after all, since unlike the LOD tests, it would always advance the ray position. Because each iteration of the main traversal loop would invoke it unconditionally, there would be no divergence/wasted lanes like in the naive multi-level DDA.
+
+### Extra: Misc ideas for bulk updates
+While this structure makes it trivial to update existing voxels on the GPU, creating new bricks is less straightforward. One idea would be to keep a large pool of free memory available, so that new bricks can be created by simply bump-allocating via an atomic counter. (But the devil probably hides in the details about host synchronization.)
+
+For much simpler cases involving embarrassingly parallel bulk updates, taking advantage of [SIMD](https://en.algorithmica.org/hpc/simd) is relatively easy with a "dispatch" helper and a good SIMD library (or a dedicated language like ISPC, which might allow for quicker dev cycles).
+
+As a demonstration, the following is the entire implementation for the apply of my brush tool, which is based on filling a distance field of a line. At static 150 radius (27M voxels), it takes around 30ms to run on a single thread, or around a little over 1ns per voxel. Apart from the need to manually flatten control flow, the code is not really much different from what one would normally write.
+
+```cpp
+// https://iquilezles.org/articles/distfunctions/
+static VFloat sdCapsule(VFloat3 p, glm::vec3 a, glm::vec3 b, float r) {
+    VFloat3 pa = p - a, ba = b - a;
+    VFloat h = simd::clamp(simd::dot(pa, ba) / simd::dot(ba, ba), 0.0, 1.0);
+    return simd::length(pa - ba * h) - r;
+}
+void BrushSession::Dispatch(VoxelMap& map) {
+    glm::ivec3 minPos = glm::min(Pars.PointA, Pars.PointB) - (int)(Pars.Radius + 0.5);
+    glm::ivec3 maxPos = glm::max(Pars.PointA, Pars.PointB) + (int)(Pars.Radius + 0.5);
+    bool isErasing = Pars.Material.IsEmpty();
+    VRandom rng(Pars.RandomSeed);
+
+    // TODO: skip unaffected sectors/bricks (sample DF at center to check)
+    map.RegionDispatchSIMD(minPos, maxPos, !isErasing, [&](VoxelDispatchInvocationPars& invoc) {
+        // This lambda is invoked over the entire region AABB and processes multiple voxels at once using
+        // SIMD in a GPU style, where each 32-bit vector lane is treated as an individual "thread" running in lock step.
+        // For SSE/NEON, AVX2, or AVX512, this means each vector packs 4, 8, or 16 fields of distinct elements, respectively.
+        VFloat3 pos = VFloat3(simd::conv2f(invoc.X), simd::conv2f(invoc.Y), simd::conv2f(invoc.Z)) + 0.5f;
+        VMask mask = sdCapsule(pos, Pars.PointA, Pars.PointB, Pars.Radius) < 0.0;
+
+        if (Pars.Probability < 1.0f) {
+            mask &= rng.NextUnsignedFloat() < Pars.Probability;
+        }
+        if (Pars.Action == BrushAction::Replace) {
+            mask &= invoc.VoxelIds != 0;
+        }
+        // Branchless version of `if (mask[i]) invoc.VoxelIds[i] = Pars.Material.Data;` over all lanes.
+        // This compiles into one or two instructions.
+        invoc.VoxelIds.set_if(mask, Pars.Material.Data);
+
+        // If any changes were made to `invoc.VoxelIds`, return true so that they are
+        // committed to memory and the containing brick gets marked as dirty (pending GPU upload).
+        return simd::any(mask);
+    });
+}
+```
 
 ### Extra: Run-length compression
 Using the same popcnt trick as sparse brick storage, voxel data can be run-length compressed very quickly in a way that allows for O(1) random accesses. Here's a simple example of how it works:
@@ -375,12 +458,14 @@ I have benchmarked a rudimentary implementation, but did not finish integrating 
 | Bistro 8k     | 2034.28 MB | 282.806 MB | 364.978 MB |
 | Terrain 2k    | 417.41 MB  | 391.784 MB | 57.8487 MB |
 
-### Sparse Voxel Octrees (SVOs) and DAGs
-These are evidently the most influencial and state of the art data structures for voxel storage, but I can't say much about them because I have only skimmed through the papers... I guess they might be very well worth for micro-voxels, but are too complicated otherwise.
+## Sparse Voxel Octrees (SVOs) and DAGs
+Octrees are evidently the most popular and influential data structure for voxel storage. SVDAGs further compress memory requirements by reusing tree paths.
 
----
+...and that's all I will bother writing, because I have not implemented them myself and have only skimmed through the linked papers so far. My impression is that the generalization over fixed-depth hierarchical grids complicates everything else for arguably little benefit, given the scale I'm targetting.
 
-- [Efficient Sparse Voxel Octrees - Analysis, Extensions, and Implementation](https://research.nvidia.com/publication/2010-02_efficient-sparse-voxel-octrees-analysis-extensions-and-implementation)
+- [ESVO]: [Efficient Sparse Voxel Octrees - Analysis, Extensions, and Implementation](https://research.nvidia.com/publication/2010-02_efficient-sparse-voxel-octrees-analysis-extensions-and-implementation)
+- [Interactively Modifying Compressed Sparse Voxel Representations](https://graphics.tudelft.nl/Publications-new/2020/CBE20/ModifyingCompressedVoxels-main.pdf)
+  - https://github.com/Phyronnaz/HashDAG
 - [Editing Compressed High-resolution Voxel Scenes with Attributes](https://onlinelibrary.wiley.com/doi/10.1111/cgf.14757)
   - Most recent(?) paper on SVDAGs. Combines geometry SVDAG with decoupled and chunked attribute data.
 
@@ -388,7 +473,8 @@ Complementary:
 - [Advanced Octrees 2: node representations](https://geidav.wordpress.com/2014/08/18/advanced-octrees-2-node-representations/)
 - https://github.com/DavidWilliams81/cubiquity
   - https://github.com/DavidWilliams81/cubiquity/blob/master/src/application/commands/view/glsl/pathtracing.frag#L333
-
+- https://github.com/AsperTheDog/GPU_SVOEngine
+  - https://reddit.com/r/VoxelGameDev/comments/1copcpp/people_who_want_to_implement_an_svo_what_parts/
 
 ## Extra resources
 
@@ -416,8 +502,10 @@ Greedy meshing is typically restricted to voxels and lighting of the same type, 
 This idea can be further extended into the "global lattice" method, where no voxel mesh needs to be generated at all and instead N*3 static planes can be drawn directly. One problem with this method is the significant overdraw caused by drawing thousands of overlapping planes, which could perform worse than plain DDA ray tracing.
 
 - [Greedy Meshing Voxels Fast - Optimism in Design Handmade Seattle 2022](https://www.youtube.com/watch?v=4xs66m1Of4A)
+  - https://new.reddit.com/r/VoxelGameDev/comments/1ceau2a/global_lattice_implementation
 - https://www.reddit.com/r/VoxelGameDev/comments/nip02b/comment/gz3urmf
 - https://www.youtube.com/watch?v=40JzyaOYJeY - Voxel Meshing Optimizations
+- https://www.youtube.com/watch?v=qnGoGq7DWMc - Blazingly Fast Greedy Mesher
 
 ### Octree Splatting
 Another way to render voxel octrees is by recursively projecting and filling octree nodes to screen coordinates.

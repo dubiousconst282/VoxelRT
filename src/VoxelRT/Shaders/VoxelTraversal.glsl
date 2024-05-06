@@ -6,6 +6,11 @@ buffer ssbo_Metrics {
 
 uniform bool u_UseAnisotropicLods;
 
+// Constant arrays are *absurdly* slow on my iGPU for whatever reason. Using a UBO is much faster.
+readonly buffer ssbo_RayCellInteractionMaskLUT {
+    uvec2 RayCellInteractionMaskLUT[64 * 8];
+};
+
 uint shr64(uvec2 mask, uint count) {
     uint currMask = count < 32 ? mask.x : mask.y;
     return currMask >> (count & 31u);
@@ -109,8 +114,10 @@ bool getStepPos(inout ivec3 ipos, vec3 dir, bool coarse) {
     }
 
     if (u_UseAnisotropicLods) {
-        ipos = getAnisotropicStepPos(occMask, maskIdx, ipos, dir, scale);
-        return true;
+        //ipos = getAnisotropicStepPos(occMask, maskIdx, ipos, dir, scale);
+        //return true;
+        uint dirOctant = (dir.x < 0 ? 0 : 1) + (dir.y < 0 ? 0 : 2) + (dir.z < 0 ? 0 : 4);
+        occMask &= RayCellInteractionMaskLUT[maskIdx + dirOctant * 64];
     }
 
     int lod = getIsotropicLod(occMask, maskIdx) * scale;
