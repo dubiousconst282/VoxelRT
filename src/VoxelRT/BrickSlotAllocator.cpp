@@ -74,23 +74,22 @@ uint32_t FreeList::Realloc(uint32_t baseAddr, uint32_t currSize, uint32_t newSiz
 
 void FreeList::Free(uint32_t baseAddr, uint32_t size) {
     NumAllocated -= size;
-    auto itr = FreeRanges.lower_bound(baseAddr);
+    auto iter = FreeRanges.insert({ baseAddr, size }).first;
 
-    // Coalesce on left side
-    if (itr != FreeRanges.end() && baseAddr + size == itr->first) {
-        FreeRanges.insert({ baseAddr, itr->second + size });
-        FreeRanges.erase(itr);
-        return;
+    // Advance one node ahead so that we only need to coalesce in one direction
+    if (iter != FreeRanges.end()) {
+        iter++;
     }
-    // Coalesce on right side
-    if (itr != FreeRanges.begin()) {
-        --itr;
 
-        if (itr->first + itr->second == baseAddr) {
-            itr->second += size;
-            return;
+    // Coalesce ranges from right to left
+    while (iter != FreeRanges.begin()) {
+        auto next = iter--;
+
+        if (iter->first + iter->second == next->first) {
+            iter->second += next->second;
+            FreeRanges.erase(next);
+        } else if (iter->first < baseAddr) {
+            break;
         }
     }
-    // No coalescing possible
-    FreeRanges.insert({ baseAddr, size });
 }
