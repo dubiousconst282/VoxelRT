@@ -2,6 +2,8 @@ uniform mat4 u_InvProjMat;
 uniform mat4 u_ProjMat;
 uniform int u_FrameNo;
 
+uniform samplerCube u_SkyTexture;
+
 uniform int u_DebugView;
 
 const uint MAX_BOUNCES = 2;
@@ -13,7 +15,7 @@ const uint MAX_BOUNCES = 2;
 #include "GBuffer.glsl"
 
 vec3 getSkyColor(vec3 dir) {
-    return vec3(0.8, 0.9, 0.96) * 3.0;
+    return min(texture(u_SkyTexture, dir).rgb * 2, 50000);
 }
 
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -69,8 +71,8 @@ void main() {
         }
         gs.irradiance = color;
     } else {
-        gs.albedo = getSkyColor(rayDir);
-        gs.irradiance = vec3(1.0);
+        gs.irradiance = getSkyColor(rayDir);
+        gs.albedo = vec3(1.0);
     }
     gbufferStore(pos, gs);
 }

@@ -13,7 +13,7 @@ namespace swr {
 StbImage StbImage::Load(std::string_view path, PixelType type) {
     int width, height;
     uint8_t* pixels = type == PixelType::RGBA_U8 ? (uint8_t*)stbi_load(path.data(), &width, &height, nullptr, 4) :
-                      type == PixelType::RGB_F32 ? (uint8_t*)stbi_loadf(path.data(), &width, &height, nullptr, 4) :
+                      type == PixelType::RGB_F32 ? (uint8_t*)stbi_loadf(path.data(), &width, &height, nullptr, 3) :
                                                    nullptr;
 
     if (pixels == nullptr) {

@@ -209,6 +209,11 @@ GpuRenderer::GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
 
     glCreateQueries(GL_TIME_ELAPSED, 1, &_frameQueryObj);
     _metricsBuffer = std::make_unique<ogl::Buffer>(64, GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
+
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+    auto panoToCubeShader = shlib.LoadComp("PanoramaToCube");
+    _skyTex = ogl::TextureCube::LoadPanorama("assets/skyboxes/evening_road_01_puresky_4k.hdr", *panoToCubeShader);
+    _renderShader->SetUniform("u_SkyTexture", *_skyTex);
 }
 GpuRenderer::~GpuRenderer() { glDeleteQueries(1, &_frameQueryObj); }
 

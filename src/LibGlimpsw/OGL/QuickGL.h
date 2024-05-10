@@ -178,6 +178,29 @@ struct Texture2D : public Texture {
     static std::unique_ptr<Texture2D> Load(std::string_view path, uint32_t mipLevels, GLenum internalFmt);
 };
 
+struct Shader;
+
+struct TextureCube : public Texture {
+    uint32_t Width, Height, MipLevels;
+
+    TextureCube(uint32_t width, uint32_t height, uint32_t mipLevels, GLuint internalFmt) : Texture(GL_TEXTURE_CUBE_MAP) {
+        Width = width;
+        Height = height;
+        MipLevels = mipLevels;
+
+        glTextureStorage2D(Handle, mipLevels, internalFmt, width, height);
+    }
+    void SetPixels(uint32_t layer, GLenum format, GLenum type, const void* pixels, uint32_t stride = 0) {
+        if (stride != 0) glPixelStorei(GL_UNPACK_ROW_LENGTH, stride);
+
+        glTextureSubImage3D(Handle, 0, 0, 0, layer, Width, Height, 1, format, type, pixels);
+
+        if (stride != 0) glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    }
+
+    static std::unique_ptr<TextureCube> LoadPanorama(std::string_view path, Shader& panoToCubeShader);
+};
+
 struct Texture3D : public Texture {
     uint32_t Width, Height, Depth, MipLevels;
 
