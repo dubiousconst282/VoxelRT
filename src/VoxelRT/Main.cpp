@@ -49,11 +49,15 @@ public:
             _map->Serialize("logs/voxels_2k_sponza.dat");
         }
 
-        _map->Palette[251] = { .Color = { 70, 150, 64 } };
+        _map->Palette[245] = { .Color = { 70, 150, 64 } };
+        _map->Palette[246] = { .Color = { 110, 150, 64 } };
+        _map->Palette[247] = { .Color = { 138, 160, 72 } };
+        _map->Palette[248] = { .Color = { 60, 130, 56 } };
+
         _map->Palette[252] = { .Color = { 255, 48, 48 }, .Emission = 0.8f };
         _map->Palette[253] = { .Color = { 48, 255, 48 }, .Emission = 0.8f };
         _map->Palette[254] = { .Color = { 48, 48, 255 }, .Emission = 0.8f };
-        _map->Palette[255] = { .Color = { 255, 255, 255 }, .Emission = 4.0f };
+        _map->Palette[255] = { .Color = { 255, 255, 255 }, .Emission = 10.0f };
 
         _terrainGen = std::make_unique<TerrainGenerator>(_map);
         for (size_t y = 0; y < 7; y++) {

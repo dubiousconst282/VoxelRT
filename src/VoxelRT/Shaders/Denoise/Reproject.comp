@@ -1,0 +1,109 @@
+uniform mat4 u_InvProjMat;
+uniform mat4 u_HistoryProjMat;
+uniform mat4 u_HistoryInvProjMat;
+uniform vec3 u_OriginDelta;
+uniform bool u_ForceResetHistory;
+
+#include "../GBuffer.glsl"
+
+float luminance(vec3 color) {
+    return dot(color, vec3(0.299, 0.587, 0.114));
+}
+
+vec3 getWorldPos(ivec2 screenPos, float depth, mat4 invProj) {
+    vec4 worldPos = invProj * vec4(screenPos, depth, 1.0);
+    return worldPos.xyz * (16.0 / worldPos.w);
+}
+vec2 getHistoryPos(vec3 worldPos) {
+    vec4 prevNDC = u_HistoryProjMat * vec4(worldPos + u_OriginDelta, 1.0);
+    vec2 prevUV = prevNDC.xy / prevNDC.w;
+    prevUV = prevUV * 0.5 + 0.5;
+    
+    return prevUV * g_RenderSize - 0.5;
+}
+
+bool isValidSample(ivec2 samplePos, vec3 centerWorldPos, vec3 centerNormal) {
+    // Normal check
+    vec3 sampleNormal = unpackGNormal(texelFetch(u_PrevAlbedoNormalTex, samplePos, 0).w);
+    if (dot(centerNormal, sampleNormal) < 0.5) return false;
+
+    // Plane distance check (ReBLUR)
+    float sampleDepth = texelFetch(u_PrevDepthTex, samplePos, 0).r;
+    if (sampleDepth <= 0.0) return false; // sky
+    vec3 sampleWorldPos = getWorldPos(samplePos, sampleDepth, u_HistoryInvProjMat);
+
+    float planeDist = abs(dot(centerWorldPos - sampleWorldPos + u_OriginDelta, centerNormal));
+    if (planeDist > 6.0) return false;
+
+    return true;
+}
+
+bool reproject(ivec2 pos) {
+    float depth = imageLoad(u_DepthTex, pos).r;
+    if (depth <= 0) return false; // sky
+
+    vec3 worldPos = getWorldPos(pos, depth, u_InvProjMat);
+
+    vec2 prevPos = getHistoryPos(worldPos);
+    ivec2 prevPosi = ivec2(prevPos);
+    vec2 prevPosf = fract(prevPos);
+
+    if (!gbufferCheckBounds(prevPosi)) return false;
+    // if (prevPosi == pos && dot(prevPosf, prevPosf) < 0.025*0.025) return true;
+
+    vec3 currAlbedo = imageLoad(u_AlbedoNormalTex, pos).rgb;
+    vec3 currNormal = unpackGNormal(imageLoad(u_AlbedoNormalTex, pos).w);
+
+    float wsum = 0.0;
+    vec3 prevIrradiance = vec3(0);
+    vec2 prevMoments = vec2(0);
+    uint historyLen = imageLoad(u_HistoryLenTex, pos).r;
+
+    for (int i = 0; i < 4; i++) {
+        ivec2 samplePos = prevPosi + ivec2(i & 1, i >> 1);
+        if (!isValidSample(samplePos, worldPos, currNormal)) continue;
+        
+        float w = ((i  & 1) != 0 ? prevPosf.x : 1.0 - prevPosf.x) *
+                  ((i >> 1) != 0 ? prevPosf.y : 1.0 - prevPosf.y);
+
+        prevIrradiance += texelFetch(u_PrevIrradianceTex, samplePos, 0).rgb * w;
+        prevMoments += texelFetch(u_PrevMomentsTex, samplePos, 0).rg * w;
+        wsum += w;
+        
+        // This helps minimize smearing after disocclusion
+        historyLen = min(historyLen, imageLoad(u_HistoryLenTex, samplePos).r + 1);
+    }
+    if (wsum < 0.001) return false;
+
+    prevIrradiance /= wsum;
+    prevMoments /= wsum;
+
+    if (u_ForceResetHistory && historyLen > 6) historyLen = 6;
+    float blendFactor = 1.0 / (historyLen + 1);
+    
+    vec4 currIrradiance = imageLoad(u_IrradianceTex, pos);
+    vec3 newIrradiance = mix(prevIrradiance, currIrradiance.rgb, blendFactor);
+
+    float luma = luminance(newIrradiance);
+    vec2 currMoments = vec2(luma, luma * luma);
+    vec2 newMoments = mix(prevMoments, currMoments, max(0.5, blendFactor));
+    imageStore(u_MomentsTex, pos, vec4(newMoments, 0, 0));
+
+    float variance = max(0.0, newMoments.y - newMoments.x * newMoments.x);
+    imageStore(u_IrradianceTex, pos, vec4(newIrradiance, variance));
+
+    historyLen = min(historyLen + 1, 64);
+    imageStore(u_HistoryLenTex, pos, uvec4(historyLen));
+
+    return true;
+}
+
+layout(local_size_x = 8, local_size_y = 8) in;
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+
+    if (!reproject(pos)) {
+        imageStore(u_HistoryLenTex, pos, uvec4(0));
+        imageStore(u_MomentsTex, pos, vec4(0));
+    }
+}

@@ -1,0 +1,147 @@
+#include "../GBuffer.glsl"
+
+// SVGF-based denoising filter
+// - https://research.nvidia.com/publication/2017-07_spatiotemporal-variance-guided-filtering-real-time-reconstruction-path-traced
+// - https://alain.xyz/blog/ray-tracing-denoising
+// - https://diharaw.github.io/post/adventures_in_hybrid_rendering/
+
+layout(rgba16f) uniform image2D u_TempIrradianceTex;
+
+//  -1: VarianceEstim   - in(u_IrradianceTex),      out(u_TempIrradianceTex)
+// >=0: Atrous          - in(u_TempIrradianceTex),  out(u_IrradianceTex)
+uniform int u_PassNo;
+
+float luminance(vec3 color) {
+    return dot(color, vec3(0.299, 0.587, 0.114));
+}
+
+void varianceEstim(ivec2 pos) {
+    uint historyLen = imageLoad(u_HistoryLenTex, pos).r;
+    float centerDepth = imageLoad(u_DepthTex, pos).r;
+
+    if (historyLen > 4 || centerDepth < 0) {
+        imageStore(u_TempIrradianceTex, pos, imageLoad(u_IrradianceTex, pos));
+        return;
+    }
+    vec3 centerIrradiance = imageLoad(u_TempIrradianceTex, pos).rgb;
+    float centerLuma = luminance(centerIrradiance);
+    vec3 centerNormal = unpackGNormal(imageLoad(u_AlbedoNormalTex, pos).w);
+
+    float lumaPhi = 10.0;
+
+    vec3 sumIrradiance = vec3(0);
+    vec2 sumMoments = vec2(0);
+    float wsum = 0.0;
+
+    const int r = 3;
+    for (int ky = -r; ky <= r; ky++) {
+        for (int kx = -r; kx <= r; kx++) {
+            //if (kx == 0 && ky == 0) continue;
+
+            ivec2 samplePos = pos + ivec2(kx, ky);
+            if (!gbufferCheckBounds(samplePos)) continue;
+
+            vec4 irradiance = imageLoad(u_IrradianceTex, samplePos);
+            float luma = luminance(irradiance.rgb);
+            float w_luma = abs(luma - centerLuma) / lumaPhi;
+            
+            vec3 normal = unpackGNormal(imageLoad(u_AlbedoNormalTex, samplePos).w);
+            float w_normal = pow(clamp(dot(normal, centerNormal), 0.001, 1.0), 128);
+
+            float depth = imageLoad(u_DepthTex, samplePos).r;
+            float w_depth = abs(centerDepth - depth) / (length(vec2(kx, ky)) + 0.001);
+            // FIXME: this won't do anything, depth should be linear
+            
+            float w = exp(-(w_luma + w_depth)) * w_normal;
+
+            sumIrradiance += irradiance.rgb * w;
+            sumMoments += vec2(luma, luma * luma) * w;
+            wsum += w;
+        }
+    }
+
+    wsum = max(wsum, 0.001);
+    sumIrradiance /= wsum;
+    sumMoments /= wsum;
+
+    float variance = max(0.0, sumMoments.y - sumMoments.x * sumMoments.x);
+    variance *= (4.0 - historyLen) * 3.0;
+    imageStore(u_TempIrradianceTex, pos, vec4(sumIrradiance, variance));
+}
+
+float getFilteredVariance(ivec2 pos) {
+    const float kernel[2][2] = {
+        { 1.0 / 4.0, 1.0 / 8.0 },
+        { 1.0 / 8.0, 1.0 / 16.0 },
+    };
+    float sum = 0.0;
+
+    for (int ky = -1; ky <= 1; ky++) {
+        for (int kx = -1; kx <= 1; kx++) {
+            sum += imageLoad(u_TempIrradianceTex, pos + ivec2(kx, ky)).w * kernel[abs(kx)][abs(ky)];
+        }
+    }
+    return sum;
+}
+void svgfAtrous(ivec2 pos, uint passNo) {
+    float centerDepth = imageLoad(u_DepthTex, pos).r;
+    vec4 centerIrradiance = imageLoad(u_TempIrradianceTex, pos);
+
+    if (centerDepth < 0) {
+        imageStore(u_IrradianceTex, pos, centerIrradiance);
+        return;
+    }
+
+    float centerVariance = getFilteredVariance(pos);
+    vec3 centerNormal = unpackGNormal(imageLoad(u_AlbedoNormalTex, pos).w);
+    float centerLuma = luminance(centerIrradiance.rgb);
+
+    float lumaPhi = sqrt(max(0.0001, centerVariance)) * 4.0;
+    float depthPhi = 0.001;
+
+    vec4 sumIrradiance = centerIrradiance;
+    float wsum = 1.0;
+
+    const int r = 2;
+    const float kernel[] = { 3.0 / 8, 1.0 / 4, 1.0 / 16 }; // wtf is it? Falcor uses different kernel from paper
+
+    for (int ky = -r; ky <= r; ky++) {
+        for (int kx = -r; kx <= r; kx++) {
+            if (kx == 0 && ky == 0) continue;
+
+            ivec2 samplePos = pos + (ivec2(kx, ky) << passNo);
+            if (!gbufferCheckBounds(samplePos)) continue;
+
+            vec4 irradiance = imageLoad(u_TempIrradianceTex, samplePos);
+            float w_luma = abs(luminance(irradiance.rgb) - centerLuma) / lumaPhi;
+            
+            vec3 normal = unpackGNormal(imageLoad(u_AlbedoNormalTex, samplePos).w);
+            float w_normal = pow(clamp(dot(normal, centerNormal), 0.001, 1.0), 128);
+
+            float depth = imageLoad(u_DepthTex, samplePos).r;
+            float w_depth = abs(centerDepth - depth) / (length(ivec2(kx, ky) << passNo) + 0.001);
+            // FIXME: this won't do anything, depth should be linear
+            
+            float w = kernel[abs(kx)] * kernel[abs(ky)];
+            w *= exp(-(w_luma + w_depth)) * w_normal;
+
+            sumIrradiance += vec4(irradiance.rgb * w, irradiance.w * (w * w));
+            wsum += w;
+        }
+    }
+    if (wsum < 0.001) wsum = 0.001;
+    sumIrradiance.rgb /= wsum;
+    sumIrradiance.w /= (wsum * wsum);
+    imageStore(u_IrradianceTex, pos, sumIrradiance);
+}
+
+layout(local_size_x = 8, local_size_y = 8) in;
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+
+    if (u_PassNo < 0) {
+        varianceEstim(pos);
+    } else {
+        svgfAtrous(pos, u_PassNo);
+    }
+}

@@ -1,7 +1,7 @@
 #include "Renderer.h"
 #include "BrickSlotAllocator.h"
 
-#include "Rendering/GBuffer.h"
+#include "GBuffer.h"
 
 static constexpr auto SectorSize = MaskIndexer::Size * BrickIndexer::Size;
 static constexpr auto ViewSize = glm::uvec2(4096, 2048) / glm::uvec2(SectorSize);
@@ -227,7 +227,7 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     }
     _storage->SyncBuffers(*_map);
 
-    _gbuffer->SetCamera(cam, viewSize, false);
+    _gbuffer->SetCamera(cam, viewSize, worldChanged);
 
     GLint64 frameElapsedNs;
     glGetQueryObjecti64v(_frameQueryObj, GL_QUERY_RESULT, &frameElapsedNs);
@@ -241,7 +241,7 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 
     _renderShader->SetUniform("u_WorldOrigin", glm::ivec3(glm::floor(cam.ViewPosition)));
     _renderShader->SetUniform("u_UseAnisotropicLods", _useAnisotropicLods ? 1 : 0);
-    _renderShader->SetUniform("u_DebugView", (int)_debugView);
+    _renderShader->SetUniform("u_MaxBounces", (int)_numLightBounces);
 
     _gbuffer->SetUniforms(*_renderShader);
 
@@ -254,19 +254,24 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 }
 void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
     ImGui::SeparatorText("Renderer##GPU");
-    settings.Combo("Debug View", &_debugView);
-    settings.Checkbox("Anisotropic LODs", &_useAnisotropicLods);
 
+    ImGui::PushItemWidth(150);
+    settings.Combo("Debug Channel", &_gbuffer->DebugChannelView);
+    settings.Slider("Light Bounces", &_numLightBounces, 1, 0u, 5u);
+    settings.Slider("Denoiser Passes", &_gbuffer->NumDenoiserPasses, 1, 0u, 5u);
+    settings.Checkbox("Anisotropic LODs", &_useAnisotropicLods);
+    ImGui::PopItemWidth();
+    
     ImGui::Separator();
     _frameTime.Draw("Frame Time");
 
     auto totalIters = _metricsBuffer->Map<uint32_t>(GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
-    if (_gbuffer->CurrentTex != nullptr) {
+    if (_gbuffer->AlbedoTex != nullptr) {
         double frameMs, frameDevMs;
         _frameTime.GetElapsedMs(frameMs, frameDevMs);
 
-        uint32_t numPixels = _gbuffer->CurrentTex->Width * _gbuffer->CurrentTex->Height;
-        uint32_t raysPerPixel = _debugView == DebugView::None ? 3 : 1;
+        uint32_t numPixels = _gbuffer->AlbedoTex->Width * _gbuffer->AlbedoTex->Height;
+        uint32_t raysPerPixel = _numLightBounces + 1;
         double raysPerSec = numPixels * raysPerPixel * (1000 / frameMs);
 
         ImGui::Text("Rays/sec: %.2fM | Steps: %.3fM", raysPerSec / 1000000.0, *totalIters / 1000000.0);
@@ -281,7 +286,5 @@ void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
             v2 += (uint32_t)std::popcount(sector.second.GetAllocationMask());
         }
         ImGui::Text("Bricks: %.1fK (%.1fK on CPU)", _storage->SlotAllocator.Arena.NumAllocated / 1000.0, v2 / 1000.0);
-        // FIXME: figure whytf sectors don't get deleted properly
-        //        seems like the brush dispatcher should check for empty sectors
     }
 }

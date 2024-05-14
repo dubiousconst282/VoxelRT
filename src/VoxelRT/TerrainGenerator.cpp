@@ -19,7 +19,8 @@ uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) 
         brick->DispatchSIMD([&](VoxelDispatchInvocationPars& p) {
             VFloat noise = VFloat::gather<4>(noiseBuffer.get(), (p.X & 31) + (p.Y & 31) * 32 + (p.Z & 31) * (32 * 32));
             VMask fillMask = noise < 0.0;
-            p.VoxelIds = simd::csel(fillMask, VInt(251), VInt(0));
+            VInt grassId = 245 + (simd::trunc2i(noise * 1234.5678) & 3); // 4 random grass variants. no, it doesn't look good.
+            p.VoxelIds = simd::csel(fillMask, grassId, 0);
 
             isNonEmpty |= simd::any(fillMask);
             return true;
@@ -74,7 +75,7 @@ struct TerrainGenerator::RequestQueue {
         RequestQueue.pop();
         return true;
     }
-    void OfferResult(glm::ivec3 pos, std::unique_ptr<Sector> sector) {
+    void PushResult(glm::ivec3 pos, std::unique_ptr<Sector> sector) {
         std::unique_lock<std::mutex> lock(Mutex);
         OutputQueue.push({ pos, std::move(sector) });
     }
@@ -138,7 +139,7 @@ void TerrainGenerator::WorkerFn() {
         for (uint32_t i : BitIter(mask)) {
             *sector->GetBrick(i, true) = *workSector.GetBrick(i);
         }
-        _queue->OfferResult(pos, std::move(sector));
+        _queue->PushResult(pos, std::move(sector));
     }
     Log("Worker exit");
 }

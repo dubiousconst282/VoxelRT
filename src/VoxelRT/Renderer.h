@@ -32,8 +32,6 @@ struct GpuRenderer : public Renderer {
     virtual void DrawSettings(glim::SettingStore& settings);
 
 private:
-    enum class DebugView { None, Albedo, Normals, TraversalIters };
-    
     std::shared_ptr<VoxelMap> _map;
     std::unique_ptr<GpuVoxelStorage> _storage;
 
@@ -43,7 +41,7 @@ private:
     std::unique_ptr<ogl::Buffer> _rayCellInteractionMaskLUT;
     std::unique_ptr<GBuffer> _gbuffer;
 
-    DebugView _debugView = DebugView::None;
+    uint32_t _numLightBounces = 2;
     bool _useAnisotropicLods;
 
     glim::TimeStat _frameTime;
@@ -63,8 +61,7 @@ private:
 
     std::unique_ptr<GBuffer> _gbuffer;
     std::shared_ptr<ogl::Shader> _blitShader;
-    std::shared_ptr<ogl::Buffer> _pbo;
 
-    bool _enablePathTracer = false;
+    uint32_t _numLightBounces = 1;
     glim::TimeStat _frameTime;
 };

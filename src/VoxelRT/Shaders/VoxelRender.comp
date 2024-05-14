@@ -4,9 +4,7 @@ uniform int u_FrameNo;
 
 uniform samplerCube u_SkyTexture;
 
-uniform int u_DebugView;
-
-const uint MAX_BOUNCES = 2;
+uniform int u_MaxBounces;
 
 #include "VoxelMap.glsl"
 #include "VoxelTraversal.glsl"
@@ -15,64 +13,79 @@ const uint MAX_BOUNCES = 2;
 #include "GBuffer.glsl"
 
 vec3 getSkyColor(vec3 dir) {
-    return min(texture(u_SkyTexture, dir).rgb * 2, 50000);
+    return min(texture(u_SkyTexture, dir).rgb * 5, 50000);
+}
+uniform vec3 u_OriginFrac;
+
+void getPrimaryRay(ivec2 screenPos, out vec3 rayPos, out vec3 rayDir) {
+    vec4 near = u_InvProjMat * vec4(screenPos, 0.0, 1.0);
+    vec4 far = near + u_InvProjMat[2];
+    rayPos = vec3(near * (1.0 / near.w)) + u_OriginFrac;
+    rayDir = normalize(vec3(far * (1.0 / far.w)));
 }
 
 layout(local_size_x = 8, local_size_y = 8) in;
 void main() {
     random_init(uvec3(gl_GlobalInvocationID.xy, u_FrameNo));
-
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
-    vec2 uv = vec2(pos + 0.5) / imageSize(u_GBuffer);
 
     vec3 rayDir, rayPos;
-    getPrimaryRay(uv, u_InvProjMat, rayPos, rayDir);
+    getPrimaryRay(pos, rayPos, rayDir);
     
-    GSample gs;
+    vec3 albedo, irradiance, normal;
+    float depth = -1.0;
     HitInfo hit;
 
-    if (u_DebugView != 0) {
-        // None, Albedo, Normals, TraversalIters
-        rayTrace(rayPos, rayDir, hit);
-        gs.albedo = u_DebugView == 1 ? getMaterialColor(hit.mat) : 
-                    u_DebugView == 2 ? hit.normal * 0.5 + 0.5 :
-                    u_DebugView == 3 ? vec3(hit.iters)/96.0 : vec3(1, 0, 1);
-        gs.irradiance = vec3(1.0);
-        gbufferStore(pos, gs);
-        return;
-    }
-    
-    if (rayTrace(rayPos, rayDir, hit)) {
-        gs.albedo = getMaterialColor(hit.mat);
-        gs.normal = hit.normal;
-        gs.depth = hit.dist;
+    if (rayCast(rayPos, rayDir, hit)) {
+        albedo = getMaterialColor(hit.mat);
+        normal = hit.normal;
 
-        vec3 color = vec3(MAX_BOUNCES == 0 ? 1.0 : 0.0);
+        vec4 projPos = u_ProjMat * vec4(hit.pos / 16.0, 1.0); // scale down by 1/16 to minimize precision loss
+        depth = projPos.z / projPos.w;
+
+        irradiance = albedo * getMaterialEmission(hit.mat);
         vec3 throughput = vec3(1.0);
-        color += gs.albedo * getMaterialEmission(hit.mat);
 
-        for (int i = 0; i < MAX_BOUNCES; i++) {
+        if (u_MaxBounces == 0) irradiance = albedo;
+
+        vec3 sunDir = normalize(vec3(0.3,0.9,-0.28));
+    
+        HitInfo sunHit;
+        if (!rayCastCoarse(hit.pos + hit.normal*0.01, sunDir, sunHit)) {
+            irradiance += vec3(1.2,1.1,1.0)*10;
+        } else {
+            throughput *= 0.6;
+        }
+        
+        for (int i = 0; i < u_MaxBounces; i++) {
             rayPos = hit.pos + hit.normal * 0.01;
 
-            float fuzziness = getMaterialMetalFuzziness(hit.mat);
+            /*float fuzziness = getMaterialMetalFuzziness(hit.mat);
             if (fuzziness < 1.0) {
                 rayDir = normalize(reflect(rayDir, hit.normal) + (fuzziness * random_dir(u_FrameNo, i)));
                 if (dot(rayDir, hit.normal) <= 0.0) break;
-            } else {
+            } else */{
                 rayDir = normalize(hit.normal + random_dir(u_FrameNo, i));
             }
 
-            if (!rayTraceCoarse(rayPos, rayDir, hit)) {
-                color += throughput * getSkyColor(rayDir);
+            if (!rayCastCoarse(rayPos, rayDir, hit)) {
+                irradiance += throughput * getSkyColor(rayDir);
                 break;
             }
             throughput *= getMaterialColor(hit.mat);
-            color += throughput * getMaterialEmission(hit.mat);
+            float emission = getMaterialEmission(hit.mat);
+            
+            if (i < 2 && !rayCastCoarse(hit.pos + hit.normal*0.01, sunDir, sunHit)) {
+                throughput *= vec3(1.2,1.1,1.0);
+                emission += 10;
+            }
+            irradiance += throughput * emission;
         }
-        gs.irradiance = color;
     } else {
-        gs.irradiance = getSkyColor(rayDir);
-        gs.albedo = vec3(1.0);
+        irradiance = getSkyColor(rayDir);
+        albedo = vec3(1.0);
     }
-    gbufferStore(pos, gs);
+    imageStore(u_AlbedoNormalTex, pos, vec4(albedo, float(packGNormal(normal))));
+    imageStore(u_IrradianceTex, pos, vec4(irradiance, hit.iters));
+    imageStore(u_DepthTex, pos, vec4(depth));
 }

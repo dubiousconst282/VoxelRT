@@ -8,7 +8,7 @@
 
 #include "Renderer.h"
 
-#include "Rendering/GBuffer.h"
+#include "GBuffer.h"
 
 // Cannot be > 2048*512*2048 because memory index is signed 32-bits
 using ViewSectorIndexer =
@@ -162,15 +162,13 @@ static VMask GetStepPos(const FlatVoxelStorage& map, VInt3& pos, VFloat3 dir, VM
     lod += csel(level4, 2, csel(level2, 1, VInt(0)));
 
     VInt cellMask = (1 << lod) - 1;
-    // TODO: can this be optimized to 1x ternlog using shift to get dir sign? bypass latency probably cheaper than cmp
+    // this could be optimized into srai+ternlog but will hardly matter amidst this sea of gathers.
     pos.x.set_if(mask, csel(dir.x < 0, (pos.x & ~cellMask), (pos.x | cellMask)));
     pos.y.set_if(mask, csel(dir.y < 0, (pos.y & ~cellMask), (pos.y | cellMask)));
     pos.z.set_if(mask, csel(dir.z < 0, (pos.z & ~cellMask), (pos.z | cellMask)));
 
     return level0;
 }
-
-// TODO: consider 2x unroll to help hide gather latency from better ILP, need to profile first
 static VHitResult RayCast(const FlatVoxelStorage& map, VFloat3 origin, VFloat3 dir, VMask activeMask, glm::ivec3 worldOrigin) {
     VFloat3 invDir = 1.0f / dir;
     // VFloat3 tStart = (max(sign(dir), 0.0) - origin) * invDir;
@@ -310,6 +308,99 @@ struct Framebuffer {
     Tile Tiles[];
 };
 
+static swr::HdrTexture2D _skyBox = swr::texutil::LoadCubemapFromPanoramaHDR("assets/skyboxes/evening_road_01_puresky_4k.hdr");
+static VBlueNoise _blueNoise = VBlueNoise();
+
+struct FrameConstants {
+    FlatVoxelStorage& Storage;
+    glm::uvec2 Size;
+    glm::ivec3 WorldOrigin;
+    glm::vec3 OriginFrac;
+    uint32_t FrameNo;
+    uint32_t NumLightBounces;
+    glm::mat4 CurrentProj;
+    glm::mat4 InvProj;
+};
+
+[[gnu::noinline]] // lambdas can't be debugged on release for some reason
+static void RenderRow(const FrameConstants& fc, Framebuffer::Tile* dest, uint32_t y) {
+    VFloat v = simd::conv2f((int32_t)y + simd::TileOffsetsY) + 0.5f;  // + rng.NextUnsignedFloat() - 0.5f;
+    
+    for (uint32_t x = 0; x < fc.Size.x; x += simd::TileWidth) {
+        VFloat u = simd::conv2f((int32_t)x + simd::TileOffsetsX) + 0.5f;  // + rng.NextUnsignedFloat() - 0.5f;
+
+        VFloat3 origin, dir;
+        GetPrimaryRay({ u, v }, fc.InvProj, origin, dir);
+        origin += VFloat3(fc.OriginFrac);
+
+        VInt albedo;
+        VFloat depth;
+        VFloat3 irradiance = 0.0f;
+        VFloat3 throughput = 1.0f;
+        VMask mask = (VMask)(~0);
+
+        for (uint32_t i = 0; i <= fc.NumLightBounces && any(mask); i++) {
+            auto hit = RayCast(fc.Storage, origin, dir, mask, fc.WorldOrigin);
+
+            VFloat3 matColor = hit.GetColor();
+            VFloat emissionStrength = hit.GetEmissionStrength();
+
+            VMask missMask = mask & ~hit.Mask;
+            if (any(missMask)) {
+                constexpr swr::SamplerDesc SD = {
+                    .MagFilter = swr::FilterMode::Nearest,
+                    .MinFilter = swr::FilterMode::Nearest,
+                    .EnableMips = true,
+                };
+                VFloat3 skyColor = _skyBox.SampleCube<SD, false>(dir, i == 0 ? 1 : 3);
+                skyColor *= 3;
+
+                if (i == 0) {
+                    // Special primary ray to prevent banding
+                    irradiance.x.set_if(missMask, skyColor.x);
+                    irradiance.y.set_if(missMask, skyColor.y);
+                    irradiance.z.set_if(missMask, skyColor.z);
+                } else {
+                    matColor.x.set_if(missMask, skyColor.x);
+                    matColor.y.set_if(missMask, skyColor.y);
+                    matColor.z.set_if(missMask, skyColor.z);
+                    emissionStrength.set_if(missMask, 1.0f);
+                }
+            }
+            if (i == 0) {
+                albedo = swr::pixfmt::RGBA8u::Pack({ matColor, 0.0f });
+                albedo |= (round2i(hit.Normal.x) + 1) << 24;
+                albedo |= (round2i(hit.Normal.y) + 1) << 26;
+                albedo |= (round2i(hit.Normal.z) + 1) << 28;
+
+                VFloat4 projPos = simd::TransformVector(fc.CurrentProj, { hit.Pos / 16.0f, 1.0f });  // scale down by 1/16 to minimize precision loss
+                depth = csel(missMask, -1.0f, projPos.z / projPos.w);
+
+                if (fc.NumLightBounces == 0) {
+                    irradiance = 1.0f;
+                    break;
+                }
+            } else {
+                throughput *= matColor;
+            }
+            irradiance += throughput * emissionStrength;
+            mask &= hit.Mask;
+
+            origin = hit.Pos + hit.Normal * 0.01f;
+
+            VFloat2 bn = _blueNoise.Sample(glm::uvec2(x, y), fc.FrameNo, i);
+            dir = simd::normalize(hit.Normal + SampleDirection(bn));  // lambertian
+        }
+        // Write out entire tile at once in hopes for better write-combining or whatever
+        *dest++ = {
+            .Albedo = albedo,
+            .Depth = depth,
+            .IrradianceRG = swr::pixfmt::RG16f::Pack({ irradiance.x, irradiance.y }),
+            .IrradianceBX = swr::pixfmt::RG16f::Pack({ irradiance.z }),
+        };
+    }
+}
+
 CpuRenderer::CpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
     _map = std::move(map);
     _storage = std::make_unique<FlatVoxelStorage>();
@@ -327,26 +418,21 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 #endif
     viewSize &= ~3u;  // round down to 4x4 steps
 
+    bool worldChanged = _map->DirtyLocs.size() > 0;
     _storage->SyncBuffers(*_map);
+    _gbuffer->SetCamera(cam, viewSize, worldChanged);
 
     uint32_t tilesX = viewSize.x / simd::TileWidth;
     uint32_t tilesY = viewSize.y / simd::TileHeight;
     size_t fbSize = (tilesX * tilesY * sizeof(Framebuffer::Tile)) + sizeof(Framebuffer);
-    if (_pbo == nullptr || _pbo->Size < fbSize) {
-        _pbo = std::make_unique<ogl::Buffer>(fbSize, GL_DYNAMIC_STORAGE_BIT | GL_MAP_WRITE_BIT);
-    }
 
-    _gbuffer->SetCamera(cam, viewSize, false);
-
-    glm::mat4 invProj = _gbuffer->CurrentInvProj;
-    // Bias matrix to take UVs in range [0..screen] rather than [-1..1]
-    invProj = glm::translate(invProj, glm::vec3(-1.0f, -1.0f, 0.0f));
-    invProj = glm::scale(invProj, glm::vec3(2.0f / viewSize.x, 2.0f / viewSize.y, 1.0f));
+    // Buffer orphaning is way faster than keeping a single one.
+    auto pbo = ogl::Buffer(fbSize, GL_DYNAMIC_STORAGE_BIT | GL_MAP_WRITE_BIT);
 
     // Writing to memory mapping is ~1ms slower than local buffer at 1080p,
     // but temp buffer + BufferSubData() is even slower... though probably faster for dGPUs?
     // auto fb = (Framebuffer*)_fbData.get();
-    auto fb = _pbo->Map<Framebuffer>(GL_MAP_WRITE_BIT);
+    auto fb = pbo.Map<Framebuffer>(GL_MAP_WRITE_BIT);
     fb->Width = viewSize.x;
     fb->Height = viewSize.y;
     fb->TileStride = viewSize.x / simd::TileWidth;
@@ -355,10 +441,16 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 
     _frameTime.Begin();
 
-    static swr::HdrTexture2D _skyBox = swr::texutil::LoadCubemapFromPanoramaHDR("assets/skyboxes/evening_road_01_puresky_4k.hdr");
-    static VBlueNoise _blueNoise = VBlueNoise();
-    
-    glm::ivec3 worldOrigin = glm::floor(cam.ViewPosition);
+    FrameConstants fc = {
+        .Storage = *_storage,
+        .Size = viewSize,
+        .WorldOrigin = glm::floor(_gbuffer->CurrentPos),
+        .OriginFrac = glm::fract(_gbuffer->CurrentPos),
+        .FrameNo = _gbuffer->FrameNo,
+        .NumLightBounces = _numLightBounces,
+        .CurrentProj = _gbuffer->CurrentProj,
+        .InvProj = GBuffer::GetInverseProjScreenMat(_gbuffer->CurrentProj, viewSize),
+    };
 
     auto rows = std::ranges::iota_view(0u, viewSize.y / simd::TileHeight);
     std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
@@ -366,77 +458,14 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
         uint32_t y = rowId * simd::TileHeight;
         auto tile = &fb->Tiles[(y / simd::TileHeight) * fb->TileStride];
 
-        for (uint32_t x = 0; x < viewSize.x; x += simd::TileWidth) {
-            VFloat u = simd::conv2f((int32_t)x + simd::TileOffsetsX) + 0.5f; // + rng.NextUnsignedFloat() - 0.5f;
-            VFloat v = simd::conv2f((int32_t)y + simd::TileOffsetsY) + 0.5f; // + rng.NextUnsignedFloat() - 0.5f;
-
-            VFloat3 origin, dir;
-            GetPrimaryRay({ u, v }, invProj, origin, dir);
-            origin += VFloat3(glm::fract(_gbuffer->CurrentPos));
-
-            VInt albedo;
-            VFloat depth;
-            VFloat3 irradiance = 0.0f;
-            VFloat3 throughput = 1.0f;
-            VMask mask = (VMask)(~0);
-
-            for (uint32_t i = 0; i < 3 && any(mask); i++) {
-                auto hit = RayCast(*_storage, origin, dir, mask, worldOrigin);
-
-                VFloat3 matColor = hit.GetColor();
-                VFloat emissionStrength = hit.GetEmissionStrength();
-
-                VMask missMask = mask & ~hit.Mask;
-                if (any(missMask)) {
-                    constexpr swr::SamplerDesc SD = {
-                        .MagFilter = swr::FilterMode::Nearest,
-                        .MinFilter = swr::FilterMode::Nearest,
-                        .EnableMips = true,
-                    };
-                    VFloat3 skyColor = _skyBox.SampleCube<SD, false>(dir, i == 0 ? 1 : 3);
-
-                    matColor.x.set_if(missMask, skyColor.x);
-                    matColor.y.set_if(missMask, skyColor.y);
-                    matColor.z.set_if(missMask, skyColor.z);
-                    emissionStrength.set_if(missMask, 1.0f);
-                }
-                if (i == 0) {
-                    VInt packedNorm = (round2i(hit.Normal.x) + 1) << 24 |
-                                      (round2i(hit.Normal.y) + 1) << 26 |
-                                      (round2i(hit.Normal.z) + 1) << 28;
-                    albedo = swr::pixfmt::RGBA8u::Pack({ matColor, 0.0f }) | packedNorm;
-                    depth = hit.Distance;
-
-                    if (!_enablePathTracer) {
-                        irradiance = 1.0f;
-                        break;
-                    }
-                } else {
-                    throughput *= matColor;
-                }
-                irradiance += throughput * emissionStrength;
-                mask &= hit.Mask;
-
-                origin = hit.Pos + hit.Normal * 0.01f;
-
-                VFloat2 bn = _blueNoise.Sample(glm::uvec2(x, y), _gbuffer->FrameNo, i);
-                dir = simd::normalize(hit.Normal + SampleDirection(bn));  // lambertian
-            }
-            // Write out entire tile at once in hopes for better write-combining or whatever
-            *tile++ = {
-                .Albedo = albedo,
-                .Depth = depth,
-                .IrradianceRG = swr::pixfmt::RG16f::Pack({ irradiance.x, irradiance.y }),
-                .IrradianceBX = swr::pixfmt::RG16f::Pack({ irradiance.z }),
-            };
-        }
+        RenderRow(fc, tile, y);
     });
 
     _frameTime.End();
 
     // Present
     _gbuffer->SetUniforms(*_blitShader);
-    _blitShader->SetUniform("ssbo_FrameData", *_pbo);
+    _blitShader->SetUniform("ssbo_FrameData", pbo);
 
     uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
     _blitShader->DispatchCompute(groupsX, groupsY, 1);
@@ -445,17 +474,21 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 }
 void CpuRenderer::DrawSettings(glim::SettingStore& settings) {
     ImGui::SeparatorText("Renderer##CPU");
-    settings.Checkbox("Path Trace", &_enablePathTracer);
+    ImGui::PushItemWidth(150);
+    settings.Combo("Debug Channel", &_gbuffer->DebugChannelView);
+    settings.Slider("Light Bounces", &_numLightBounces, 1, 0u, 5u);
+    settings.Slider("Denoiser Passes", &_gbuffer->NumDenoiserPasses, 1, 0u, 5u);
+    ImGui::PopItemWidth();
 
     ImGui::Separator();
     _frameTime.Draw("Frame Time");
 
-    if (_gbuffer->CurrentTex != nullptr) {
+    if (_gbuffer->AlbedoTex != nullptr) {
         double frameMs, frameDevMs;
         _frameTime.GetElapsedMs(frameMs, frameDevMs);
 
-        uint32_t numPixels = _gbuffer->CurrentTex->Width * _gbuffer->CurrentTex->Height;
-        uint32_t raysPerPixel = _enablePathTracer ? 3 : 1;
+        uint32_t numPixels = _gbuffer->AlbedoTex->Width * _gbuffer->AlbedoTex->Height;
+        uint32_t raysPerPixel = _numLightBounces + 1;
         double raysPerSec = numPixels * raysPerPixel * (1000 / frameMs);
 
         ImGui::Text("Rays/sec: %.2fM", raysPerSec / 1000000.0);

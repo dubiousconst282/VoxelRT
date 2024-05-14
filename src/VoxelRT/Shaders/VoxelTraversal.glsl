@@ -159,7 +159,7 @@ struct HitInfo {
     uint iters;
 };
 
-bool rayTrace(vec3 origin, vec3 dir, out HitInfo hit) {
+bool rayCast(vec3 origin, vec3 dir, out HitInfo hit) {
     vec3 invDir = 1.0 / dir;
     vec3 tStart = (step(0.0, dir) - origin) * invDir;
 
@@ -203,7 +203,7 @@ bool rayTrace(vec3 origin, vec3 dir, out HitInfo hit) {
     return false;
 }
 
-bool rayTraceCoarse(vec3 origin, vec3 dir, out HitInfo hit) {
+bool rayCastCoarse(vec3 origin, vec3 dir, out HitInfo hit) {
     origin = clipRayToAABB(origin, dir, -u_WorldOrigin+1, vec3(GRID_SIZE_XZ, GRID_SIZE_Y,GRID_SIZE_XZ)-u_WorldOrigin-1);
     
     vec3 invDir = 1.0 / dir;

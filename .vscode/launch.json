@@ -10,7 +10,8 @@
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "console": "internalConsole",
-            "visualizerFile": "${workspaceFolder}/src/DebugDisplay.natvis"
+            "visualizerFile": "${workspaceFolder}/src/DebugDisplay.natvis",
+            "environment": [ { "name": "GALLIUM_DRIVER","value": "llvmpipe" }]
         }
     ]
 }

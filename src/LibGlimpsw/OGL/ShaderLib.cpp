@@ -65,7 +65,7 @@ static std::unique_ptr<std::istream> OpenFileStream(const std::filesystem::path&
     }
     return stream;
 }
-static std::string GetRelativePath(const std::filesystem::path& basePath, std::string_view filename) {
+static std::string GetRelativePath(const std::filesystem::path& basePath, const std::filesystem::path& filename) {
     auto baseDir = basePath.parent_path();
     return std::filesystem::relative(baseDir / filename, baseDir).string();
 }
@@ -88,8 +88,8 @@ void ShaderLib::ReadSource(std::string& source, std::string_view filename, std::
             if (pathStart == std::string::npos || pathEnd == std::string::npos) {
                 throw std::runtime_error("Malformed include directive");
             }
-
-            auto includeName = GetRelativePath(BasePath / filename, std::string_view(&line[pathStart + 1], &line[pathEnd]));
+            auto currBase = std::filesystem::path(filename).parent_path();
+            auto includeName = GetRelativePath(BasePath / filename, currBase / std::string_view(&line[pathStart + 1], &line[pathEnd]));
 
             if (includedFiles.insert(includeName).second) {
                 ReadSource(source, includeName, includedFiles);
