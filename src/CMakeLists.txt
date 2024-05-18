@@ -13,7 +13,6 @@ set(CMAKE_CXX_STANDARD 20)
 
 #set(CMAKE_FIND_DEBUG_MODE ON)
 find_package(imgui CONFIG REQUIRED)
-find_package(imguizmo CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
@@ -21,7 +20,16 @@ find_package(glm CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(magic_enum CONFIG REQUIRED)
 
-add_compile_options("-march=native" "-ffast-math" "-Wno-unused" "-Wsign-conversion")
+
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+	message(FATAL_ERROR "Build requires Clang or GCC")
+endif()
+
+if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC") # clang-cl
+	add_compile_options("/clang:-march=native" "/clang:-ffast-math" "-Wno-unused" "-Wsign-conversion")
+else()
+	add_compile_options("-march=native" "-ffast-math" "-Wno-unused" "-Wsign-conversion")
+endif()
 
 add_subdirectory("LibGlimpsw/")
 add_subdirectory("VoxelRT/")

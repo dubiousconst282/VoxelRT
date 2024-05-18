@@ -452,8 +452,8 @@ struct Texture2D {
 
     // Writes a 4x4 tile of packed texels to the texture buffer. Coords are in pixel space.
     void WriteTile(VInt packed, uint32_t x, uint32_t y, uint32_t layer = 0, uint32_t mipLevel = 0) {
-        assert(x + 3 < Width && y + 3 < Height);
-        assert(x % 4 == 0 && y % simd::TileHeight == 0);
+        assert(x + simd::TileWidth <= Width && y + simd::TileHeight <= Height);
+        assert(x % simd::TileWidth == 0 && y % simd::TileHeight == 0);
         assert(layer < NumLayers && mipLevel < MipLevels);
         
         uint32_t* dst = &Data[(layer << LayerShift) + (uint32_t)_mipOffsets[mipLevel]];

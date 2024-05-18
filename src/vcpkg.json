@@ -3,7 +3,6 @@
     "dependencies": [
         { "name": "imgui", "features": [ "opengl3-binding", "glfw-binding" ] },
         { "name": "glad", "features": [ "gl-api-45" ] },
-        "imguizmo",
         "glfw3",
         "stb",
         "assimp",
