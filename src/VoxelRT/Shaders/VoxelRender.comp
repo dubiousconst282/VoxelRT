@@ -48,13 +48,14 @@ void main() {
 
         if (u_MaxBounces == 0) irradiance = albedo;
 
-        vec3 sunDir = normalize(vec3(0.3,0.9,-0.28));
+        const vec3 sunDir = normalize(vec3(0.3,0.9,-0.28));
+        const float sunIntensity = 5;
     
         HitInfo sunHit;
         if (!rayCastCoarse(hit.pos + hit.normal*0.01, sunDir, sunHit)) {
-            irradiance += vec3(1.2,1.1,1.0)*10;
+            irradiance += vec3(1.2,1.1,1.0)*sunIntensity;
         } else {
-            throughput *= 0.6;
+            throughput *= 0.5;
         }
         
         for (int i = 0; i < u_MaxBounces; i++) {
@@ -76,8 +77,8 @@ void main() {
             float emission = getMaterialEmission(hit.mat);
             
             if (i < 2 && !rayCastCoarse(hit.pos + hit.normal*0.01, sunDir, sunHit)) {
-                throughput *= vec3(1.2,1.1,1.0);
-                emission += 10;
+                throughput *= vec3(1.2,1.1,1.0)*sunIntensity;
+                emission += sunIntensity;
             }
             irradiance += throughput * emission;
         }

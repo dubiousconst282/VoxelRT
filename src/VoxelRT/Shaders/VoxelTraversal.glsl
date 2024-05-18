@@ -215,7 +215,7 @@ bool rayCastCoarse(vec3 origin, vec3 dir, out HitInfo hit) {
         float tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001;
         vec3 currPos = origin + tmin * dir;
         
-        bool coarse = distance(floor(currPos), origin) > 50;
+        bool coarse = i > 30; // distance(floor(currPos), origin) > 50;
         voxelPos = u_WorldOrigin + ivec3(floor(currPos));
         
         if (!isInBounds(voxelPos)) {

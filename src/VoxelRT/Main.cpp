@@ -83,12 +83,8 @@ public:
     void Render(uint32_t vpWidth, uint32_t vpHeight) {
         ImGui::ShowMetricsWindow();
 
+        _cam.Update();
         DrawBrushParams();
-
-        if (!ApplyBrush()) {
-            _brush.Reset();
-            _cam.Update();
-        }
 
         while (true) {
             auto [sectorPos, sector] = _terrainGen->Poll();
@@ -141,6 +137,19 @@ public:
             DrawPaletteEditor(_brush.Pars.Material.Data);
         }
         ImGui::End();
+
+        static Voxel quickAccessPalette[4] = { 0, 255, 0, 0 };
+
+        for (uint32_t i = 0; i < 4; i++) {
+            if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_1 + i))) {
+                _brush.Pars.Material = quickAccessPalette[i];
+                break;
+            }
+        }
+
+        if (!ApplyBrush()) {
+            _brush.Reset();
+        }
     }
 
     void DrawPaletteEditor(uint8_t& selectedIdx) {
@@ -155,6 +164,7 @@ public:
             ImGui::DragFloat("Emission", &material.Emission, 0.1f, 0.0f, 1000.0f);
             ImGui::DragScalar("Fuzziness", ImGuiDataType_U8, &material.MetalFuzziness);
         }
+
         int32_t cellSize = 32;
         int32_t numCols = std::max(ImGui::GetContentRegionAvail().x, 100.0f) / (cellSize + 1);
         int32_t numRows = (256 + numCols - 1) / numCols;
@@ -236,6 +246,11 @@ public:
             HitResult hit = _map->RayCast(_cam.ViewPosition, dir);
             Voxel newMat = hit.IsMiss() ? Voxel::CreateEmpty() : _map->Get(hit.VoxelPos);
 
+            if (newMat.Data > 36 && newMat.Data < 52)newMat.Data = 36;
+            if (newMat.Data > 96 && newMat.Data < 112 ) newMat.Data = 96;
+            if (newMat.Data > 174 && newMat.Data < 194 ) newMat.Data = 174;
+
+
             if (!newMat.IsEmpty()) {
                 _brush.Pars.Material = newMat;
             }
@@ -277,6 +292,7 @@ int main(int argc, char** args) {
 
     ogl::EnableDebugCallback();
     Application app;
+
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();

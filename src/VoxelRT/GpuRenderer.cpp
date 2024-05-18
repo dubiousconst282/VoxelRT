@@ -4,7 +4,7 @@
 #include "GBuffer.h"
 
 static constexpr auto SectorSize = MaskIndexer::Size * BrickIndexer::Size;
-static constexpr auto ViewSize = glm::uvec2(4096, 2048) / glm::uvec2(SectorSize);
+static constexpr auto ViewSize = glm::uvec2(4096, 2048) / glm::uvec2(SectorSize); // bigger views take longer to compile
 static constexpr uint32_t NumViewSectors = ViewSize.x * ViewSize.x * ViewSize.y;
 
 static const std::vector<ogl::ShaderLoadParams::PrepDef> DefaultShaderDefs = {
@@ -198,7 +198,8 @@ GpuRenderer::GpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
     _renderShader = shlib.LoadComp("VoxelRender", DefaultShaderDefs);
 
     _gbuffer = std::make_unique<GBuffer>(shlib);
-    
+    _gbuffer->NumDenoiserPasses = 0;
+
     _blueNoiseTex = ogl::Texture2D::Load("assets/bluenoise/stbn_vec2_2Dx1D_128x128x64_combined.png", 1, GL_RG8UI);
     _renderShader->SetUniform("u_STBlueNoiseTex", *_blueNoiseTex);
 
@@ -271,7 +272,7 @@ void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
         _frameTime.GetElapsedMs(frameMs, frameDevMs);
 
         uint32_t numPixels = _gbuffer->AlbedoTex->Width * _gbuffer->AlbedoTex->Height;
-        uint32_t raysPerPixel = _numLightBounces + 1;
+        uint32_t raysPerPixel = (_numLightBounces + 1) * 2; // sun
         double raysPerSec = numPixels * raysPerPixel * (1000 / frameMs);
 
         ImGui::Text("Rays/sec: %.2fM | Steps: %.3fM", raysPerSec / 1000000.0, *totalIters / 1000000.0);
