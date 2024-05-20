@@ -35,6 +35,7 @@ struct GpuVoxelStorage {
         uint32_t Count;
         glm::uvec3 BrickLocs[];
     };
+    GpuMeta* MappedStorage;
 
     GpuVoxelStorage(ogl::ShaderLib& shlib) {
         BuildOccupancyShader = shlib.LoadComp("UpdateOccupancy", DefaultShaderDefs);
@@ -83,8 +84,10 @@ struct GpuVoxelStorage {
         if (StorageBuffer == nullptr || StorageBuffer->Size < bufferSize) {
             bool isResizing = StorageBuffer != nullptr;
 
-            StorageBuffer = std::make_unique<ogl::Buffer>(bufferSize, GL_MAP_WRITE_BIT | GL_MAP_READ_BIT);
+            GLbitfield storageFlags =  GL_MAP_WRITE_BIT | GL_MAP_READ_BIT | GL_MAP_COHERENT_BIT | GL_MAP_PERSISTENT_BIT;
+            StorageBuffer = std::make_unique<ogl::Buffer>(bufferSize, storageFlags);
             OccupancyStorage = std::make_unique<ogl::Buffer>(maxBricksInBuffer * (BrickIndexer::MaxArea / 8), 0);
+            MappedStorage = StorageBuffer->Map<GpuMeta>(storageFlags).release();
 
             if (isResizing || maxSlotId < 1024) {
                 map.MarkAllDirty();
@@ -92,11 +95,9 @@ struct GpuVoxelStorage {
                 return;
             }
         }
-        auto mappedStorage = StorageBuffer->Map<GpuMeta>(GL_MAP_WRITE_BIT | GL_MAP_READ_BIT);
-
         // TODO: consider not updating palette every frame 
         for (uint32_t i = 0; i < 256; i++) {
-            mappedStorage->Palette[i] = map.Palette[i].GetEncoded();
+            MappedStorage->Palette[i] = map.Palette[i].GetEncoded();
         }
         
         if (updateBatch.empty()) return;
@@ -118,7 +119,7 @@ struct GpuVoxelStorage {
                     assert(slotIdx < maxBricksInBuffer);
 
                     Brick* brick = sector.GetBrick(brickIdx);
-                    mappedStorage->Bricks[slotIdx] = *brick;
+                    MappedStorage->Bricks[slotIdx] = *brick;
 
                     glm::uvec3 brickPos = sectorPos * MaskIndexer::Size + MaskIndexer::GetPos(brickIdx);
                     updateLocs->BrickLocs[updateLocIdx++] = brickPos;
@@ -127,11 +128,11 @@ struct GpuVoxelStorage {
 
             // Also update sector metadata while we have it in hand.
             uint32_t viewSectorIdx = sectorAlloc - SlotAllocator.Sectors.get();
-            mappedStorage->AllocMasks[viewSectorIdx] = sectorAlloc->AllocMask;
-            mappedStorage->BaseSlots[viewSectorIdx] = sectorAlloc->BaseSlot - 1;
+            MappedStorage->AllocMasks[viewSectorIdx] = sectorAlloc->AllocMask;
+            MappedStorage->BaseSlots[viewSectorIdx] = sectorAlloc->BaseSlot - 1;
 
             // Sector-level occupancy mask
-            uint64_t& sectorOccMask = mappedStorage->SectorOccupancy[GetLinearIndex(sectorPos / 4, ViewSize.x / 4, ViewSize.y / 4)];
+            uint64_t& sectorOccMask = MappedStorage->SectorOccupancy[GetLinearIndex(sectorPos / 4, ViewSize.x / 4, ViewSize.y / 4)];
             uint32_t sectorOccIdx = GetLinearIndex(sectorPos, 4, 4);
             if (sectorAlloc->AllocMask != 0) {
                 sectorOccMask |= (1ull << sectorOccIdx);

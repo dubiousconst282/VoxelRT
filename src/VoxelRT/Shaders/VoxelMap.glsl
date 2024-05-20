@@ -11,7 +11,7 @@ const uint NULL_OFFSET = ~0u;
 struct Material {
     uvec2 Data;
 };
-buffer ssbo_VoxelData {
+layout(std430) buffer ssbo_VoxelData {
     Material Palette[256];
     uint BaseSlots[NUM_SECTORS];
     uvec2 BrickMasks[NUM_SECTORS];
@@ -19,7 +19,7 @@ buffer ssbo_VoxelData {
     uint BrickData[];
 } b_VoxelData;
 
-buffer ssbo_VoxelOccupancy {
+layout(std430) buffer ssbo_VoxelOccupancy {
     uvec2 Data[];
 } b_VoxelOccupancy;
 

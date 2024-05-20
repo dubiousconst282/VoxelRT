@@ -28,6 +28,7 @@ endif()
 if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC") # clang-cl
 	add_compile_options("/clang:-march=native" "/clang:-ffast-math" "-Wno-unused" "-Wsign-conversion")
 else()
+	# add_compile_options("-mavx2" "-mfma" "-mf16c" "-ffast-math" "-Wno-unused" "-Wsign-conversion")
 	add_compile_options("-march=native" "-ffast-math" "-Wno-unused" "-Wsign-conversion")
 endif()
 

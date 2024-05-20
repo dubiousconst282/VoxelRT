@@ -23,7 +23,9 @@ void main() {
 
     vec3 color = albedo * irradiance;
 
-    color = aces_approx(pow(color, vec3(0.7)));
+    color *= 0.48;
+    color = aces_approx(color);
+    color = pow(color, vec3(0.45));
 
     if (u_DebugChannel == 1) {
         color = albedo;

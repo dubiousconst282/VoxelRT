@@ -70,6 +70,10 @@ static swr::StbImage LoadImage(Model& m, std::string_view name) {
 static swr::RgbaTexture2D* LoadTextures(Model& m, const aiMaterial* mat) {
     std::string name = GetTextureName(mat, aiTextureType_BASE_COLOR);
 
+    if (name.empty()) {
+        name = GetTextureName(mat, aiTextureType_DIFFUSE);
+    }
+
     auto cached = m.Textures.find(name);
 
     if (cached != m.Textures.end()) {
