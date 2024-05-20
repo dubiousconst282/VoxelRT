@@ -138,12 +138,14 @@ public:
         }
         ImGui::End();
 
-        static Voxel quickAccessPalette[4] = { 0, 255, 0, 0 };
+        static Voxel quickAccessPalette[2] = { 0, 255 };
 
-        for (uint32_t i = 0; i < 4; i++) {
-            if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_1 + i))) {
-                _brush.Pars.Material = quickAccessPalette[i];
-                break;
+        if (!ImGui::GetIO().WantCaptureKeyboard) {
+            for (uint32_t i = 0; i < std::size(quickAccessPalette); i++) {
+                if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_1 + i))) {
+                    _brush.Pars.Material = quickAccessPalette[i];
+                    break;
+                }
             }
         }
 
@@ -246,11 +248,6 @@ public:
             HitResult hit = _map->RayCast(_cam.ViewPosition, dir);
             Voxel newMat = hit.IsMiss() ? Voxel::CreateEmpty() : _map->Get(hit.VoxelPos);
 
-            if (newMat.Data > 36 && newMat.Data < 52)newMat.Data = 36;
-            if (newMat.Data > 96 && newMat.Data < 112 ) newMat.Data = 96;
-            if (newMat.Data > 174 && newMat.Data < 194 ) newMat.Data = 174;
-
-
             if (!newMat.IsEmpty()) {
                 _brush.Pars.Material = newMat;
             }
@@ -292,7 +289,6 @@ int main(int argc, char** args) {
 
     ogl::EnableDebugCallback();
     Application app;
-
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
