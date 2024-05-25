@@ -5,6 +5,10 @@ set(VCPKG_BUILD_TYPE "release")
 set(CMAKE_BINARY_DIR "${CMAKE_CURRENT_LIST_DIR}/../build")
 set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
 
+if(CMAKE_HOST_LINUX)
+    set(VCPKG_TARGET_TRIPLET "x64-linux-dynamic") # static link takes way too long
+endif()
+
 project("VoxelRT")
 
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})

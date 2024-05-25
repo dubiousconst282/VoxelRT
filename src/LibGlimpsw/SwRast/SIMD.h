@@ -249,8 +249,8 @@ class BitIter {
 
 public:
     BitIter(T mask) : _mask(mask) {}
-    
-    BitIter(__m256i mask) : _mask(_mm256_movemask_ps(_mm256_castps_si256(mask))) {}
+
+    BitIter(__m256i mask) : _mask(_mm256_movemask_ps(_mm256_castsi256_ps(mask))) {}
     BitIter(__m256 mask) : _mask(_mm256_movemask_ps(mask)) {}
 
     BitIter& operator++() {

@@ -38,12 +38,12 @@ uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) 
 #include <mutex>
 #include <condition_variable>
 
+#if 0
 #include <format>
 #include <iostream>
 
 template<class... ArgTypes>
 static void Log(const std::format_string<ArgTypes...> fmt, ArgTypes&&... args) {
-#if 0
     auto opaqueTid = std::this_thread::get_id();
     uint32_t tid = *(uint32_t*)&opaqueTid;
 
@@ -53,8 +53,10 @@ static void Log(const std::format_string<ArgTypes...> fmt, ArgTypes&&... args) {
 
     std::cout << text;
     std::cout.flush();
-#endif
 }
+#else
+static void Log(const char* fmt, ...) { }
+#endif
 
 struct TerrainGenerator::RequestQueue {
     std::mutex Mutex;

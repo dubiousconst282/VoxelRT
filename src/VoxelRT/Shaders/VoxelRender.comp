@@ -52,12 +52,14 @@ void main() {
         const float sunIntensity = 5;
     
         HitInfo sunHit;
-        if (!rayCastCoarse(hit.pos + hit.normal*0.01, sunDir, sunHit)) {
-            irradiance += vec3(1.2,1.1,1.0)*sunIntensity;
-        } else {
-            throughput *= 0.5;
+        if (u_MaxBounces != 0) {
+            if (!rayCastCoarse(hit.pos + hit.normal*0.01, sunDir, sunHit)) {
+                irradiance += vec3(1.2,1.1,1.0)*sunIntensity;
+            } else {
+                throughput *= 0.5;
+            }
         }
-        
+
         for (int i = 0; i < u_MaxBounces; i++) {
             rayPos = hit.pos + hit.normal * 0.01;
 

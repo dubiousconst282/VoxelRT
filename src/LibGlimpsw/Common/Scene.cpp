@@ -1,6 +1,7 @@
 #include <unordered_map>
 #include <filesystem>
 #include <stdexcept>
+#include <cfloat>
 
 #include <assimp/scene.h>
 #include <assimp/Importer.hpp>

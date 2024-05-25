@@ -35,7 +35,8 @@ struct GpuVoxelStorage {
         uint32_t Count;
         glm::uvec3 BrickLocs[];
     };
-    GpuMeta* MappedStorage;
+    GpuMeta* MappedStorage; // Write only!
+    uint64_t SectorOccupancy[NumViewSectors / 64] = {};  // Occupancy masks at sector level (host copy)
 
     GpuVoxelStorage(ogl::ShaderLib& shlib) {
         BuildOccupancyShader = shlib.LoadComp("UpdateOccupancy", DefaultShaderDefs);
@@ -84,10 +85,10 @@ struct GpuVoxelStorage {
         if (StorageBuffer == nullptr || StorageBuffer->Size < bufferSize) {
             bool isResizing = StorageBuffer != nullptr;
 
-            GLbitfield storageFlags =  GL_MAP_WRITE_BIT | GL_MAP_READ_BIT | GL_MAP_COHERENT_BIT | GL_MAP_PERSISTENT_BIT;
+            GLbitfield storageFlags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT;
             StorageBuffer = std::make_unique<ogl::Buffer>(bufferSize, storageFlags);
             OccupancyStorage = std::make_unique<ogl::Buffer>(maxBricksInBuffer * (BrickIndexer::MaxArea / 8), 0);
-            MappedStorage = StorageBuffer->Map<GpuMeta>(storageFlags).release();
+            MappedStorage = StorageBuffer->Map<GpuMeta>(storageFlags | GL_MAP_FLUSH_EXPLICIT_BIT).release();
 
             if (isResizing || maxSlotId < 1024) {
                 map.MarkAllDirty();
@@ -99,8 +100,11 @@ struct GpuVoxelStorage {
         for (uint32_t i = 0; i < 256; i++) {
             MappedStorage->Palette[i] = map.Palette[i].GetEncoded();
         }
-        
-        if (updateBatch.empty()) return;
+
+        if (updateBatch.empty()) {
+            StorageBuffer->FlushMappedRange(offsetof(GpuMeta, Palette), sizeof(GpuMeta::Palette));
+            return;
+        }
 
         // Upload brick data
         auto updateBuffer = ogl::Buffer(dirtyBricksInBatch * sizeof(glm::uvec3) + sizeof(UpdateRequest), GL_MAP_WRITE_BIT);
@@ -111,6 +115,7 @@ struct GpuVoxelStorage {
             glm::ivec3 sectorPos = WorldSectorIndexer::GetPos(sectorIdx);
             auto sectorAlloc = SlotAllocator.GetSector(sectorPos);
 
+            // Write bricks to GPU storage
             if (dirtyMask != 0) {
                 Sector& sector = map.Sectors[sectorIdx];
 
@@ -126,20 +131,32 @@ struct GpuVoxelStorage {
                 }
             }
 
-            // Also update sector metadata while we have it in hand.
-            uint32_t viewSectorIdx = sectorAlloc - SlotAllocator.Sectors.get();
-            MappedStorage->AllocMasks[viewSectorIdx] = sectorAlloc->AllocMask;
-            MappedStorage->BaseSlots[viewSectorIdx] = sectorAlloc->BaseSlot - 1;
-
             // Sector-level occupancy mask
-            uint64_t& sectorOccMask = MappedStorage->SectorOccupancy[GetLinearIndex(sectorPos / 4, ViewSize.x / 4, ViewSize.y / 4)];
+            uint32_t sectorMaskIdx = GetLinearIndex(sectorPos / 4, ViewSize.x / 4, ViewSize.y / 4);
+            uint64_t& sectorOccMask = SectorOccupancy[sectorMaskIdx];
             uint32_t sectorOccIdx = GetLinearIndex(sectorPos, 4, 4);
+
             if (sectorAlloc->AllocMask != 0) {
                 sectorOccMask |= (1ull << sectorOccIdx);
             } else {
                 sectorOccMask &= ~(1ull << sectorOccIdx);
             }
+
+            // Write headers to GPU storage
+            uint32_t viewSectorIdx = sectorAlloc - SlotAllocator.Sectors.get();
+            MappedStorage->AllocMasks[viewSectorIdx] = sectorAlloc->AllocMask;
+            MappedStorage->BaseSlots[viewSectorIdx] = sectorAlloc->BaseSlot - 1;
+            MappedStorage->SectorOccupancy[sectorMaskIdx] = sectorOccMask;
         }
+
+        // Flushing while buffer is in use by the GPU is technically UB, but oh well.
+        // 
+        // It could also be super slow to flush the entire buffer on some drivers, but for now
+        // I don't care much since it will only happen after world edits.
+        // 
+        // Coherent mappings are probably not any better since not many dGPUs seem to offer
+        // device_local memory that is also coherent (at least from the perspective of Vulkan).
+        StorageBuffer->FlushMappedRange(0, StorageBuffer->Size);
 
         updateLocs->Count = updateLocIdx;
         updateLocs.reset();
