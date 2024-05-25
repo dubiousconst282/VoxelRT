@@ -9,7 +9,7 @@
   - Useful for sparse storage allocation and space skipping LODs
   - Provides up to 3 LODs with a single 64-bit access
 
-## Introductory fluff
+## Motivation
 A natural approach for rendering voxels on a GPU is by rasterizing meshes that represent the voxel geometry. It's a proven method that works reasonably well and is very flexible, but can be relatively complicated to scale up - from my outsider view, this would probably involve stuff like minimizing draw calls, compressing vertices, multi-threading the mesher because it's slow af, occlusion culling, and probably getting cursed by greedy meshing at some point...
 
 Ray tracing isn't without its problems and difficulties of course, but arguably a lot simpler to get working - simply mem-copy voxel data as is to a GPU buffer and start casting rays through it in a shader. Even without any acceleration structures, it can be surprisingly fast, as demonstrated by these remarkable shadertoys:
