@@ -2,6 +2,48 @@
 
 #include <FastNoise/FastNoise.h>
 
+// https://www.shadertoy.com/view/4tVcWR
+// https://www.shadertoy.com/view/tdGGWV
+static void TreeSDF(VFloat3 p, VInt& materialId) {
+    // Tangent vectors for the branch local coordinate system.
+    VFloat3 w = simd::normalize(VFloat3(-.8 + 0 * .01, 1.2, -1.));
+    VFloat3 u = simd::normalize(simd::cross(w, VFloat3(0, 1, 0)));
+    VFloat3 v = simd::normalize(simd::cross(u, w));
+
+    float ti = 8.0;
+    int j = int(glm::min(glm::floor(ti - 1.0), 7.0));
+
+    float scale = glm::min(0.3 + ti / 6.0, 1.0);
+    p /= scale;
+
+    VFloat barkDist = 10000.0;
+    float s = 1., ss = 1.6;
+
+    // Evaluate the tree branches, which are just space-folded cylinders.
+    for (int i = 0; i <= j; i++) {
+        barkDist = simd::min(barkDist, scale * simd::max(p.y - 1.0, simd::max(-p.y, simd::approx_sqrt(p.x * p.x + p.z * p.z) - 0.1 / (p.y + 0.7))) / s);
+
+        p.x = simd::abs(p.x);
+        p.z = simd::abs(p.z);
+        p.y -= 1.0;
+
+        // Rotate in to the local space of a branch.
+        p = VFloat3(p.x * u.x + p.y * u.y + p.z * u.z,  //
+                    p.x * v.x + p.y * v.y + p.z * v.z,  //
+                    p.x * w.x + p.y * w.y + p.z * w.z);
+        // p *= mat3(u, simd::normalize(simd::cross(u, w)), w);
+
+        p *= ss;
+        s *= ss;
+    }
+
+    VFloat leafDist = simd::max(0.0f, simd::length(p) - 0.4) / s;
+    VFloat dist = simd::min(barkDist, leafDist);
+
+    materialId.set_if(dist < 1.0/128, simd::csel(leafDist < barkDist, 245, 241));
+    // return min(d, col = max(0., length(p) - 0.25) / s);
+}
+
 uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) {
     static auto noiseGen = FastNoise::NewFromEncodedNodeTree("EQACAAAAAAAgQBAAAAAAQBkAEwDD9Sg/DQAEAAAAAAAgQAkAAGZmJj8AAAAAPwEEAAAAAAAAAEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM3MTD4AMzMzPwAAAAA/");
     //static auto noiseGen = FastNoise::NewFromEncodedNodeTree("EQACAAAAAAAgQBAAAAAAQBkADQAEAAAAAAAgQAkAAGZmJj8AAAAAPwEEAAAAAABmZuY/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgD4ApHA9PwAAAAA/");
@@ -22,7 +64,10 @@ uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) 
             VInt grassId = 245 + (simd::trunc2i(noise * 1234.5678) & 3); // 4 random grass variants. no, it doesn't look good.
             p.VoxelIds = simd::csel(fillMask, grassId, 0);
 
-            isNonEmpty |= simd::any(fillMask);
+            VFloat3 treePos = VFloat3(simd::conv2f(p.X - 256), simd::conv2f(p.Y - 112), simd::conv2f(p.Z - 256)) * (1/64.0) + 0.5;
+            TreeSDF(treePos, p.VoxelIds);
+
+            isNonEmpty |= simd::any(p.VoxelIds != 0);
             return true;
         }, brickPos);
 

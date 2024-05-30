@@ -49,6 +49,7 @@ public:
             _map->Serialize("logs/voxels_2k_sponza.dat");
         }
 
+        _map->Palette[241] = { .Color = { 0xA7, 0x51, 0x23 } };
         _map->Palette[245] = { .Color = { 70, 150, 64 } };
         _map->Palette[246] = { .Color = { 110, 150, 64 } };
         _map->Palette[247] = { .Color = { 138, 160, 72 } };
