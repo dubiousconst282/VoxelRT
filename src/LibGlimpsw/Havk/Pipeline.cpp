@@ -34,10 +34,11 @@ PipelineBuilder::~PipelineBuilder() {
     ((slang::IGlobalSession*)_slangSession)->Release();
 }
 
-GraphicsPipelinePtr PipelineBuilder::CreateGraphics(const std::string& shaderFilename, const GraphicsPipelineDesc& desc) {
-    ShaderCompileResult shader = Compile(shaderFilename, {});
+GraphicsPipelinePtr PipelineBuilder::CreateGraphics(const std::string& shaderFilename, const GraphicsPipelineDesc& desc,
+                                                    const ShaderCompileParams& compilePars) {
+    ShaderCompileResult shader = Compile(shaderFilename, compilePars);
     if (!shader.InfoLog.empty()) {
-        Context->Log(LogLevel::Debug, "Compile log for shader '%s':\n'%s'", shaderFilename.data(), shader.InfoLog.data());
+        Context->Log(shader.Success ? LogLevel::Debug : LogLevel::Error, "Compile log for shader '%s':\n'%s'", shaderFilename.data(), shader.InfoLog.data());
     }
     auto pipe = Resource::make<GraphicsPipeline>(Context);
 
@@ -135,8 +136,8 @@ GraphicsPipelinePtr PipelineBuilder::CreateGraphics(const std::string& shaderFil
     return pipe;
 }
 
-ComputePipelinePtr PipelineBuilder::CreateCompute(const std::string& shaderFilename, const ShaderPrepDefs& prepDefs) {
-    ShaderCompileResult shader = Compile(shaderFilename, prepDefs);
+ComputePipelinePtr PipelineBuilder::CreateCompute(const std::string& shaderFilename, const ShaderCompileParams& compilePars) {
+    ShaderCompileResult shader = Compile(shaderFilename, compilePars);
     if (!shader.InfoLog.empty()) {
         Context->Log(shader.Success ? LogLevel::Debug : LogLevel::Error, "Compile log for shader '%s':\n'%s'", shaderFilename.data(), shader.InfoLog.data());
     }
@@ -177,21 +178,22 @@ static VkShaderStageFlagBits GetVkStage(SlangStage stage);
 static VkDescriptorType GetDescriptorType(SlangTypeKind kind);
 static void ParseConstSampler(slang::UserAttribute* attr, VkSamplerCreateInfo* info);
 
-ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const ShaderPrepDefs& prepDefs) {
+ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const ShaderCompileParams& pars) {
+    Context->Log(LogLevel::Debug, "Begin compile shader '%s'", filename.data());
     ShaderCompileResult result(Context->Device);
     result.Filename = filename;
 
     auto globalSession = (slang::IGlobalSession*)_slangSession;
 
     std::vector<slang::CompilerOptionEntry> opts;
-    //opts.push_back({ slang::CompilerOptionName::DebugInformation, { .intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL } });
-    //opts.push_back({ slang::CompilerOptionName::Capability, { .intValue0 =  globalSession->findCapability("spirv_1_6") } });
+    opts.push_back({ slang::CompilerOptionName::DebugInformation, { .intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL } });
+    opts.push_back({ slang::CompilerOptionName::Capability, { .intValue0 =  globalSession->findCapability("spirv_1_6") } });
 
     std::string basePath = BasePath.string();
     const char* searchPaths[] = { basePath.data() };
 
     std::vector<slang::PreprocessorMacroDesc> prepMacros;
-    for (auto& def : prepDefs) {
+    for (auto& def : pars.PrepDefs) {
         prepMacros.push_back({ .name = def.first.data(), .value = def.second.data() });
     }
 

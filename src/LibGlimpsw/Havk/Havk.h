@@ -444,7 +444,11 @@ struct ShaderCompileResult {
 };
 
 struct GraphicsPipelineDesc;
-using ShaderPrepDefs = std::vector<std::pair<std::string, std::string>>;
+
+struct ShaderCompileParams {
+    std::vector<std::pair<std::string, std::string>> PrepDefs; // Pre-processor definitions
+    std::string LinkSource; // TODO: Source code of a module used for link-time specialization
+};
 
 struct FileWatcher {
     HAVK_NON_COPYABLE(FileWatcher);
@@ -469,10 +473,10 @@ struct PipelineBuilder {
     PipelineBuilder(DeviceContext* ctx, const std::filesystem::path& basePath, bool enableHotReload);
     ~PipelineBuilder();
 
-    GraphicsPipelinePtr CreateGraphics(const std::string& shaderFilename, const GraphicsPipelineDesc& desc);
-    ComputePipelinePtr CreateCompute(const std::string& shaderFilename, const ShaderPrepDefs& prepDefs = {});
+    GraphicsPipelinePtr CreateGraphics(const std::string& shaderFilename, const GraphicsPipelineDesc& desc, const ShaderCompileParams& compilePars = {});
+    ComputePipelinePtr CreateCompute(const std::string& shaderFilename, const ShaderCompileParams& compilePars = {});
 
-    ShaderCompileResult Compile(std::string_view filename, const ShaderPrepDefs& prepDefs);
+    ShaderCompileResult Compile(std::string_view filename, const ShaderCompileParams& compilePars = {});
 
 private:
     friend DeviceContext;
@@ -480,7 +484,7 @@ private:
     struct PipelineSourceInfo {
         std::unordered_set<std::string> IncludedFiles;
         std::string Filename;
-        ShaderPrepDefs PrepDefs;
+        ShaderCompileParams CompilePars;
     };
 
     std::unique_ptr<FileWatcher> _watcher;

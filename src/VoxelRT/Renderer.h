@@ -31,7 +31,7 @@ protected:
     glim::TimeStat _frameTime;
 };
 
-struct GpuVoxelStorage;
+struct GpuVoxelStorageManager;
 struct FlatVoxelStorage;
 
 struct GpuRenderer : public Renderer {
@@ -42,15 +42,11 @@ struct GpuRenderer : public Renderer {
     virtual void DrawSettings(glim::SettingStore& settings);
 
 private:
-    std::unique_ptr<GpuVoxelStorage> _storage;
+    std::unique_ptr<GpuVoxelStorageManager> _storage;
 
-    /* std::shared_ptr<ogl::Shader> _renderShader;
-     std::unique_ptr<ogl::Texture2D> _blueNoiseTex;
-     std::unique_ptr<ogl::TextureCube> _skyTex;
-     std::unique_ptr<ogl::Buffer> _rayCellInteractionMaskLUT;
- 
-    bool _useAnisotropicLods;
-*/
+    havk::ComputePipelinePtr _renderShader;
+    havk::ImagePtr _blueNoiseTex;
+    havk::ImagePtr _skyboxTex;
 };
 struct CpuRenderer : public Renderer {
     CpuRenderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);

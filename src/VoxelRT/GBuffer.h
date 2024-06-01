@@ -40,6 +40,8 @@ struct GBuffer {
     DebugChannel DebugChannelView = DebugChannel::None;
     uint32_t NumDenoiserPasses = 5;
 
+    glm::uvec2 RenderSize = {};
+
     GBuffer(havk::DeviceContext* ctx) {
         Context = ctx;
 
@@ -57,14 +59,16 @@ struct GBuffer {
         });
     }
 
-    void SetCamera(glim::Camera& cam, glm::uvec2 viewSize, bool resetHistory) {
-        if (AlbedoTex == nullptr || AlbedoTex->Desc.Width != viewSize.x || AlbedoTex->Desc.Height != viewSize.y) {
+    void SetCamera(glim::Camera& cam, glm::uvec2 renderSize, bool resetHistory) {
+        if (AlbedoTex == nullptr || RenderSize != renderSize) {
+            RenderSize = renderSize;
+
             const auto CreateImage = [&](VkFormat format) {
                 return Context->CreateImage({
                     .Format = format,
                     .Usage = VK_IMAGE_USAGE_STORAGE_BIT,
-                    .Width = viewSize.x,
-                    .Height = viewSize.y,
+                    .Width = renderSize.x,
+                    .Height = renderSize.y,
                     .NumLevels = 1,
                 });
             };
@@ -124,8 +128,8 @@ struct GBuffer {
     }
 
     void Resolve(havk::Image* target, havk::CommandList& cmds) {
-        uint32_t groupsX = (AlbedoTex->Desc.Width + 7) / 8;
-        uint32_t groupsY = (AlbedoTex->Desc.Height + 7) / 8;
+        uint32_t groupsX = (RenderSize.x + 7) / 8;
+        uint32_t groupsY = (RenderSize.y + 7) / 8;
 /*
         if (DebugChannelView != DebugChannel::TraversalIters) {
             SetUniforms(*ReprojShader);
