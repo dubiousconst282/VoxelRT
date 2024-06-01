@@ -8,11 +8,9 @@
 
 #include "Renderer.h"
 
-#include "GBuffer.h"
-
 // Cannot be > 2048*512*2048 because memory index is signed 32-bits
 using ViewSectorIndexer =
-    LinearIndexer3D<11 - MaskIndexer::ShiftXZ - BrickIndexer::ShiftXZ,
+    LinearIndexer3D<10 - MaskIndexer::ShiftXZ - BrickIndexer::ShiftXZ,
                     9 - MaskIndexer::ShiftY - BrickIndexer::ShiftY, false>;
 
 using BrickMaskIndexer = LinearIndexer3D<BrickIndexer::ShiftXZ - 2, BrickIndexer::ShiftY - 2, false>;
@@ -401,18 +399,20 @@ static void RenderRow(const FrameConstants& fc, Framebuffer::Tile* dest, uint32_
     }
 }
 
-CpuRenderer::CpuRenderer(ogl::ShaderLib& shlib, std::shared_ptr<VoxelMap> map) {
+CpuRenderer::CpuRenderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
+    _ctx = ctx;
     _map = std::move(map);
     _storage = std::make_unique<FlatVoxelStorage>();
-    _gbuffer = std::make_unique<GBuffer>(shlib);
+    _gbuffer = std::make_unique<GBuffer>(ctx);
 
-    _blitShader = shlib.LoadComp("CopyTiledFramebuffer");
+    _blitShader = ctx->PipeBuilder->CreateCompute("ResolveCpuFramebuffer.slang");
     _map->MarkAllDirty();
 }
 
 CpuRenderer::~CpuRenderer() = default;
 
-void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
+void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds) {
+    glm::uvec2 viewSize = glm::uvec2(target->Desc.Width, target->Desc.Height);
 #ifndef NDEBUG  // debug builds are slow af
     viewSize /= 4;
 #endif
@@ -426,13 +426,14 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
     uint32_t tilesY = viewSize.y / simd::TileHeight;
     size_t fbSize = (tilesX * tilesY * sizeof(Framebuffer::Tile)) + sizeof(Framebuffer);
 
-    // Buffer orphaning is way faster than keeping a single one.
-    auto pbo = ogl::Buffer(fbSize, GL_DYNAMIC_STORAGE_BIT | GL_MAP_WRITE_BIT);
+    // Buffer orphaning to avoid having to deal with sync issues
+    auto pbo = _ctx->CreateBuffer({
+        .Size = fbSize,
+        .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+    });
 
-    // Writing to memory mapping is ~1ms slower than local buffer at 1080p,
-    // but temp buffer + BufferSubData() is even slower... though probably faster for dGPUs?
-    // auto fb = (Framebuffer*)_fbData.get();
-    auto fb = pbo.Map<Framebuffer>(GL_MAP_WRITE_BIT);
+    auto fb = (Framebuffer*)pbo->MappedData;
     fb->Width = viewSize.x;
     fb->Height = viewSize.y;
     fb->TileStride = viewSize.x / simd::TileWidth;
@@ -460,17 +461,21 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, glm::uvec2 viewSize) {
 
         RenderRow(fc, tile, y);
     });
+    pbo->Flush();
 
     _frameTime.End();
 
-    // Present
-    _gbuffer->SetUniforms(*_blitShader);
-    _blitShader->SetUniform("ssbo_FrameData", pbo);
+    struct BlitConstants {
+        VkDeviceAddress FrameConsts;
+        VkDeviceAddress FrameData;
+    };
+    BlitConstants pc = { .FrameConsts = _gbuffer->UniformBuffer->DeviceAddress, .FrameData = pbo->DeviceAddress };
 
     uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
-    _blitShader->DispatchCompute(groupsX, groupsY, 1);
+    _blitShader->Dispatch(cmds, {  groupsX, groupsY, 1 }, pc);
+    cmds.MarkUse(pbo);
 
-    _gbuffer->DenoiseAndPresent();
+    _gbuffer->Resolve(target, cmds);
 }
 void CpuRenderer::DrawSettings(glim::SettingStore& settings) {
     ImGui::SeparatorText("Renderer##CPU");
@@ -487,7 +492,7 @@ void CpuRenderer::DrawSettings(glim::SettingStore& settings) {
         double frameMs, frameDevMs;
         _frameTime.GetElapsedMs(frameMs, frameDevMs);
 
-        uint32_t numPixels = _gbuffer->AlbedoTex->Width * _gbuffer->AlbedoTex->Height;
+        uint32_t numPixels = _gbuffer->AlbedoTex->Desc.Width * _gbuffer->AlbedoTex->Desc.Height;
         uint32_t raysPerPixel = _numLightBounces + 1;
         double raysPerSec = numPixels * raysPerPixel * (1000 / frameMs);
 

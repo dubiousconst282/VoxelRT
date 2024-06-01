@@ -1,19 +1,37 @@
 #pragma once
 
-#include <OGL/QuickGL.h>
-#include <OGL/ShaderLib.h>
+#include <Havk/Havk.h>
 #include <Common/Camera.h>
+#include <vulkan/vulkan_core.h>
+
+struct GBufferUniforms {
+    havk::ImageHandle AlbedoTex, PrevAlbedoTex;
+    havk::ImageHandle IrradianceTex, PrevIrradianceTex;
+    havk::ImageHandle DepthTex, PrevDepthTex;
+    havk::ImageHandle MomentsTex, PrevMomentsTex;
+    havk::ImageHandle HistoryLenTex;
+
+    glm::mat4 ProjMat, InvProjMat;
+    glm::mat4 HistoryProjMat, HistoryInvProjMat;
+    glm::vec3 OriginFrac, HistoryOriginFrac;
+    glm::vec3 OriginDelta;
+    uint32_t FrameNo;
+};
 
 struct GBuffer {
     enum class DebugChannel { None, Albedo, Irradiance, Normals, TraversalIters, Variance };
 
-    std::shared_ptr<ogl::Shader> ReprojShader, FilterShader, PresentShader;
+    havk::DeviceContext* Context;
+    havk::ComputePipelinePtr ReprojShader, FilterShader;
+    havk::GraphicsPipelinePtr PresentShader;
 
-    std::unique_ptr<ogl::Texture2D> AlbedoTex, PrevAlbedoTex;
-    std::unique_ptr<ogl::Texture2D> IrradianceTex, PrevIrradianceTex, TempIrradianceTex;
-    std::unique_ptr<ogl::Texture2D> DepthTex, PrevDepthTex;
-    std::unique_ptr<ogl::Texture2D> MomentsTex, PrevMomentsTex;
-    std::unique_ptr<ogl::Texture2D> HistoryLenTex;
+    havk::ImagePtr AlbedoTex, PrevAlbedoTex;
+    havk::ImagePtr IrradianceTex, PrevIrradianceTex, TempIrradianceTex;
+    havk::ImagePtr DepthTex, PrevDepthTex;
+    havk::ImagePtr MomentsTex, PrevMomentsTex;
+    havk::ImagePtr HistoryLenTex;
+
+    havk::BufferPtr UniformBuffer;
 
     glm::mat4 CurrentProj, HistoryProj;
     glm::dvec3 CurrentPos, HistoryPos;
@@ -22,28 +40,49 @@ struct GBuffer {
     DebugChannel DebugChannelView = DebugChannel::None;
     uint32_t NumDenoiserPasses = 5;
 
-    GBuffer(ogl::ShaderLib& shlib) {
-        ReprojShader = shlib.LoadComp("Denoise/Reproject");
-        FilterShader = shlib.LoadComp("Denoise/Filter");
-        PresentShader = shlib.LoadFrag("GBufferBlit");
+    GBuffer(havk::DeviceContext* ctx) {
+        Context = ctx;
+
+        //ReprojShader = ctx->PipeBuilder->CreateCompute("Denoise/Reproject.slang");
+        // FilterShader = ctx->PipeBuilder->CreateCompute("Denoise/Filter.slang");
+        PresentShader = ctx->PipeBuilder->CreateGraphics("GBufferBlit.slang", {
+            .EnableDepthTest = false,
+            .EnableDepthWrite = false,
+            .OutputFormats = { ctx->Swapchain->SurfaceFormat.format },
+        });
+        UniformBuffer = ctx->CreateBuffer({
+            .Size = sizeof(GBufferUniforms),
+            .Usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+        });
     }
 
-    void SetCamera(glim::Camera& cam, glm::ivec2 viewSize, bool resetHistory) {
-        if (AlbedoTex == nullptr || AlbedoTex->Width != viewSize.x || AlbedoTex->Height != viewSize.y) {
-            AlbedoTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA8);
-            PrevAlbedoTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA8);
+    void SetCamera(glim::Camera& cam, glm::uvec2 viewSize, bool resetHistory) {
+        if (AlbedoTex == nullptr || AlbedoTex->Desc.Width != viewSize.x || AlbedoTex->Desc.Height != viewSize.y) {
+            const auto CreateImage = [&](VkFormat format) {
+                return Context->CreateImage({
+                    .Format = format,
+                    .Usage = VK_IMAGE_USAGE_STORAGE_BIT,
+                    .Width = viewSize.x,
+                    .Height = viewSize.y,
+                    .NumLevels = 1,
+                });
+            };
 
-            IrradianceTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA16F);
-            PrevIrradianceTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA16F);
-            TempIrradianceTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RGBA16F);
+            AlbedoTex = CreateImage(VK_FORMAT_R8G8B8A8_UNORM);
+            PrevAlbedoTex = CreateImage(VK_FORMAT_R8G8B8A8_UNORM);
 
-            DepthTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_R32F);
-            PrevDepthTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_R32F);
+            IrradianceTex = CreateImage(VK_FORMAT_R16G16B16A16_SFLOAT);
+            PrevIrradianceTex = CreateImage(VK_FORMAT_R16G16B16A16_SFLOAT);
+            TempIrradianceTex = CreateImage(VK_FORMAT_R16G16B16A16_SFLOAT);
 
-            MomentsTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RG16F);
-            PrevMomentsTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_RG16F);
+            DepthTex = CreateImage(VK_FORMAT_R32_SFLOAT);
+            PrevDepthTex = CreateImage(VK_FORMAT_R32_SFLOAT);
 
-            HistoryLenTex = std::make_unique<ogl::Texture2D>(viewSize.x, viewSize.y, 1, GL_R8UI);
+            MomentsTex = CreateImage(VK_FORMAT_R16G16_SFLOAT);
+            PrevMomentsTex = CreateImage(VK_FORMAT_R16G16_SFLOAT);
+
+            HistoryLenTex = CreateImage(VK_FORMAT_R8_UINT);
         }
         HistoryPos = CurrentPos;
         HistoryProj = CurrentProj;
@@ -56,37 +95,38 @@ struct GBuffer {
         std::swap(MomentsTex, PrevMomentsTex);
         FrameNo++;
 
-        ReprojShader->SetUniform("u_ForceResetHistory", resetHistory);
-    }
-    void SetUniforms(ogl::Shader& shader) {
-        shader.SetUniform("u_AlbedoNormalTex", *AlbedoTex);
-        shader.SetUniform("u_IrradianceTex", *IrradianceTex);
-        shader.SetUniform("u_DepthTex", *DepthTex);
-        shader.SetUniform("u_MomentsTex", *MomentsTex);
-
-        shader.SetUniform("u_PrevAlbedoNormalTex", *PrevAlbedoTex);
-        shader.SetUniform("u_PrevIrradianceTex", *PrevIrradianceTex);
-        shader.SetUniform("u_PrevDepthTex", *PrevDepthTex);
-        shader.SetUniform("u_PrevMomentsTex", *PrevMomentsTex);
-
-        shader.SetUniform("u_HistoryLenTex", *HistoryLenTex);
-
-        glm::ivec2 viewSize = glm::ivec2(AlbedoTex->Width, AlbedoTex->Height);
-        shader.SetUniform("u_ProjMat", CurrentProj);
-        shader.SetUniform("u_InvProjMat", GetInverseProjScreenMat(CurrentProj, viewSize));
-        shader.SetUniform("u_HistoryProjMat", HistoryProj);
-        shader.SetUniform("u_HistoryInvProjMat", GetInverseProjScreenMat(HistoryProj, viewSize));
-        shader.SetUniform("u_OriginFrac", glm::vec3(glm::fract(CurrentPos)));
-        shader.SetUniform("u_HistoryOriginFrac", glm::vec3(glm::fract(HistoryPos)));
-        shader.SetUniform("u_OriginDelta", glm::vec3(CurrentPos - HistoryPos));
-        shader.SetUniform("u_FrameNo", (int)FrameNo);
-        shader.SetUniform("u_DebugChannel", (int)DebugChannelView);
+        // ReprojShader->SetUniform("u_ForceResetHistory", resetHistory);
+        WriteUniforms(*(GBufferUniforms*)UniformBuffer->MappedData);
+        UniformBuffer->Flush();
     }
 
-    void DenoiseAndPresent() {
-        uint32_t groupsX = (AlbedoTex->Width + 7) / 8;
-        uint32_t groupsY = (AlbedoTex->Height + 7) / 8;
+    void WriteUniforms(GBufferUniforms& dest) {
+        dest.AlbedoTex = AlbedoTex->DescriptorHandle;
+        dest.IrradianceTex = IrradianceTex->DescriptorHandle;
+        dest.DepthTex = DepthTex->DescriptorHandle;
+        dest.MomentsTex = MomentsTex->DescriptorHandle;
+        dest.HistoryLenTex = HistoryLenTex->DescriptorHandle;
 
+        dest.PrevAlbedoTex = PrevAlbedoTex->DescriptorHandle;
+        dest.PrevIrradianceTex = PrevIrradianceTex->DescriptorHandle;
+        dest.PrevDepthTex = PrevDepthTex->DescriptorHandle;
+        dest.PrevMomentsTex = PrevMomentsTex->DescriptorHandle;
+
+        glm::ivec2 viewSize = glm::ivec2(AlbedoTex->Desc.Width, AlbedoTex->Desc.Height);
+        dest.ProjMat = CurrentProj;
+        dest.InvProjMat = GetInverseProjScreenMat(CurrentProj, viewSize);
+        dest.HistoryProjMat = HistoryProj;
+        dest.HistoryInvProjMat = GetInverseProjScreenMat(HistoryProj, viewSize);
+        dest.OriginFrac = glm::vec3(glm::fract(CurrentPos));
+        dest.HistoryOriginFrac = glm::vec3(glm::fract(HistoryPos));
+        dest.OriginDelta = glm::vec3(CurrentPos - HistoryPos);
+        dest.FrameNo = FrameNo;
+    }
+
+    void Resolve(havk::Image* target, havk::CommandList& cmds) {
+        uint32_t groupsX = (AlbedoTex->Desc.Width + 7) / 8;
+        uint32_t groupsY = (AlbedoTex->Desc.Height + 7) / 8;
+/*
         if (DebugChannelView != DebugChannel::TraversalIters) {
             SetUniforms(*ReprojShader);
             ReprojShader->DispatchCompute(groupsX, groupsY, 1);
@@ -118,11 +158,22 @@ struct GBuffer {
                     std::swap(TempIrradianceTex, IrradianceTex);
                 }
             }
-        }
+        }*/
 
         // Blit to screen
-        SetUniforms(*PresentShader);
-        PresentShader->DispatchFullscreen();
+        struct PresentConstants {
+            VkDeviceAddress GBuffer;
+            DebugChannel Channel;
+        };
+
+        cmds.BeginRendering({ .Attachments = { { .Target = target, .LoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE } } });
+        cmds.SetViewport({ 0, 0, (float)target->Desc.Width, (float)target->Desc.Height, 0, +1 });
+        cmds.SetScissor({ { 0, 0 }, { target->Desc.Width, target->Desc.Height } });
+
+        PresentConstants pc = {.GBuffer = UniformBuffer->DeviceAddress, .Channel = DebugChannelView };
+        PresentShader->Draw(cmds, { .NumVertices = 3 }, pc);
+
+        cmds.EndRendering();
 
         if (NumDenoiserPasses == 0) {
             std::swap(PrevIrradianceTex, IrradianceTex);

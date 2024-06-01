@@ -1,14 +1,11 @@
 #include <iostream>
 
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
+#include <Havk/Havk.h>
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
-#include <imgui_impl_opengl3.h>
-
-#include <SwRast/Texture.h>
+#include <imgui_impl_vulkan.h>
 
 #include "Renderer.h"
 #include "TerrainGenerator.h"
@@ -20,18 +17,15 @@ class Application {
 
     std::shared_ptr<VoxelMap> _map;
 
-    std::unique_ptr<ogl::ShaderLib> _shaderLib;
+    havk::DeviceContext* _ctx;
     std::unique_ptr<Renderer> _renderer;
     std::unique_ptr<TerrainGenerator> _terrainGen;
 
     BrushSession _brush;
 
 public:
-    Application() {
-        ogl::EnableDebugCallback();
-
-        _shaderLib = std::make_unique<ogl::ShaderLib>("src/VoxelRT/Shaders/", true);
-
+    Application(havk::DeviceContext* ctx) {
+        _ctx = ctx;
         _map = std::make_shared<VoxelMap>();
 
         try {
@@ -81,7 +75,7 @@ public:
         _settings.Load("logs/voxelrt_settings.dat", true);
     }
 
-    void Render(uint32_t vpWidth, uint32_t vpHeight) {
+    void Render(havk::Image* target, havk::CommandList& cmds) {
         ImGui::ShowMetricsWindow();
 
         _cam.Update();
@@ -108,9 +102,9 @@ public:
         static bool useCpuRenderer = false;
         if (_settings.Checkbox("Use CPU Renderer", &useCpuRenderer) || _renderer == nullptr) {
             if (useCpuRenderer) {
-                _renderer = std::make_unique<CpuRenderer>(*_shaderLib, _map);
+                _renderer = std::make_unique<CpuRenderer>(_ctx, _map);
             } else {
-                _renderer = std::make_unique<GpuRenderer>(*_shaderLib, _map);
+                _renderer = std::make_unique<GpuRenderer>(_ctx, _map);
             }
         }
 
@@ -125,9 +119,7 @@ public:
         _settings.Drag("FOV", &_cam.FieldOfView, 1, 10.0f, 120.0f, 0.5f, "%.1f deg");
         ImGui::End();
 
-        _renderer->RenderFrame(_cam, glm::uvec2(vpWidth, vpHeight));
-
-        _shaderLib->Refresh();
+        _renderer->RenderFrame(_cam, target, cmds);
     }
 
     void DrawBrushParams() {
@@ -257,24 +249,62 @@ public:
     }
 };
 
+void InitImGui(havk::DeviceContext* ctx, GLFWwindow* window, VkDescriptorPool& descPool) {
+    ImGui_ImplGlfw_InitForVulkan(window, true);
+
+    VkDescriptorPoolSize descPoolSize = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 };
+    VkDescriptorPoolCreateInfo descPoolCI = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = &descPoolSize,
+    };
+    vkCreateDescriptorPool(ctx->Device, &descPoolCI, nullptr, &descPool);
+
+    ctx->Swapchain->Initialize();
+
+    ImGui_ImplVulkan_InitInfo vkInfo = {
+        .Instance = ctx->Instance,
+        .PhysicalDevice = ctx->PhysicalDeviceInfo.Handle,
+        .Device = ctx->Device,
+        .QueueFamily = ctx->PhysicalDeviceInfo.MainQueueIdx,
+        .Queue = ctx->MainQueue,
+        .DescriptorPool = descPool,
+        .MinImageCount = std::max(2u, ctx->Swapchain->SurfaceCaps.minImageCount),
+        .ImageCount = ctx->Swapchain->GetImageCount(),
+        .MSAASamples = VK_SAMPLE_COUNT_1_BIT,
+
+        .PipelineCache = ctx->PipeBuilder->Cache,
+        .UseDynamicRendering = true,
+        .PipelineRenderingCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &ctx->Swapchain->SurfaceFormat.format,
+        },
+    };
+    ImGui_ImplVulkan_Init(&vkInfo);
+}
+
 int main(int argc, char** args) {
     if (!glfwInit()) return -1;
 
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
-    glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, 1);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "VoxelRT", NULL, NULL);
-    //GLFWwindow* window = glfwCreateWindow(960, 540, "VoxelRT", NULL, NULL);
+
     if (!window) {
         glfwTerminate();
         return -1;
     }
 
-    glfwMakeContextCurrent(window);
-    glfwSwapInterval(1); // Enable vsync
-
-    gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+    havk::DeviceContextPtr ctx = havk::Create({
+        .Window = window,
+        .ShaderBasePath = "src/VoxelRT/Shaders/",
+        .EnableShaderHotReload = true,
+        .EnableDebugLayers = true,
+    });
+    std::cout << "Device: " << ctx->PhysicalDeviceInfo.Props.deviceName << std::endl;
 
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -285,50 +315,52 @@ int main(int argc, char** args) {
 
     ImGui::StyleColorsDark();
 
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init();
+    {
+        VkDescriptorPool igDescPool;
+        InitImGui(ctx.get(), window, igDescPool);
 
-    ogl::EnableDebugCallback();
-    Application app;
+        Application app(ctx.get());
 
-    while (!glfwWindowShouldClose(window)) {
-        glfwPollEvents();
+        while (!glfwWindowShouldClose(window)) {
+            glfwPollEvents();
 
-        // Start the Dear ImGui frame
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
+            int display_w, display_h;
+            glfwGetFramebufferSize(window, &display_w, &display_h);
 
-        if (ImGui::IsKeyPressed(ImGuiKey_F11)) {
-            static int winRect[4];
-            GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-
-            if (!glfwGetWindowMonitor(window)) {
-                glfwGetWindowPos(window, &winRect[0], &winRect[1]);
-                glfwGetWindowSize(window, &winRect[2], &winRect[3]);
-
-                const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-                glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, 0);
-            } else {
-                glfwSetWindowMonitor(window, nullptr, winRect[0], winRect[1], winRect[2], winRect[3], 0);
+            if (display_w == 0 || display_h == 0) {
+                glfwWaitEvents();
+                continue;
             }
-            glfwSwapInterval(1);
+
+            auto [image, cmdList] = ctx->Swapchain->AcquireImage();
+
+            // Start the Dear ImGui frame
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+
+            // Rendering
+            app.Render(image, cmdList);
+
+            ImGui::Render();
+
+            cmdList.BeginRendering({ .Attachments = { { .Target = image, .LoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE } } });
+            cmdList.SetViewport({ 0, 0, (float)image->Desc.Width, (float)image->Desc.Height, 0, +1 });
+            cmdList.SetScissor({ { 0, 0 }, { image->Desc.Width, image->Desc.Height } });
+            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmdList.Buffer);
+            cmdList.EndRendering();
+
+            // Present
+            ctx->Swapchain->Present();
+            ctx->Tick();
         }
-
-        int display_w, display_h;
-        glfwGetFramebufferSize(window, &display_w, &display_h);
-        glViewport(0, 0, display_w, display_h);
-        glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        app.Render((uint32_t)display_w, (uint32_t)display_h);
-
-        // Rendering
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-        glfwSwapBuffers(window);
+        ctx->WaitDeviceIdle();
+        ImGui_ImplVulkan_Shutdown();
+        vkDestroyDescriptorPool(ctx->Device, igDescPool, nullptr);
     }
+
+    ctx.reset();
     glfwTerminate();
+
     return 0;
 }

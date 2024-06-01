@@ -1,12 +1,13 @@
 {
     "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
     "dependencies": [
-        { "name": "imgui", "features": [ "opengl3-binding", "glfw-binding" ] },
-        { "name": "glad", "features": [ "gl-api-45" ] },
+        { "name": "imgui", "features": [ "vulkan-binding", "glfw-binding" ] },
+        "vulkan-memory-allocator",
+        "shader-slang",
         "glfw3",
+        "glm",
         "stb",
         "assimp",
-        "glm",
         "zstd",
         "magic-enum"
     ]

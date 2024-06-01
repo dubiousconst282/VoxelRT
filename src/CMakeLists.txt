@@ -15,16 +15,6 @@ set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 set(CMAKE_CXX_STANDARD 20)
 
-#set(CMAKE_FIND_DEBUG_MODE ON)
-find_package(imgui CONFIG REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
-find_package(glad CONFIG REQUIRED)
-find_package(assimp CONFIG REQUIRED)
-find_package(glm CONFIG REQUIRED)
-find_package(zstd CONFIG REQUIRED)
-find_package(magic_enum CONFIG REQUIRED)
-
-
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 	message(FATAL_ERROR "Build requires Clang or GCC")
 endif()

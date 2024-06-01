@@ -11,6 +11,18 @@
             "cwd": "${workspaceFolder}",
             "console": "internalConsole",
             "visualizerFile": "${workspaceFolder}/src/DebugDisplay.natvis"
-        }
+        },
+        {
+            "name": "(lldb) Launch",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [],
+            "env": {
+                "INTEL_DEBUG": "cs"
+            },
+            "cwd": "${workspaceFolder}",
+            "console": "internalConsole",
+        },
     ]
 }

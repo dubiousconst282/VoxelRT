@@ -19,10 +19,6 @@ add_executable(
 )
 
 target_link_libraries(VoxelRT PRIVATE
-    imgui::imgui
-    glfw
-    glad::glad
-    glm::glm
     glimpsw
     FastNoise
 )
