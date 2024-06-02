@@ -20,7 +20,8 @@ struct DispatchParams {
 void ComputeMain(uint2 pos: SV_DispatchThreadID) {
     float3 rayDir, rayPos;
     GetPrimaryRay(pos, rayPos, rayDir);
-    
+    rayDir.y *= -1;
+
     float3 albedo, irradiance, normal;
     float depth = -1.0;
 
@@ -29,6 +30,10 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
         albedo = hit.Material.Color;
         normal = hit.Normal;
         irradiance = float3(1.0);
+    } else {
+        albedo = float3(0, 0, 1);
+        irradiance = float3(1.0);
+        depth = -1.0;
     }
 
     // let blueNoise = BlueNoise(pc.StbnTexture.Instance, pc.GBuffer->FrameNo);

@@ -167,9 +167,10 @@ struct GpuVoxelStorageManager {
             .Map = {
                 .Storage = StorageBuffer->DeviceAddress,
                 .VoxelOccupancy = OccupancyStorage->DeviceAddress
-            }
+            },
         };
-        BuildOccupancyShader->Dispatch(cmds, { (updateLocIdx + 63) / 64 }, updatePars);
+        cmds.MarkUse(updateBuffer);
+        BuildOccupancyShader->Dispatch(cmds, { (updateLocIdx + 63) / 64, 1, 1 }, updatePars);
     }
 
     void ShiftView(glm::dvec3 cameraPos) {
@@ -273,6 +274,7 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
     };
     uint32_t groupsX = (renderSize.x + 7) / 8, groupsY = (renderSize.y + 7) / 8;
     _renderShader->Dispatch(cmds, { groupsX, groupsY, 1 }, renderPars);
+    cmds.MarkUse(_storage->StorageBuffer, _storage->OccupancyStorage, _gbuffer->UniformBuffer);
 
     _gbuffer->Resolve(target, cmds);
 }

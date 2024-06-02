@@ -44,9 +44,9 @@ public struct VoxelMap {
     }
 
     public uint64_t GetVoxelMask(uint3 pos) {
-        uint slotIdx = GetBrickDataSlot(pos / 8).value;
+        uint brickSlot = GetBrickDataSlot(pos / 8).value;
         uint cellOffset = GetLinearIndex(pos / 4, BRICK_SIZE / 4, BRICK_SIZE / 4);
-        return VoxelOccupancy[slotIdx * OCC_STRIDE + cellOffset];
+        return VoxelOccupancy[brickSlot * OCC_STRIDE + cellOffset];
     }
     public uint64_t GetBrickMask(uint3 sectorPos) {
         return Storage->BrickMasks[GetLinearIndex(sectorPos, NUM_SECTORS_XZ, NUM_SECTORS_Y)];
@@ -56,16 +56,16 @@ public struct VoxelMap {
     }
 
     public Material GetVoxelMaterial(uint3 pos) {
-        Optional<uint> slotIdx = GetBrickDataSlot(pos / 8);
-        if (!slotIdx.hasValue) {
+        Optional<uint> brickSlot = GetBrickDataSlot(pos / 8);
+        if (!brickSlot.hasValue) {
             return Material();
         }
-        return Storage->Palette[GetBrickVoxelId(slotIdx.value, pos)];
+        return Storage->Palette[GetBrickVoxelId(brickSlot.value, pos)];
     }
 };
 
 // Count number of set bits in range [0..width]
-public static uint PopCntVar64(uint64_t mask, uint width) {
+public uint PopCntVar64(uint64_t mask, uint width) {
     uint himask = uint(mask);
     uint count = 0;
 
@@ -80,12 +80,12 @@ public static uint PopCntVar64(uint64_t mask, uint width) {
 }
 
 // Returns linear index for 3D grid in XZY order. Sizes **must** be power of two.
-public static uint GetLinearIndex(uint3 pos, uint sizeXZ, uint sizeY) {
+public uint GetLinearIndex(uint3 pos, uint sizeXZ, uint sizeY) {
     return (pos.x & (sizeXZ - 1)) +
            (pos.z & (sizeXZ - 1)) * sizeXZ +
            (pos.y & (sizeY - 1)) * (sizeXZ * sizeXZ);
 }
-public static uint3 GetPosFromLinearIndex(uint idx, uint sizeXZ, uint sizeY) {
+public uint3 GetPosFromLinearIndex(uint idx, uint sizeXZ, uint sizeY) {
     uint3 pos;
     pos.x = idx % sizeXZ;
     pos.z = (idx / sizeXZ) % sizeXZ;

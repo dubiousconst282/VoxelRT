@@ -51,5 +51,6 @@ target_link_libraries(glimpsw PUBLIC
 target_compile_definitions(glimpsw PUBLIC
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     GLM_FORCE_LEFT_HANDED
+    GLM_FORCE_XYZW_ONLY
 )
 target_include_directories(glimpsw PRIVATE ${Stb_INCLUDE_DIR})

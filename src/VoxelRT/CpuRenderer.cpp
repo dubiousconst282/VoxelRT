@@ -222,12 +222,9 @@ static VHitResult RayCast(const FlatVoxelStorage& map, VFloat3 origin, VFloat3 d
 }
 
 static void GetPrimaryRay(VFloat2 uv, const glm::mat4& invProjMat, VFloat3& rayPos, VFloat3& rayDir) {
-    VFloat4 nearPos = TransformVector(invProjMat, { uv.x, uv.y, 0, 1 });
-    VFloat4 farPos = nearPos + VFloat4(invProjMat[2]);
-    rayPos = VFloat3(nearPos) * (1.0f / nearPos.w);
-    rayDir = VFloat3(farPos) * (1.0f / farPos.w);
-
-    rayDir = normalize(rayDir);
+    VFloat4 farPos = TransformVector(invProjMat, { uv.x, uv.y, 1, 1 });
+    rayPos = VFloat3(0.0);
+    rayDir = normalize(VFloat3(farPos) * (1.0f / farPos.w));
 }
 
 struct alignas(64) VBlueNoise {
@@ -473,7 +470,7 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
 
     uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
     _blitShader->Dispatch(cmds, {  groupsX, groupsY, 1 }, pc);
-    cmds.MarkUse(pbo);
+    cmds.MarkUse(pbo, _gbuffer->UniformBuffer);
 
     _gbuffer->Resolve(target, cmds);
 }

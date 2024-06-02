@@ -93,7 +93,7 @@ bool GetStepPos(VoxelMap map, inout int3 ipos, float3 dir, bool coarse) {
     //     occMask &= RayCellInteractionMaskLUT[maskIdx + dirOctant * 64];
     // }
 
-    int lod = GetIsotropicLod(occMask, maskIdx) * scale;
+    int lod = GetIsotropicLOD(occMask, maskIdx) * scale;
 
     if (coarse && lod < 4) {
         ipos = FindAnyOccupiedPos(ipos, occMask);
@@ -103,13 +103,13 @@ bool GetStepPos(VoxelMap map, inout int3 ipos, float3 dir, bool coarse) {
     return true;
 }
 
-int GetIsotropicLod(uint64_t mask, uint idx) {
+int GetIsotropicLOD(uint64_t mask, uint idx) {
     if (mask == 0) {
         return 4;
     }
     uint currMask = idx < 32 ? uint(mask) : uint(mask >> 32);
 
-    if ((currMask >> (idx & 0xAu) & 0x00330033u) == 0) {
+    if ((currMask >> (idx & 0b1010) & 0x00330033) == 0) {
         return 2;
     }
     return 1;

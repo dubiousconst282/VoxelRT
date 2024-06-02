@@ -208,6 +208,7 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
     slang::SessionDesc sessionDesc = {
         .targets = &targetDesc,
         .targetCount = 1,
+        .defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR,
         .searchPaths = searchPaths,
         .searchPathCount = 1,
         .preprocessorMacros = prepMacros.data(),

@@ -58,7 +58,7 @@ public:
         for (size_t y = 0; y < 7; y++) {
             for (size_t z = 0; z < 24; z++) {
                 for (size_t x = 0; x < 24; x++) {
-                    _terrainGen->RequestSector(glm::ivec3(x, y, z));
+                    //_terrainGen->RequestSector(glm::ivec3(x, y, z));
                 }
             }
         }
