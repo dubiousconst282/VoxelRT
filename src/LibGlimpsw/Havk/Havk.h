@@ -252,8 +252,6 @@ struct Image final : Resource {
 
     // Internal state tracking
     VkImageLayout CurrentLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-    VkAccessFlags CurrentAccess_ = VK_ACCESS_NONE;
-    VkPipelineStageFlags CurrentStage_ = VK_PIPELINE_STAGE_NONE;
 
     ~Image() override;
     void Release() override;
@@ -264,6 +262,12 @@ struct Image final : Resource {
 
     // Wraps existing VkImage and view. Will take ownership of VkImageView but not of the actual image.
     static ImagePtr WrapSwapchainImage(DeviceContext* ctx, VkImage handle, VkImageView viewHandle, ImageDesc desc);
+
+    static ImagePtr LoadFile(DeviceContext* ctx, std::string_view path, VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+                             VkFormat format = VK_FORMAT_R8G8B8A8_SRGB, uint32_t mipLevels = VK_REMAINING_MIP_LEVELS,
+                             Future* uploadSync = nullptr);
+    static ImagePtr LoadFilePanoramaToCube(DeviceContext* ctx, std::string_view path, VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+                                           Future* uploadSync = nullptr);
 };
 
 struct Swapchain {
@@ -322,6 +326,20 @@ struct RenderingTarget {
     AttachmentInfo StencilAttachment;
 };
 
+struct UseBarrier {
+    VkAccessFlags Access = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    VkPipelineStageFlags Stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+
+    static const UseBarrier ReadOnly, All, ComputeRead, ComputeReadWrite, GraphicsRead, GraphicsReadWrite; 
+};
+constexpr UseBarrier
+    UseBarrier::ReadOnly = { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT },
+    UseBarrier::All = { VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT },
+    UseBarrier::ComputeRead = { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT },
+    UseBarrier::ComputeReadWrite = { VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT },
+    UseBarrier::GraphicsRead = { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT },
+    UseBarrier::GraphicsReadWrite = { VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT }; 
+
 // Wrapper for VkCommandBuffer. Lifetime is managed elsewhere.
 struct CommandList {
     HAVK_NON_COPYABLE(CommandList);
@@ -336,22 +354,30 @@ struct CommandList {
         Buffer = buffer;
     }
 
-    void BeginRendering(const RenderingTarget& targets);
+    void BeginRendering(const RenderingTarget& targets, bool setViewport = false);
     void EndRendering() { vkCmdEndRendering(Buffer); }
 
     void SetViewport(VkViewport vp) { vkCmdSetViewport(Buffer, 0, 1, &vp); }
     void SetScissor(VkRect2D rect) { vkCmdSetScissor(Buffer, 0, 1, &rect); }
 
-    // Keep resources alive during execution of commands in this list.
-    template<typename... Args>
-    void MarkUse(Args&... objs) {
-        for (Resource* res : { objs.get()... }) {
-            res->LastUseTimestamp = std::max(res->LastUseTimestamp, Context->NextQueueTimestamp);
-        }
-    }
+    void TransitionLayout(Image& image, VkImageLayout newLayout, VkPipelineStageFlags destStage,
+                          VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool discardContents = false);
 
-    void ImageBarrier(Image& image, VkImageLayout newLayout, VkAccessFlags newAccess, VkPipelineStageFlags newStage,
-                      VkImageAspectFlags aspect, bool discard = false);
+    void Barrier(VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
+                 VkAccessFlags srcAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                 VkAccessFlags dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+
+    // Barrier, layout transition, mark use.
+    ImageHandle GetDescriptorHandle(Image& image, UseBarrier barrier, VkImageLayout layout = VK_IMAGE_LAYOUT_MAX_ENUM);
+    VkDeviceAddress GetDeviceAddress(havk::Buffer& buffer, UseBarrier barrier);
+
+    void UpdateBuffer(havk::Buffer& buffer, VkDeviceSize destOffset, uint32_t dataSize, const void* data) {
+        GetDeviceAddress(buffer, { VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
+        vkCmdUpdateBuffer(Buffer, buffer.Handle, destOffset, dataSize, data);
+    }
+    void MarkUse(Resource& res) {
+        res.LastUseTimestamp = Context->NextQueueTimestamp;
+    }
 };
 
 struct PushConstantsPtr {

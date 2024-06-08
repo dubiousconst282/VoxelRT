@@ -41,6 +41,7 @@ struct GBuffer {
     uint32_t NumDenoiserPasses = 5;
 
     glm::uvec2 RenderSize = {};
+    float _renderScale = 1.0f;
 
     GBuffer(havk::DeviceContext* ctx) {
         Context = ctx;
@@ -54,12 +55,11 @@ struct GBuffer {
         });
         UniformBuffer = ctx->CreateBuffer({
             .Size = sizeof(GBufferUniforms),
-            .Usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+            .Usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
         });
     }
 
-    void SetCamera(glim::Camera& cam, glm::uvec2 renderSize, bool resetHistory) {
+    void SetCamera(havk::CommandList& cmds, glim::Camera& cam, glm::uvec2 renderSize, bool resetHistory) {
         if (AlbedoTex == nullptr || RenderSize != renderSize) {
             RenderSize = renderSize;
 
@@ -100,31 +100,34 @@ struct GBuffer {
         FrameNo++;
 
         // ReprojShader->SetUniform("u_ForceResetHistory", resetHistory);
-        WriteUniforms(*(GBufferUniforms*)UniformBuffer->MappedData);
-        UniformBuffer->Flush();
+        WriteUniforms(cmds, *UniformBuffer);
     }
 
-    void WriteUniforms(GBufferUniforms& dest) {
-        dest.AlbedoTex = AlbedoTex->DescriptorHandle;
-        dest.IrradianceTex = IrradianceTex->DescriptorHandle;
-        dest.DepthTex = DepthTex->DescriptorHandle;
-        dest.MomentsTex = MomentsTex->DescriptorHandle;
-        dest.HistoryLenTex = HistoryLenTex->DescriptorHandle;
+    void WriteUniforms(havk::CommandList& cmds, havk::Buffer& buffer) {
+        GBufferUniforms u;
 
-        dest.PrevAlbedoTex = PrevAlbedoTex->DescriptorHandle;
-        dest.PrevIrradianceTex = PrevIrradianceTex->DescriptorHandle;
-        dest.PrevDepthTex = PrevDepthTex->DescriptorHandle;
-        dest.PrevMomentsTex = PrevMomentsTex->DescriptorHandle;
+        u.AlbedoTex = AlbedoTex->DescriptorHandle;
+        u.IrradianceTex = IrradianceTex->DescriptorHandle;
+        u.DepthTex = DepthTex->DescriptorHandle;
+        u.MomentsTex = MomentsTex->DescriptorHandle;
+        u.HistoryLenTex = HistoryLenTex->DescriptorHandle;
+
+        u.PrevAlbedoTex = PrevAlbedoTex->DescriptorHandle;
+        u.PrevIrradianceTex = PrevIrradianceTex->DescriptorHandle;
+        u.PrevDepthTex = PrevDepthTex->DescriptorHandle;
+        u.PrevMomentsTex = PrevMomentsTex->DescriptorHandle;
 
         glm::ivec2 viewSize = glm::ivec2(AlbedoTex->Desc.Width, AlbedoTex->Desc.Height);
-        dest.ProjMat = CurrentProj;
-        dest.InvProjMat = GetInverseProjScreenMat(CurrentProj, viewSize);
-        dest.HistoryProjMat = HistoryProj;
-        dest.HistoryInvProjMat = GetInverseProjScreenMat(HistoryProj, viewSize);
-        dest.OriginFrac = glm::vec3(glm::fract(CurrentPos));
-        dest.HistoryOriginFrac = glm::vec3(glm::fract(HistoryPos));
-        dest.OriginDelta = glm::vec3(CurrentPos - HistoryPos);
-        dest.FrameNo = FrameNo;
+        u.ProjMat = CurrentProj;
+        u.InvProjMat = GetInverseProjScreenMat(CurrentProj, viewSize);
+        u.HistoryProjMat = HistoryProj;
+        u.HistoryInvProjMat = GetInverseProjScreenMat(HistoryProj, viewSize);
+        u.OriginFrac = glm::vec3(glm::fract(CurrentPos));
+        u.HistoryOriginFrac = glm::vec3(glm::fract(HistoryPos));
+        u.OriginDelta = glm::vec3(CurrentPos - HistoryPos);
+        u.FrameNo = FrameNo;
+
+        cmds.UpdateBuffer(buffer, 0, sizeof(GBufferUniforms), &u);
     }
 
     void Resolve(havk::Image* target, havk::CommandList& cmds) {
@@ -169,14 +172,14 @@ struct GBuffer {
             VkDeviceAddress GBuffer;
             DebugChannel Channel;
         };
+        PresentConstants pc = {
+            .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::GraphicsRead),
+            .Channel = DebugChannelView,
+        };
+        cmds.GetDescriptorHandle(*AlbedoTex, havk::UseBarrier::GraphicsRead);
 
-        cmds.BeginRendering({ .Attachments = { { .Target = target, .LoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE } } });
-        cmds.SetViewport({ 0, 0, (float)target->Desc.Width, (float)target->Desc.Height, 0, +1 });
-        cmds.SetScissor({ { 0, 0 }, { target->Desc.Width, target->Desc.Height } });
-
-        PresentConstants pc = {.GBuffer = UniformBuffer->DeviceAddress, .Channel = DebugChannelView };
+        cmds.BeginRendering({ .Attachments = { { .Target = target, .LoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE } } }, true);
         PresentShader->Draw(cmds, { .NumVertices = 3 }, pc);
-
         cmds.EndRendering();
 
         if (NumDenoiserPasses == 0) {

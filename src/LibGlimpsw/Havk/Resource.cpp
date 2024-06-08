@@ -62,6 +62,13 @@ void Buffer::Flush(uint64_t destOffset, uint64_t byteCount) {
     vmaFlushAllocation(Context->Allocator, Allocation, destOffset, byteCount);
 }
 
+static VkImageViewType GetViewType(VkImageType type, bool array) {
+    switch (type) {
+        case VK_IMAGE_TYPE_2D: return array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+        case VK_IMAGE_TYPE_3D: return VK_IMAGE_VIEW_TYPE_3D;
+        default: throw std::logic_error("Image type not supported");
+    }
+}
 static VkImageAspectFlags GetAspectMask(VkFormat format) {
     switch (format) {
         case VK_FORMAT_D16_UNORM:
@@ -107,7 +114,7 @@ ImagePtr DeviceContext::CreateImage(const ImageDesc& desc) {
     VkImageViewCreateInfo viewCI = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = image->Handle,
-        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .viewType = GetViewType(desc.Type, desc.NumLayers >= 2),
         .format = desc.Format,
         .subresourceRange = {
             .aspectMask = GetAspectMask(desc.Format),
@@ -135,8 +142,11 @@ Future Image::Upload(const void* data, size_t dataSize, VkRect2D destRect, VkIma
     stageBuffer->Write(data, 0, dataSize);
 
     return Context->Submit([&](CommandList cmd) {
-        cmd.ImageBarrier(*this, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                           layers.aspectMask);
+        bool discardContents = destRect.offset.x == 0 && destRect.offset.y == 0 &&
+                               destRect.extent.width == Desc.Width &&
+                               destRect.extent.height == Desc.Height;
+        cmd.TransitionLayout(*this, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, layers.aspectMask,
+                             discardContents);
 
         VkBufferImageCopy copyRegion = {
             .bufferOffset = 0,
@@ -145,12 +155,11 @@ Future Image::Upload(const void* data, size_t dataSize, VkRect2D destRect, VkIma
             .imageOffset = { destRect.offset.x, destRect.offset.y, 0 },
             .imageExtent = { destRect.extent.width, destRect.extent.height, 1 },
         };
-        cmd.MarkUse(stageBuffer);
+        cmd.MarkUse(*stageBuffer);
         vkCmdCopyBufferToImage(cmd.Buffer, stageBuffer->Handle, Handle, CurrentLayout_, 1, &copyRegion);
 
         auto naturalLayout = (Desc.Usage & VK_IMAGE_USAGE_STORAGE_BIT) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        cmd.ImageBarrier(*this, naturalLayout, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                           layers.aspectMask);
+        cmd.TransitionLayout(*this, naturalLayout, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, layers.aspectMask);
     });
 }
 
@@ -198,7 +207,10 @@ DescriptorHeap::DescriptorHeap(DeviceContext* ctx) {
     };
     VK_CHECK(vkCreateDescriptorPool(Context->Device, &poolCI, nullptr, &Pool));
 
-    const VkDescriptorBindingFlags flags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    const VkDescriptorBindingFlags flags =
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | 
+        VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+        VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsCI = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,

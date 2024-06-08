@@ -5,7 +5,7 @@ struct DispatchParams {
     uint3* BrickLocs;
     VoxelMap Map;
 };
-[vk::push_constant] ConstantBuffer<DispatchParams> pc;
+[vk::push_constant] DispatchParams pc;
 
 [numthreads(64)]
 void ComputeMain(uint idx: SV_DispatchThreadID) {

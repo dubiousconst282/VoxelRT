@@ -1,7 +1,8 @@
 #include "Renderer.h"
 #include "BrickSlotAllocator.h"
 
-// Keep in sync with VoxelMap.slang, or implement specialization constants
+// NOTE: keep in sync with VoxelMap.slang
+// TODO: implement this via specialization constants
 static constexpr auto SectorSize = MaskIndexer::Size * BrickIndexer::Size;
 static constexpr auto ViewSize = glm::uvec2(4096, 2048) / glm::uvec2(SectorSize);
 static constexpr uint32_t NumViewSectors = ViewSize.x * ViewSize.x * ViewSize.y;
@@ -85,8 +86,7 @@ struct GpuVoxelStorageManager {
             });
             OccupancyStorage = Device->CreateBuffer({
                 .Size = maxBricksInBuffer * (BrickIndexer::MaxArea / 8),
-                .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
             });
 
             if (isResizing || maxSlotId < 1024) {
@@ -106,15 +106,20 @@ struct GpuVoxelStorageManager {
             StorageBuffer->Flush(offsetof(GpuVoxelStorage, Palette), sizeof(GpuVoxelStorage::Palette));
             return;
         }
-
         // Upload brick data
-        auto updateBuffer = Device->CreateBuffer({
-            .Size = dirtyBricksInBatch * sizeof(glm::uvec3),
-            .Usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-        });
-        auto updateLocs = (glm::uvec3*)updateBuffer->MappedData;
+
+        havk::BufferPtr updateBuffer;
+        glm::uvec3* updateLocs = nullptr;
         uint32_t updateLocIdx = 0;
+
+        if (dirtyBricksInBatch != 0) {
+            updateBuffer = Device->CreateBuffer({
+                .Size = dirtyBricksInBatch * sizeof(glm::uvec3),
+                .Usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+            });
+            updateLocs = (glm::uvec3*)updateBuffer->MappedData;
+        }
 
         for (auto [sectorIdx, dirtyMask] : updateBatch) {
             glm::ivec3 sectorPos = WorldSectorIndexer::GetPos(sectorIdx);
@@ -154,6 +159,9 @@ struct GpuVoxelStorageManager {
             mappedStorage->SectorMasks[sectorMaskIdx] = sectorOccMask;
         }
         StorageBuffer->Flush();
+
+        if (dirtyBricksInBatch == 0) return;
+
         updateBuffer->Flush();
 
         struct OcmUpdateDispatchParams {
@@ -163,13 +171,12 @@ struct GpuVoxelStorageManager {
         };
         OcmUpdateDispatchParams updatePars = {
             .NumBricks = updateLocIdx,
-            .BrickLocs = updateBuffer->DeviceAddress,
+            .BrickLocs = cmds.GetDeviceAddress(*updateBuffer, havk::UseBarrier::ComputeRead),
             .Map = {
-                .Storage = StorageBuffer->DeviceAddress,
-                .VoxelOccupancy = OccupancyStorage->DeviceAddress
+                .Storage = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
+                .VoxelOccupancy = cmds.GetDeviceAddress(*OccupancyStorage, havk::UseBarrier::ComputeReadWrite),
             },
         };
-        cmds.MarkUse(updateBuffer);
         BuildOccupancyShader->Dispatch(cmds, { (updateLocIdx + 63) / 64, 1, 1 }, updatePars);
     }
 
@@ -196,26 +203,6 @@ struct GpuVoxelStorageManager {
     }
 };
 
-// Based on https://www.youtube.com/watch?v=P2bGF6GPmfc
-static void GenerateRayCellInteractionMaskLUT(uint64_t table[64 * 8]) {
-    for (uint64_t dirOct = 0; dirOct < 8; dirOct++) {
-        glm::ivec3 dir = (glm::ivec3(dirOct) >> glm::ivec3(0, 1, 2) & 1) * 2 - 1;
-
-        for (uint64_t originIdx = 0; originIdx < 64; originIdx++) {
-            uint64_t mask = 0;
-
-            for (uint64_t j = 0; j < 64; j++) {
-                glm::ivec3 pos = MaskIndexer::GetPos(originIdx) + MaskIndexer::GetPos(j) * dir;
-
-                if (MaskIndexer::CheckInBounds(pos)) {
-                    mask |= 1ull << MaskIndexer::GetIndex(pos);
-                }
-            }
-            table[originIdx + dirOct * 64] = mask;
-        }
-    }
-}
-
 GpuRenderer::GpuRenderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
     _ctx = ctx;
     _map = std::move(map);
@@ -226,17 +213,9 @@ GpuRenderer::GpuRenderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map
     _gbuffer = std::make_unique<GBuffer>(ctx);
     _gbuffer->NumDenoiserPasses = 0;
 
-    // _blueNoiseTex = ogl::Texture2D::Load("assets/bluenoise/stbn_vec2_2Dx1D_128x128x64_combined.png", 1, GL_RG8UI);
-    // _renderShader->SetUniform("u_STBlueNoiseTex", *_blueNoiseTex);
-
-    uint64_t interactionMaskLUT[64 * 8];
-    GenerateRayCellInteractionMaskLUT(interactionMaskLUT);
-    // _rayCellInteractionMaskLUT = std::make_unique<ogl::Buffer>(sizeof(interactionMaskLUT), 0, interactionMaskLUT);
-    // _renderShader->SetUniform("ssbo_RayCellInteractionMaskLUT", *_rayCellInteractionMaskLUT);
-
-    // auto panoToCubeShader = shlib.LoadComp("PanoramaToCube");
-    // _skyTex = ogl::TextureCube::LoadPanorama("assets/skyboxes/evening_road_01_puresky_4k.hdr", *panoToCubeShader);
-    // _renderShader->SetUniform("u_SkyTexture", *_skyTex);
+    _blueNoiseTex = havk::Image::LoadFile(ctx, "assets/bluenoise/stbn_vec2_2Dx1D_128x128x64_combined.png",
+                                          VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8_UINT, 1);
+    _skyboxTex = havk::Image::LoadFilePanoramaToCube(ctx, "assets/skyboxes/evening_road_01_puresky_4k.hdr");
 }
 GpuRenderer::~GpuRenderer() = default;
 
@@ -260,21 +239,22 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
     }
     _storage->SyncBuffers(*_map, cmds);
 
-    glm::uvec2 renderSize = glm::uvec2(target->Desc.Width, target->Desc.Height);
-    _gbuffer->SetCamera(cam, renderSize, worldChanged);
+    glm::uvec2 renderSize = glm::round(glm::vec2(target->Desc.Width, target->Desc.Height) * _renderScale);
+    _gbuffer->SetCamera(cmds, cam, renderSize, worldChanged);
 
     RenderDispatchParams renderPars = {
         .Map = {
-            .Storage = _storage->StorageBuffer->DeviceAddress,
-            .VoxelOccupancy = _storage->OccupancyStorage->DeviceAddress,
+            .Storage = cmds.GetDeviceAddress(*_storage->StorageBuffer, havk::UseBarrier::ComputeRead),
+            .VoxelOccupancy = cmds.GetDeviceAddress(*_storage->OccupancyStorage, havk::UseBarrier::ComputeRead),
         },
-        .GBuffer = _gbuffer->UniformBuffer->DeviceAddress,
+        .GBuffer = cmds.GetDeviceAddress(*_gbuffer->UniformBuffer, havk::UseBarrier::ComputeRead),
         .WorldOrigin = glm::ivec3(glm::floor(_gbuffer->CurrentPos)),
         .MaxBounces = _numLightBounces,
+        .StbnTexture = _blueNoiseTex->DescriptorHandle,
+        .SkyTexture = _skyboxTex->DescriptorHandle,
     };
     uint32_t groupsX = (renderSize.x + 7) / 8, groupsY = (renderSize.y + 7) / 8;
     _renderShader->Dispatch(cmds, { groupsX, groupsY, 1 }, renderPars);
-    cmds.MarkUse(_storage->StorageBuffer, _storage->OccupancyStorage, _gbuffer->UniformBuffer);
 
     _gbuffer->Resolve(target, cmds);
 }
@@ -285,6 +265,12 @@ void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
     settings.Combo("Debug Channel", &_gbuffer->DebugChannelView);
     settings.Slider("Light Bounces", &_numLightBounces, 1, 0u, 5u);
     settings.Slider("Denoiser Passes", &_gbuffer->NumDenoiserPasses, 1, 0u, 5u);
+
+    char label[32];
+    sprintf(label, "%.3gx (%dx%d)", _renderScale, _gbuffer->RenderSize.x, _gbuffer->RenderSize.y);
+    settings.Slider("Render Scale", &_renderScale, 1, 0.25f, 4.0f, label);
+    _renderScale = std::round(_renderScale / 0.25f) * 0.25f;
+
     ImGui::PopItemWidth();
     
     ImGui::Separator();

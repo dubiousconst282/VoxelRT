@@ -13,6 +13,8 @@ add_library(
     Havk/CommandQueue.cpp
     Havk/Pipeline.cpp
     Havk/FileWatcher.cpp
+    Havk/ImageIO.cpp
+    Havk/SpirvPatcher.cpp
 )
 target_include_directories(
     glimpsw PUBLIC
@@ -37,9 +39,9 @@ target_link_libraries(glimpsw PRIVATE
     assimp::assimp
     $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static> # wtf
     magic_enum::magic_enum
-    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/slang.lib"
-    # "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libslang.so"
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libslang.so"
 )
+
 target_link_libraries(glimpsw PUBLIC
     ${Vulkan_LIBRARIES}
     GPUOpen::VulkanMemoryAllocator
@@ -50,7 +52,10 @@ target_link_libraries(glimpsw PUBLIC
 )
 target_compile_definitions(glimpsw PUBLIC
     GLM_FORCE_DEPTH_ZERO_TO_ONE
-    GLM_FORCE_LEFT_HANDED
+   # GLM_FORCE_LEFT_HANDED
     GLM_FORCE_XYZW_ONLY
 )
 target_include_directories(glimpsw PRIVATE ${Stb_INCLUDE_DIR})
+
+find_path(SPIRV_HEADERS_INCLUDE_DIRS "/spirv/1.0/GLSL.std.450.h")
+target_include_directories(glimpsw PRIVATE ${SPIRV_HEADERS_INCLUDE_DIRS})

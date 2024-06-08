@@ -9,7 +9,7 @@ struct DispatchParams {
     DebugChannel Channel;
     uint padding;
 };
-[vk::push_constant] ConstantBuffer<DispatchParams> pc;
+[vk::push_constant] DispatchParams pc;
 
 float3 aces_approx(float3 v) {
     v *= 0.6f;
@@ -21,20 +21,22 @@ float3 aces_approx(float3 v) {
     return clamp((v*(a*v+b))/(v*(c*v+d)+e), 0.0f, 1.0f);
 }
 
+// TODO: Port to compute
 [shader("fragment")]
 float4 FragmentMain(float2 uv: TEXCOORD0) {
+    uv.y = 1.0-uv.y;
     int2 pos = int2(uv * pc.GBuffer->RenderSize);
     float3 albedo = pc.GBuffer->AlbedoTex.Instance[pos].rgb;
     float3 irradiance = pc.GBuffer.IrradianceTex.Instance[pos].rgb;
 
-    float3 color = albedo * irradiance;
-
-    color *= 0.48;
-    color = aces_approx(color);
-    color = pow(color, 0.45);
-
     switch (pc.Channel) {
-        default: {
+        default: {            
+            float3 color = albedo * irradiance;
+
+            color *= 0.48;
+            color = aces_approx(color);
+            color = pow(color, 0.45);
+
             return float4(color, 1.0);
         }
         case DebugChannel.Albedo: {

@@ -55,9 +55,9 @@ struct Camera {
             if (Mode == InputMode::FirstPerson) {
                 glm::vec3 mv(0.0f);
 
-                if (ImGui::IsKeyDown(ImGuiKey_W)) mv.z++;
+                if (ImGui::IsKeyDown(ImGuiKey_W)) mv.z--;
                 if (ImGui::IsKeyDown(ImGuiKey_A)) mv.x--;
-                if (ImGui::IsKeyDown(ImGuiKey_S)) mv.z--;
+                if (ImGui::IsKeyDown(ImGuiKey_S)) mv.z++;
                 if (ImGui::IsKeyDown(ImGuiKey_D)) mv.x++;
                 if (ImGui::IsKeyDown(ImGuiKey_Space)) Position.y += speed;
                 if (ImGui::IsKeyDown(ImGuiKey_LeftShift)) Position.y -= speed;

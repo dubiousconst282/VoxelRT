@@ -26,6 +26,7 @@ protected:
     
     std::unique_ptr<GBuffer> _gbuffer;
     havk::GraphicsPipelinePtr _blitShader;
+    float _renderScale = 1.0f;
 
     uint32_t _numLightBounces = 1;
     glim::TimeStat _frameTime;

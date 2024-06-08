@@ -187,7 +187,7 @@ void Swapchain::Present() {
     ImagePtr& currImage = _images[_currImageIdx].Target;
 
     auto cmdList = CommandList(Context, currSync.CmdBuffer);
-    cmdList.ImageBarrier(*currImage, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_2_MEMORY_READ_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    cmdList.TransitionLayout(*currImage, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     VK_CHECK(vkEndCommandBuffer(currSync.CmdBuffer));
 
     VkPipelineStageFlags waitMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;

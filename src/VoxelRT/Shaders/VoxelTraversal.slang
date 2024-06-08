@@ -1,4 +1,5 @@
 import VoxelMap;
+import RayMaskOptimizationLUT;
 
 public float3 ClipRayToAABB(float3 origin, float3 dir, float3 bbMin, float3 bbMax) {
     float3 invDir = 1.0 / dir;
@@ -65,6 +66,43 @@ public bool RayCast(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir, o
     return false;
 }
 
+
+public bool RayCastCoarse(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir, out HitInfo hit) {
+    float3 invDir = 1.0 / dir;
+    float3 tStart = (step(0.0, dir) - origin) * invDir;
+
+    float3 startPos = ClipRayToAABB(origin, dir, -voxelOrigin + 1, float3(VoxelMap.GRID_SIZE_XZ, VoxelMap.GRID_SIZE_Y, VoxelMap.GRID_SIZE_XZ) - voxelOrigin - 1);
+    int3 voxelPos = voxelOrigin + int3(floor(startPos));
+
+    for (uint i = 0; i < 96; i++) {
+        float3 sideDist = tStart + float3(voxelPos - voxelOrigin) * invDir;
+        float tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001;
+        float3 currPos = origin + tmin * dir;
+
+        voxelPos = voxelOrigin + int3(floor(currPos));
+        
+        bool coarse = i > 30; // distance(floor(currPos), origin) > 50;
+
+        if (!map.CheckBounds(voxelPos)) {
+            hit.Iters = i;
+            return false;
+        }
+        if (!GetStepPos(map, voxelPos, dir, coarse)) {
+            hit.Material = map.GetVoxelMaterial(voxelPos);
+            hit.Dist = tmin;
+            hit.Pos = currPos;
+
+            bool3 sideMask = float3(tmin) >= sideDist;
+            hit.FaceUV = fract(select(sideMask.xz, currPos.yy, currPos.xz));
+            hit.Normal = select(sideMask, -sign(dir), 0.0);
+            hit.Iters = i;
+            return true;
+        }
+    }
+    hit = HitInfo();
+    return false;
+}
+
 bool GetStepPos(VoxelMap map, inout int3 ipos, float3 dir, bool coarse) {
     uint3 pos = uint3(ipos);
     uint3 brickPos = pos / VoxelMap.BRICK_SIZE;
@@ -86,12 +124,9 @@ bool GetStepPos(VoxelMap map, inout int3 ipos, float3 dir, bool coarse) {
         scale = VoxelMap.BRICK_SIZE * 4;
     }
 
-    // if (u_UseAnisotropicLods) {
-    //     // ipos = getAnisotropicStepPos(occMask, maskIdx, ipos, dir, scale);
-    //     // return true;
-    //     uint dirOctant = (dir.x < 0 ? 0 : 1) + (dir.y < 0 ? 0 : 2) + (dir.z < 0 ? 0 : 4);
-    //     occMask &= RayCellInteractionMaskLUT[maskIdx + dirOctant * 64];
-    // }
+    // Mask optimization
+    uint dirOctant = (dir.x < 0 ? 0 : 1) + (dir.y < 0 ? 0 : 2) + (dir.z < 0 ? 0 : 4);
+    occMask &= RayMaskOptimizationLUT[maskIdx + dirOctant * 64];
 
     int lod = GetIsotropicLOD(occMask, maskIdx) * scale;
 

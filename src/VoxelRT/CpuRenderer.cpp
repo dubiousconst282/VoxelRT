@@ -291,18 +291,12 @@ static VFloat3 SampleHemisphere(VFloat2 sample, const VFloat3& normal) {
     return { dir.x ^ sign, dir.y ^ sign, dir.z ^ sign };
 }
 
-struct Framebuffer {
-    struct alignas(64) Tile {
-        VInt Albedo;        // RGBA8, A = normal
-        VFloat Depth;
-        VInt IrradianceRG;  // F16
-        VInt IrradianceBX;  // F16, u16 unused
-    };
-    uint32_t Width, Height, TileStride;
-    uint32_t TileShiftX, TileShiftY;
-    Tile Tiles[];
+struct RenderedTile {
+    VInt Albedo;        // RGBA8, A = normal
+    VFloat Depth;
+    VInt IrradianceRG;  // F16
+    VInt IrradianceBX;  // F16, u16 unused
 };
-
 static swr::HdrTexture2D _skyBox = swr::texutil::LoadCubemapFromPanoramaHDR("assets/skyboxes/evening_road_01_puresky_4k.hdr");
 static VBlueNoise _blueNoise = VBlueNoise();
 
@@ -318,7 +312,7 @@ struct FrameConstants {
 };
 
 [[gnu::noinline]] // lambdas can't be debugged on release for some reason
-static void RenderRow(const FrameConstants& fc, Framebuffer::Tile* dest, uint32_t y) {
+static void RenderRow(const FrameConstants& fc, RenderedTile* dest, uint32_t y) {
     VFloat v = simd::conv2f((int32_t)y + simd::TileOffsetsY) + 0.5f;  // + rng.NextUnsignedFloat() - 0.5f;
     
     for (uint32_t x = 0; x < fc.Size.x; x += simd::TileWidth) {
@@ -417,25 +411,20 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
 
     bool worldChanged = _map->DirtyLocs.size() > 0;
     _storage->SyncBuffers(*_map);
-    _gbuffer->SetCamera(cam, viewSize, worldChanged);
+    _gbuffer->SetCamera(cmds, cam, viewSize, worldChanged);
 
     uint32_t tilesX = viewSize.x / simd::TileWidth;
     uint32_t tilesY = viewSize.y / simd::TileHeight;
-    size_t fbSize = (tilesX * tilesY * sizeof(Framebuffer::Tile)) + sizeof(Framebuffer);
+    size_t fbSize = tilesX * tilesY * sizeof(RenderedTile);
 
     // Buffer orphaning to avoid having to deal with sync issues
-    auto pbo = _ctx->CreateBuffer({
+    auto outputBuffer = _ctx->CreateBuffer({
         .Size = fbSize,
         .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
     });
 
-    auto fb = (Framebuffer*)pbo->MappedData;
-    fb->Width = viewSize.x;
-    fb->Height = viewSize.y;
-    fb->TileStride = viewSize.x / simd::TileWidth;
-    fb->TileShiftX = (uint32_t)std::countr_zero(simd::TileWidth);
-    fb->TileShiftY = (uint32_t)std::countr_zero(simd::TileHeight);
+    auto destTiles = (RenderedTile*)outputBuffer->MappedData;
 
     _frameTime.Begin();
 
@@ -454,23 +443,34 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
     std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
         // VRandom rng(rowId + _gbuffer->FrameNo * 123456ull);
         uint32_t y = rowId * simd::TileHeight;
-        auto tile = &fb->Tiles[(y / simd::TileHeight) * fb->TileStride];
+        auto destRow = &destTiles[(y / simd::TileHeight) * (viewSize.x / simd::TileWidth)];
 
-        RenderRow(fc, tile, y);
+        RenderRow(fc, destRow, y);
     });
-    pbo->Flush();
+    outputBuffer->Flush();
 
     _frameTime.End();
 
     struct BlitConstants {
-        VkDeviceAddress FrameConsts;
-        VkDeviceAddress FrameData;
+        VkDeviceAddress GBuffer;
+        VkDeviceAddress PixelData;
+        
+        uint32_t Width, Height, Stride;
+        uint32_t TileShiftX, TileShiftY;
     };
-    BlitConstants pc = { .FrameConsts = _gbuffer->UniformBuffer->DeviceAddress, .FrameData = pbo->DeviceAddress };
+    BlitConstants pc = {
+        .GBuffer = cmds.GetDeviceAddress(*_gbuffer->UniformBuffer, havk::UseBarrier::ComputeRead),
+        .PixelData = cmds.GetDeviceAddress(*outputBuffer, havk::UseBarrier::ComputeRead),
+        .Width = viewSize.x,
+        .Height = viewSize.y,
+        .Stride = viewSize.x / simd::TileWidth,
+        .TileShiftX = (uint32_t)std::countr_zero(simd::TileWidth),
+        .TileShiftY = (uint32_t)std::countr_zero(simd::TileHeight),
+    };
+    cmds.GetDescriptorHandle(*_gbuffer->AlbedoTex, havk::UseBarrier::ComputeReadWrite);
 
     uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
-    _blitShader->Dispatch(cmds, {  groupsX, groupsY, 1 }, pc);
-    cmds.MarkUse(pbo, _gbuffer->UniformBuffer);
+    _blitShader->Dispatch(cmds, { groupsX, groupsY, 1 }, pc);
 
     _gbuffer->Resolve(target, cmds);
 }

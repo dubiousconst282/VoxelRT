@@ -7,6 +7,7 @@ public struct VoxelStorage {
 };
 
 public struct VoxelMap {
+    // NOTE: keep in sync with GpuRenderer.cpp
     public static const uint
         BRICK_SIZE = 8,
         NUM_SECTORS_XZ = 4096 / (BRICK_SIZE * 4),
@@ -64,7 +65,7 @@ public struct VoxelMap {
     }
 };
 
-// Count number of set bits in range [0..width]
+// Count number of set bits in variable range [0..width]
 public uint PopCntVar64(uint64_t mask, uint width) {
     uint himask = uint(mask);
     uint count = 0;

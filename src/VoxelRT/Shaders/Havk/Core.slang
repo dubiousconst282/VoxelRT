@@ -1,27 +1,45 @@
 [require(glsl_spirv_1_6, SPV_EXT_descriptor_indexing, GL_EXT_nonuniform_qualifier)]
-module havk;
+module Havk;
 
-[vk::binding(0, 0)] Texture2D havk__TexDescriptorHeap[];
-[vk::binding(1, 0)] RWTexture2D havk__RWTexDescriptorHeap[];
+[vk::binding(0, 0)] Texture2D havk__DescriptorHeap_T2D[];
+[vk::binding(0, 0)] Texture2D<uint2> havk__DescriptorHeap_T2D_u2[];
+[vk::binding(0, 0)] TextureCube<float3> havk__DescriptorHeap_T_C[];
+[vk::binding(1, 0)] RWTexture2D havk__DescriptorHeap_RWT2D[];
+[vk::binding(1, 0)] RWTexture2DArray havk__DescriptorHeap_RWT2D_A[];
 
 public struct TextureHandle<T> {
     uint DescriptorIndex;
     
     public property T Instance {
-        get { return bit_cast<T>(havk__TexDescriptorHeap[DescriptorIndex]); }
+        get {
+            // TODO: maybe do some SPIRV patching to add dynamic descriptor bindings
+            // https://github.com/shader-slang/slang/issues/4150
+            if (T is Texture2D<uint2>) {
+                return bit_cast<T>(havk__DescriptorHeap_T2D_u2[DescriptorIndex]);
+            }
+            if (T is TextureCube<float3>) {
+                return bit_cast<T>(havk__DescriptorHeap_T_C[DescriptorIndex]);
+            }
+            return bit_cast<T>(havk__DescriptorHeap_T2D[DescriptorIndex]);
+        }
     }
     public property T NonUniformInstance {
-        get { return bit_cast<T>(havk__TexDescriptorHeap[NonUniformResourceIndex(DescriptorIndex)]); }
+        get { return bit_cast<T>(havk__DescriptorHeap_T2D[NonUniformResourceIndex(DescriptorIndex)]); }
     }
 };
 public struct ImageHandle<T> {
     uint DescriptorIndex;
     
     public property T Instance {
-        get { return bit_cast<T>(havk__RWTexDescriptorHeap[DescriptorIndex]); }
+        get {
+            if (T is RWTexture2DArray<float3>) {
+                return bit_cast<T>(havk__DescriptorHeap_RWT2D_A[DescriptorIndex]);
+            }
+            return bit_cast<T>(havk__DescriptorHeap_RWT2D[DescriptorIndex]);
+        }
     }
     public property T NonUniformInstance {
-        get { return bit_cast<T>(havk__RWTexDescriptorHeap[NonUniformResourceIndex(DescriptorIndex)]); }
+        get { return bit_cast<T>(havk__DescriptorHeap_RWT2D[NonUniformResourceIndex(DescriptorIndex)]); }
     }
 };
 
@@ -30,7 +48,8 @@ public typealias TextureHandle3D<F = float4> = TextureHandle<Texture3D<F>>;
 public typealias ImageHandle2D<F = float4> = ImageHandle<RWTexture2D<F>>;
 public typealias ImageHandle3D<F = float4> = ImageHandle<RWTexture3D<F>>;
 
-public typealias TextureHandleCube<F = float4> = ImageHandle<TextureCube<F>>;
+public typealias TextureHandleCube<F = float4> = TextureHandle<TextureCube<F>>;
+public typealias ImageHandleArray2D<F = float4> = ImageHandle<RWTexture2DArray<F>>;
 
 __generic<T, let access : int, let isShadow : int, let isCombined : int, let format : int>
 public extension __TextureImpl<T, __Shape2D, 0, 0, 0, access, isShadow, isCombined, format> {
