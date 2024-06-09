@@ -1,6 +1,5 @@
 #include "Havk.h"
-
-#include <unordered_map>
+#include "Internal.h"
 
 #include <slang.h>
 #include <slang-com-ptr.h>
@@ -14,8 +13,14 @@ void Pipeline::Bind(CommandList& cmdList) {
     auto bindPt = dynamic_cast<GraphicsPipeline*>(this) ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE;
     vkCmdBindPipeline(cmdList.Buffer, bindPt, Handle);
     vkCmdBindDescriptorSets(cmdList.Buffer, bindPt, LayoutHandle, 0, 1, &Context->DescriptorHeap->Set, 0, nullptr);
+
+    if (SamplerDescriptors.Handle != nullptr) {
+        vkCmdBindDescriptorSets(cmdList.Buffer, bindPt, LayoutHandle, 1, 1, &SamplerDescriptors.Handle, 0, nullptr);
+    }
 }
 Pipeline::~Pipeline() {
+    Context->SamplerDescPool->DestroySet(SamplerDescriptors);
+
     vkDestroyPipelineLayout(Context->Device, LayoutHandle, nullptr);
     vkDestroyPipeline(Context->Device, Handle, nullptr);
 }
@@ -37,13 +42,8 @@ PipelineBuilder::~PipelineBuilder() {
 GraphicsPipelinePtr PipelineBuilder::CreateGraphics(const std::string& shaderFilename, const GraphicsPipelineDesc& desc,
                                                     const ShaderCompileParams& compilePars) {
     ShaderCompileResult shader = Compile(shaderFilename, compilePars);
-    if (!shader.InfoLog.empty()) {
-        Context->Log(shader.Success ? LogLevel::Debug : LogLevel::Error, "Compile log for shader '%s':\n'%s'", shaderFilename.data(), shader.InfoLog.data());
-    }
     auto pipe = Resource::make<GraphicsPipeline>(Context);
-
-    pipe->LayoutHandle = shader.Layout;
-    shader.Layout = nullptr;  // take ownership
+    InitPipeline(pipe.get(), shader);
 
     // Vertex input should be implemented via vertex pulling - death to fixed function pipeline.
     VkPipelineVertexInputStateCreateInfo vertexInputCI = {
@@ -138,16 +138,8 @@ GraphicsPipelinePtr PipelineBuilder::CreateGraphics(const std::string& shaderFil
 
 ComputePipelinePtr PipelineBuilder::CreateCompute(const std::string& shaderFilename, const ShaderCompileParams& compilePars) {
     ShaderCompileResult shader = Compile(shaderFilename, compilePars);
-    if (!shader.InfoLog.empty()) {
-        Context->Log(shader.Success ? LogLevel::Debug : LogLevel::Error, "Compile log for shader '%s':\n'%s'", shaderFilename.data(), shader.InfoLog.data());
-    }
-    if (shader.Stages.size() != 1) {
-        throw std::runtime_error("Compute shader must have exactly one entry point.");
-    }
     auto pipe = Resource::make<ComputePipeline>(Context);
-
-    pipe->LayoutHandle = shader.Layout;
-    shader.Layout = nullptr;  // take ownership
+    InitPipeline(pipe.get(), shader);
 
     VkComputePipelineCreateInfo pipelineCI = {
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -158,6 +150,22 @@ ComputePipelinePtr PipelineBuilder::CreateCompute(const std::string& shaderFilen
 
     return pipe;
 }
+
+void PipelineBuilder::InitPipeline(Pipeline* pl, ShaderCompileResult& shader) {
+    if (!shader.InfoLog.empty()) {
+        auto level = shader.Success ? LogLevel::Debug : LogLevel::Error;
+        pl->Context->Log(level, "Compile log for shader '%s':\n'%s'", shader.SourceFile.data(), shader.InfoLog.data());
+    }
+    if (!shader.Success) {
+        throw std::runtime_error("Shader compilation failed.");
+    }
+    if (dynamic_cast<ComputePipeline*>(pl) && shader.Stages.size() != 1) {
+        throw std::runtime_error("Compute shader must have exactly one entry point.");
+    }
+
+    pl->LayoutHandle = shader.Layout;
+    pl->SamplerDescriptors = shader.SamplerDescriptors;
+    shader.Layout = nullptr;  // take ownership
 
 void PipelineBuilder::Refresh() {
     if (_watcher == nullptr) return;
@@ -176,7 +184,7 @@ void PipelineBuilder::Refresh() {
 
 static VkShaderStageFlagBits GetVkStage(SlangStage stage);
 static VkDescriptorType GetDescriptorType(SlangTypeKind kind);
-static void ParseConstSampler(slang::UserAttribute* attr, VkSamplerCreateInfo* info);
+static void ParseConstSampler(DeviceContext* ctx, slang::UserAttribute* attr, VkSamplerCreateInfo* info);
 
 ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const ShaderCompileParams& pars) {
     Context->Log(LogLevel::Debug, "Begin compile shader '%s'", filename.data());
@@ -302,21 +310,21 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
         switch (par->getCategory()) {
             case slang::ParameterCategory::PushConstantBuffer: {
                 if (pcRange.size != 0) {
-                    result.AppendLog("Error: only a single push constant parameter is supported.");
+                    result.AppendLog("error: only a single push constant parameter is supported.");
                     return result;
                 }
                 pcRange.size = typeLayout->getElementTypeLayout()->getSize();
-                Context->Log(LogLevel::Trace, "PC %s %d bytes", par->getName(), pcRange.size);
+                Context->Log(LogLevel::Trace, "PC '%s': %d bytes", par->getName(), pcRange.size);
                 break;
             }
             case slang::ParameterCategory::DescriptorTableSlot: {
                 uint32_t index = par->getBindingIndex();
                 uint32_t space = par->getBindingSpace() + par->getOffset(SLANG_PARAMETER_CATEGORY_SUB_ELEMENT_REGISTER_SPACE);
 
-                Context->Log(LogLevel::Trace, "Par %s %d: %d-%d", par->getName(), typeLayout->getKind(), index, space);
+                Context->Log(LogLevel::Trace, "Par '%s' %d: %d-%d", par->getName(), typeLayout->getKind(), index, space);
 
                 if (typeLayout->getKind() == slang::TypeReflection::Kind::SamplerState) {
-                   // assert(space == 1);
+                    assert(space == 1);
                     VkSamplerCreateInfo info = {
                         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                         .magFilter = VK_FILTER_LINEAR,
@@ -327,10 +335,9 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
                     };
                     slang::UserAttribute* descAttr = par->getVariable()->findUserAttributeByName(globalSession, "SamplerDesc");
                     if (descAttr) {
-                        ParseConstSampler(descAttr, &info);
+                        ParseConstSampler(Context, descAttr, &info);
                     }
-
-                    VkSampler& sampler = samplers.emplace_back(Context->DescriptorHeap->GetSampler(info));
+                    VkSampler& sampler = samplers.emplace_back(Context->SamplerDescPool->GetSampler(info));
                     samplerBindings.push_back({
                         .binding = index,
                         .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
@@ -355,12 +362,9 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
     std::vector<VkDescriptorSetLayout> descLayouts;
     descLayouts.push_back(Context->DescriptorHeap->SetLayout);
 
-    VkDescriptorSetLayoutCreateInfo samplerLayoutCI = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = (uint32_t)samplerBindings.size(),
-        .pBindings = samplerBindings.data(),
-    };
-    // VK_CHECK(vkCreateDescriptorSetLayout(Context->Device, &samplerLayoutCI, nullptr, &descLayouts.emplace_back()));
+    if (samplers.size() > 0) {
+        Context->SamplerDescPool->CreateSet(samplerBindings, &descLayouts.emplace_back(), &result.SamplerDescriptors);
+    }
 
     VkPipelineLayoutCreateInfo layoutCI = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -371,13 +375,16 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
     };
     VK_CHECK(vkCreatePipelineLayout(Context->Device, &layoutCI, nullptr, &result.Layout));
 
+    if (samplers.size() > 0) {
+        vkDestroyDescriptorSetLayout(Context->Device, descLayouts[1], nullptr);
+    }
+
     if (_watcher != nullptr) {
         for (int32_t i = 0; i < session->getLoadedModuleCount(); i++) {
             slang::IModule* loadedModule = session->getLoadedModule(i);
             Context->Log(LogLevel::Trace, "Shader '%s' loads '%s'", filename.data(), loadedModule->getFilePath());
         }
     }
-    // vkDestroyDescriptorSetLayout(Context->Device, descLayouts.front(), nullptr);
 
     result.Success = true;
     return result;
@@ -392,35 +399,25 @@ ShaderCompileResult::~ShaderCompileResult() {
     }
 }
 
-static void ParseConstSampler(slang::UserAttribute* attr, VkSamplerCreateInfo* info) {
+static void ParseConstSampler(DeviceContext* ctx, slang::UserAttribute* attr, VkSamplerCreateInfo* info) {
     int magFilter, minFilter, mipFilter;
-    int wrap, compareOp;
+    int wrap;
     // Can't get enum value out of UserAttribute yet: 
     attr->getArgumentValueInt(0, &magFilter);
     attr->getArgumentValueInt(1, &minFilter);
     attr->getArgumentValueInt(2, &mipFilter);
     attr->getArgumentValueInt(3, &wrap);
-    attr->getArgumentValueFloat(4, &info->maxAnisotropy);
-    attr->getArgumentValueInt(5, &compareOp);
-
-    if (info->maxAnisotropy >= 1.0f) {
-        info->anisotropyEnable = VK_TRUE;
-    }
 
     const VkFilter filters[] = {
         VK_FILTER_NEAREST,
         VK_FILTER_LINEAR,
+        VK_FILTER_LINEAR, // implies anisotropy
     };
     const VkSamplerAddressMode wrapModes[] = {
         VK_SAMPLER_ADDRESS_MODE_REPEAT,
         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
         VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
         VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
-    };
-    const VkCompareOp compareOps[] = {
-        VK_COMPARE_OP_NEVER,         VK_COMPARE_OP_EQUAL, VK_COMPARE_OP_NOT_EQUAL,
-        VK_COMPARE_OP_GREATER,       VK_COMPARE_OP_LESS,  VK_COMPARE_OP_GREATER_OR_EQUAL,
-        VK_COMPARE_OP_LESS_OR_EQUAL,
     };
 
     info->addressModeU = wrapModes[wrap];
@@ -431,8 +428,15 @@ static void ParseConstSampler(slang::UserAttribute* attr, VkSamplerCreateInfo* i
     info->minFilter = filters[minFilter];
     info->mipmapMode = (VkSamplerMipmapMode)filters[mipFilter];
 
-    info->compareOp = compareOps[compareOp];
-    info->compareEnable = compareOp != 0;
+    if (mipFilter == 2) {
+        info->anisotropyEnable = VK_TRUE;
+        info->maxAnisotropy = 8.0f;  // TODO: make this adjustable
+
+        float maxDeviceAnisotropy = ctx->PhysicalDeviceInfo.Props.limits.maxSamplerAnisotropy;
+        if (info->maxAnisotropy > maxDeviceAnisotropy) {
+            info->maxAnisotropy = maxDeviceAnisotropy;
+        }
+    }
 }
 
 static VkShaderStageFlagBits GetVkStage(SlangStage stage) {
@@ -461,6 +465,76 @@ static VkDescriptorType GetDescriptorType(SlangTypeKind kind) {
         case SLANG_TYPE_KIND_SAMPLER_STATE: return VK_DESCRIPTOR_TYPE_SAMPLER;
         case SLANG_TYPE_KIND_SHADER_STORAGE_BUFFER: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         default: throw std::runtime_error("Unsupported binding type");
+    }
+}
+
+SamplerDescriptorPool::~SamplerDescriptorPool() {
+    for (auto& [desc, sampler] : _samplers) {
+        vkDestroySampler(Context->Device, sampler, nullptr);
+    }
+    for (auto& pool : _pools) {
+        vkDestroyDescriptorPool(Context->Device, pool, nullptr);
+    }
+}
+
+VkSampler SamplerDescriptorPool::GetSampler(const VkSamplerCreateInfo& desc) {
+    VkSampler& sampler = _samplers[desc];
+    if (sampler == nullptr) {
+        VK_CHECK(vkCreateSampler(Context->Device, &desc, nullptr, &sampler));
+    }
+    return sampler;
+}
+
+void SamplerDescriptorPool::CreateSet(std::vector<VkDescriptorSetLayoutBinding> bindings,
+                                      VkDescriptorSetLayout* layout, SamplerDescriptorSet* set) {
+    VkDescriptorSetLayoutCreateInfo layoutCI = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = (uint32_t)bindings.size(),
+        .pBindings = bindings.data(),
+    };
+    VK_CHECK(vkCreateDescriptorSetLayout(Context->Device, &layoutCI, nullptr, layout));
+
+    VkDescriptorSetAllocateInfo allocCI = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorSetCount = 1,
+        .pSetLayouts = layout,
+    };
+
+    // Try to allocate set from some pool
+    for (uint32_t i = _pools.size() - 1; i != UINT32_MAX; i--) {
+        allocCI.descriptorPool = _pools[i];
+        VkResult res = vkAllocateDescriptorSets(Context->Device, &allocCI, &set->Handle);
+
+        if (res == VK_SUCCESS) {
+            set->PoolIdx = i;
+            return;
+        }
+        if (res != VK_ERROR_OUT_OF_POOL_MEMORY && res != VK_ERROR_FRAGMENTED_POOL) {
+            ThrowResult(res, "Failed to allocate descriptor sets");
+        }
+    }
+
+    // Create new pool
+    VkDescriptorPoolSize poolSizes[] = {
+        { VK_DESCRIPTOR_TYPE_SAMPLER, PoolCapacity },
+    };
+    VkDescriptorPoolCreateInfo poolCI = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+        .maxSets = PoolCapacity,
+        .poolSizeCount = 1,
+        .pPoolSizes = poolSizes,
+    };
+    VK_CHECK(vkCreateDescriptorPool(Context->Device, &poolCI, nullptr, &_pools.emplace_back()));
+
+    // Allocate from fresh pool, or freak out on failure.
+    allocCI.descriptorPool = _pools.back();
+    VK_CHECK(vkAllocateDescriptorSets(Context->Device, &allocCI, &set->Handle));
+    set->PoolIdx = _pools.size() - 1;
+}
+void SamplerDescriptorPool::DestroySet(SamplerDescriptorSet& set) {
+    if (set.Handle != nullptr) {
+        vkFreeDescriptorSets(Context->Device, _pools[set.PoolIdx], 1, &set.Handle);
     }
 }
 

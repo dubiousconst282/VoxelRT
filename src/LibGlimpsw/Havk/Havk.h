@@ -7,25 +7,25 @@
 #include <string>
 #include <filesystem>
 #include <vector>
-#include <unordered_map>
-#include <unordered_set>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <vk_mem_alloc.h>
 
-// Dirty and minimalistic Vulkan abstraction layer targeting bindless, dynamic rendering, and Slang shaders.
-// ...as if I knew what I am doing - iteration #3, 2024/05
 namespace havk {
 
 struct DeviceContext;
 struct Swapchain;
 struct PipelineBuilder;
 struct CommandList;
-struct DescriptorHeap;
 struct Resource;
 struct BufferDesc;
 struct ImageDesc;
+
+// Internal
+struct DescriptorHeap;
+struct SamplerDescriptorPool;
+struct FileWatcher;
 
 #define HAVK_NON_COPYABLE(name)            \
     name(const name&) = delete;            \
@@ -119,7 +119,9 @@ struct DeviceContext {
 
     std::unique_ptr<Swapchain> Swapchain;
     std::unique_ptr<PipelineBuilder> PipeBuilder;
+
     std::unique_ptr<DescriptorHeap> DescriptorHeap;
+    std::unique_ptr<SamplerDescriptorPool> SamplerDescPool;
 
     VkSemaphore QueueSemaphore;    // Timeline semaphore for MainQueue submissions
     uint64_t NextQueueTimestamp;   // MainQueue submission counter
@@ -158,52 +160,6 @@ private:
 using ImageHandle = uint32_t;
 static inline constexpr uint32_t InvalidHandle = ~0u;
 
-// Manages the global image descriptor heap.
-struct DescriptorHeap {
-    HAVK_NON_COPYABLE(DescriptorHeap);
-
-    static const uint32_t Capacity = 1024 * 64; // Per SAMPLED / STORAGE
-
-    DeviceContext* Context;
-    VkDescriptorPool Pool;
-    VkDescriptorSetLayout SetLayout;
-    VkDescriptorSet Set;
-
-    DescriptorHeap(DeviceContext* ctx);
-    ~DescriptorHeap();
-
-    uint32_t CreateHandle(VkImageView viewHandle, VkImageUsageFlags usage);
-    void DestroyHandle(uint32_t handle);
-
-    VkSampler GetSampler(const VkSamplerCreateInfo& desc);
-private:
-    struct HandleAllocator {
-        uint32_t NextFreeWordIdxHint = 0;
-        uint64_t UsedMap[(Capacity + 63) / 64] = {};
-
-        uint32_t Alloc();
-        void Free(uint32_t id);
-    };
-    HandleAllocator _allocator;
-    
-    struct SamplerHasherEq {
-        bool operator()(const VkSamplerCreateInfo& a, const VkSamplerCreateInfo& b) const {
-            return memcmp(&a, &b, sizeof(VkSamplerCreateInfo)) == 0;
-        }
-        size_t operator()(const VkSamplerCreateInfo& obj) const {
-            return std::hash<int32_t>()(obj.magFilter ^ (obj.minFilter << 4) ^ (obj.mipmapMode << 8) ^
-                                        (obj.addressModeU << 12) ^ (obj.addressModeV << 16) ^ (obj.compareOp << 20));
-        }
-    };
-    std::unordered_map<VkSamplerCreateInfo, VkSampler, SamplerHasherEq, SamplerHasherEq> _samplers;
-};
-
-struct ParsedSamplerDesc {
-    VkSamplerCreateInfo Info;
-    std::string ErrorLog;
-
-    bool Parse(std::string_view str);
-};
 
 struct BufferDesc {
     uint64_t Size;
@@ -229,6 +185,13 @@ struct Buffer final : Resource {
     void Flush(uint64_t destOffset = 0, uint64_t byteCount = VK_WHOLE_SIZE);
 
     ~Buffer();
+};
+
+// Buffer that will be updated by host and read by GPU every frame.
+// This is effectively one device buffer and N staging host buffers, where N =frames in flight.
+struct TransientBuffer final : Resource {
+    // TODO
+    // https://edw.is/learning-vulkan/ Handling dynamic data which needs to be uploaded every frame
 };
 
 struct ImageDesc {
@@ -390,9 +353,15 @@ struct PushConstantsPtr {
     PushConstantsPtr() = default;
 };
 
+struct SamplerDescriptorSet {
+    VkDescriptorSet Handle = nullptr;
+    uint32_t PoolIdx = 0;
+};
+
 struct Pipeline : Resource {
     VkPipeline Handle;
     VkPipelineLayout LayoutHandle;
+    SamplerDescriptorSet SamplerDescriptors;
 
     ~Pipeline();
 
@@ -413,7 +382,7 @@ struct DrawCommand {
     uint32_t InstanceOffset = 0;
 };
 
-// Blittable to VkDrawIndexedIndirectCommand, different strides.
+// Blittable with VkDrawIndexedIndirectCommand, different strides.
 struct DrawIndexedCommand {
     uint32_t NumIndices;
     uint32_t NumInstances = 1;
@@ -453,11 +422,14 @@ struct ShaderCompileResult {
     VkDevice Device = nullptr;
     std::vector<VkPipelineShaderStageCreateInfo> Stages;
     VkPipelineLayout Layout = nullptr;
+    SamplerDescriptorSet SamplerDescriptors;
 
     // Diagnostics
-    std::string Filename;
     std::string InfoLog;
     bool Success = false;
+
+    std::string SourceFile;
+    std::vector<std::string> IncludedFiles;
 
     ShaderCompileResult(VkDevice device) { Device = device; }
     ~ShaderCompileResult();
@@ -473,20 +445,7 @@ struct GraphicsPipelineDesc;
 
 struct ShaderCompileParams {
     std::vector<std::pair<std::string, std::string>> PrepDefs; // Pre-processor definitions
-    std::string LinkSource; // TODO: Source code of a module used for link-time specialization
-};
-
-struct FileWatcher {
-    HAVK_NON_COPYABLE(FileWatcher);
-
-    FileWatcher(const std::filesystem::path& path);
-    ~FileWatcher();
-
-    void PollChanges(std::vector<std::filesystem::path>& changedFiles);
-
-private:
-    struct Impl;
-    std::unique_ptr<Impl> _impl;
+    std::string LinkSource;                                    // TODO: Source code of a module used for link-time specialization
 };
 
 struct PipelineBuilder {
@@ -506,17 +465,9 @@ struct PipelineBuilder {
 
 private:
     friend DeviceContext;
-    
-    struct PipelineSourceInfo {
-        std::unordered_set<std::string> IncludedFiles;
-        std::string Filename;
-        ShaderCompileParams CompilePars;
-    };
 
-    std::unique_ptr<FileWatcher> _watcher;
-    std::vector<PipelineSourceInfo> _trackedPipelines;
-
-    void* _slangSession;  // IGlobalSession* - this is void* to avoid leaking slang.h
+    // Check compile result and move handles to pipeline.
+    void InitPipeline(Pipeline* pl, ShaderCompileResult& shader);
 
     void Refresh();
     void CreateDescriptorHeap();

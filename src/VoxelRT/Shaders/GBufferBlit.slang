@@ -1,5 +1,6 @@
 #include <Havk/FullscreenPass.slang>
 
+import Havk.Core;
 import GBuffer;
 
 enum DebugChannel { None, Albedo, Irradiance, Normals, TraversalIters, Variance };
@@ -21,13 +22,21 @@ float3 aces_approx(float3 v) {
     return clamp((v*(a*v+b))/(v*(c*v+d)+e), 0.0f, 1.0f);
 }
 
+[vk::binding(0, 1)]
+[SamplerDesc(MagFilter.Linear, MinFilter.Linear, MipFilter.Linear, WrapMode.Repeat)]
+SamplerState g_LinearSampler;
+
 // TODO: Port to compute
 [shader("fragment")]
 float4 FragmentMain(float2 uv: TEXCOORD0) {
     uv.y = 1.0-uv.y;
     int2 pos = int2(uv * pc.GBuffer->RenderSize);
-    float3 albedo = pc.GBuffer->AlbedoTex.Instance[pos].rgb;
-    float3 irradiance = pc.GBuffer.IrradianceTex.Instance[pos].rgb;
+    // float3 albedo = pc.GBuffer->AlbedoTex.Instance[pos].rgb;
+    // float3 irradiance = pc.GBuffer.IrradianceTex.Instance[pos].rgb;
+
+    // This is fine as long image was created with USE_SAMPLED
+    float3 albedo = reinterpret<TextureHandle2D>(pc.GBuffer->AlbedoTex).Instance.SampleLevel(g_LinearSampler, uv, 0).rgb;
+    float3 irradiance = reinterpret<TextureHandle2D>(pc.GBuffer->IrradianceTex).Instance.SampleLevel(g_LinearSampler, uv, 0).rgb;
 
     switch (pc.Channel) {
         default: {            

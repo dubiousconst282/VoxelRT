@@ -1,4 +1,5 @@
 #include "Havk.h"
+#include "Internal.h"
 
 namespace havk {
 
@@ -212,10 +213,12 @@ DescriptorHeap::DescriptorHeap(DeviceContext* ctx) {
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
         VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
 
+    VkDescriptorBindingFlags bindingFlags[2] { flags, flags };
+
     VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsCI = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = 2,
-        .pBindingFlags = &flags,
+        .pBindingFlags = bindingFlags,
     };
 
     // Variable size descriptor bindings seem to be pointless, we'll just allocate a fixed-size pool instead
@@ -251,10 +254,6 @@ DescriptorHeap::DescriptorHeap(DeviceContext* ctx) {
 DescriptorHeap::~DescriptorHeap() {
     vkDestroyDescriptorSetLayout(Context->Device, SetLayout, nullptr);
     vkDestroyDescriptorPool(Context->Device, Pool, nullptr);
-
-    for (auto& [desc, sampler] : _samplers) {
-        vkDestroySampler(Context->Device, sampler, nullptr);
-    }
 }
 
 uint32_t DescriptorHeap::CreateHandle(VkImageView viewHandle, VkImageUsageFlags usage) {
@@ -289,14 +288,6 @@ uint32_t DescriptorHeap::CreateHandle(VkImageView viewHandle, VkImageUsageFlags 
 void DescriptorHeap::DestroyHandle(uint32_t handle) {
     _allocator.Free(handle);
     // Nothing else to do, spec says "descriptors become undefined after underlying resources are destroyed".
-}
-
-VkSampler DescriptorHeap::GetSampler(const VkSamplerCreateInfo& desc) {
-    VkSampler& sampler = _samplers[desc];
-    if (sampler == nullptr) {
-        VK_CHECK(vkCreateSampler(Context->Device, &desc, nullptr, &sampler));
-    }
-    return sampler;
 }
 
 uint32_t DescriptorHeap::HandleAllocator::Alloc() {

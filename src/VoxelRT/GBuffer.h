@@ -66,7 +66,7 @@ struct GBuffer {
             const auto CreateImage = [&](VkFormat format) {
                 return Context->CreateImage({
                     .Format = format,
-                    .Usage = VK_IMAGE_USAGE_STORAGE_BIT,
+                    .Usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                     .Width = renderSize.x,
                     .Height = renderSize.y,
                     .NumLevels = 1,

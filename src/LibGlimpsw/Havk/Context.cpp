@@ -1,8 +1,10 @@
 #include "Havk.h"
+#include "Internal.h"
 
 #include <cstdarg>
 #include <cstdio>
 #include <stdexcept>
+#include <unordered_set>
 
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
@@ -318,6 +320,7 @@ DeviceContextPtr Create(DeviceCreateParams pars) {
 
     ctx->PipeBuilder = std::make_unique<PipelineBuilder>(ctx.get(), pars.ShaderBasePath, pars.EnableShaderHotReload);
     ctx->DescriptorHeap = std::make_unique<DescriptorHeap>(ctx.get());
+    ctx->SamplerDescPool = std::make_unique<SamplerDescriptorPool>(ctx.get());
 
     ctx->QueueSemaphore = CreateTimelineSemaphore(ctx->Device);
     ctx->NextQueueTimestamp = 1;
@@ -333,6 +336,7 @@ DeviceContext::~DeviceContext() {
     Swapchain.reset();
     PipeBuilder.reset();
     DescriptorHeap.reset();
+    SamplerDescPool.reset();
 
     vmaDestroyAllocator(Allocator);
 

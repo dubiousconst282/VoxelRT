@@ -1,8 +1,7 @@
-#include <filesystem>
 #include <system_error>
-#include <unordered_map>
 
 #include "Havk.h"
+#include "Internal.h"
 
 #ifdef _WIN32
     #define WIN32_LEAN_AND_MEAN
@@ -18,8 +17,8 @@ struct FileWatcher::Impl {
     OVERLAPPED _overlapped = {};
     uint8_t _eventBuffer[4096];
 
-    Impl(const std::filesystem::path& path) {
-        _fileHandle = CreateFileW(path.c_str(), GENERIC_READ,
+    Impl(const std::filesystem::path& baseDir) {
+        _fileHandle = CreateFileW(baseDir.c_str(), GENERIC_READ,
                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
                                   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
         ReadChangesAsync();
@@ -65,7 +64,7 @@ struct FileWatcher::Impl {
     int _fd;
     std::unordered_map<int, std::filesystem::path> _subdirs;
 
-    Impl(const std::filesystem::path& path) {
+    Impl(const std::filesystem::path& baseDir) {
         _fd = inotify_init1(IN_NONBLOCK);
 
         const auto WatchDir = [&](const std::filesystem::path& path) {
@@ -76,9 +75,9 @@ struct FileWatcher::Impl {
             _subdirs.insert_or_assign(wd, path);
         };
 
-        WatchDir(path);
+        WatchDir(baseDir);
 
-        for (auto& entry : std::filesystem::recursive_directory_iterator(path)) {
+        for (auto& entry : std::filesystem::recursive_directory_iterator(baseDir)) {
             if (entry.is_directory()) {
                 WatchDir(entry.path());
             }
@@ -110,17 +109,17 @@ void FileWatcher::PollChanges(std::vector<std::filesystem::path>& changedFiles) 
 
 #else
 
-#warning "FileWatcher is not implemented on this platform"
+#warning "FileWatcher is not implemented for this platform"
 
 struct FileWatcher::Impl {
-    Impl(const std::filesystem::path& path) { }
+    Impl(const std::filesystem::path& baseDir) { }
 };
 void FileWatcher::PollChanges(std::vector<std::filesystem::path>& changedFiles) {}
 
 #endif
 
-FileWatcher::FileWatcher(const std::filesystem::path& path) {
-    _impl = std::make_unique<Impl>(path);
+FileWatcher::FileWatcher(const std::filesystem::path& baseDir) {
+    _impl = std::make_unique<Impl>(baseDir);
 };
 FileWatcher::~FileWatcher() = default;
 

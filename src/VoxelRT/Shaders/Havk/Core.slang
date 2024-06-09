@@ -5,7 +5,8 @@ module Havk;
 [vk::binding(0, 0)] Texture2D<uint2> havk__DescriptorHeap_T2D_u2[];
 [vk::binding(0, 0)] TextureCube<float3> havk__DescriptorHeap_T_C[];
 [vk::binding(1, 0)] RWTexture2D havk__DescriptorHeap_RWT2D[];
-[vk::binding(1, 0)] RWTexture2DArray havk__DescriptorHeap_RWT2D_A[];
+[vk::binding(1, 0)] RWTexture2D<uint> havk__DescriptorHeap_RWT2D_u1[];
+[vk::binding(1, 0)] RWTexture2DArray<float3> havk__DescriptorHeap_RWT2D_A[];
 
 public struct TextureHandle<T> {
     uint DescriptorIndex;
@@ -32,6 +33,9 @@ public struct ImageHandle<T> {
     
     public property T Instance {
         get {
+            if (T is RWTexture2D<uint>) {
+                return bit_cast<T>(havk__DescriptorHeap_RWT2D_u1[DescriptorIndex]);
+            }
             if (T is RWTexture2DArray<float3>) {
                 return bit_cast<T>(havk__DescriptorHeap_RWT2D_A[DescriptorIndex]);
             }
@@ -84,18 +88,26 @@ void Foo(TextureRef2D tex) {
 // These would ideally be enums but slang reflection doesn't support getting values yet
 public class MagFilter { public static const int Nearest = 0, Linear = 1; };
 public class MinFilter { public static const int Nearest = 0, Linear = 1; };
-public class MipFilter { public static const int Nearest = 0, Linear = 1; };
+public class MipFilter { public static const int Nearest = 0, Linear = 1, Anisotropic = 2; };
 
 public class WrapMode { public static const int Repeat = 0, ClampToEdge = 1, MirroredRepeat = 2, MirrorClampToEdge = 3; };
 public class CompareOp { public static const int None = 0, Eq = 1, Ne = 2, Gt = 3, Lt = 4, Ge = 5, Le = 6; };
 
-// Embeds an immutable sampler to the sampler binding where this attribute is applied.
+// Embeds an immutable sampler to the binding where this attribute is applied.
 [__AttributeUsage(_AttributeTargets.Var)]
 public struct SamplerDescAttribute {
     int magFilter = MagFilter.Linear;
     int minFilter = MinFilter.Linear;
     int mipFilter = MipFilter.Linear;
     int wrap = WrapMode.Repeat;
-    float maxAnisotropy = 0.0;
-    int compareOp = CompareOp.None;
+};
+
+// Not implemented
+[__AttributeUsage(_AttributeTargets.Var)]
+public struct ShadowSamplerDescAttribute {
+    int magFilter = MagFilter.Linear;
+    int minFilter = MinFilter.Linear;
+    int mipFilter = MipFilter.Linear;
+    int wrap = WrapMode.Repeat;
+    int op = CompareOp.Gt;
 };
