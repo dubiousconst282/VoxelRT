@@ -106,7 +106,7 @@ ImagePtr Image::LoadFile(DeviceContext* ctx, std::string_view path, VkImageUsage
 ImagePtr Image::LoadFilePanoramaToCube(DeviceContext* ctx, std::string_view path, VkImageUsageFlags usage, Future* uploadSync) {
     int width, height;
     float* pixels = stbi_loadf(path.data(), &width, &height, nullptr, 3);
-    size_t dataSize = size_t(width) * size_t(height) * (4 * 3);
+    size_t dataSize = size_t(width) * size_t(height) * sizeof(float) * 3;
     uint32_t faceSize = uint32_t(width) / 4;
 
     ImagePtr cubeImage = ctx->CreateImage({
@@ -115,6 +115,7 @@ ImagePtr Image::LoadFilePanoramaToCube(DeviceContext* ctx, std::string_view path
         .Width = faceSize,
         .Height = faceSize,
         .NumLayers = 6,
+        .ViewType = VK_IMAGE_VIEW_TYPE_CUBE,
     });
     BufferPtr stageBuffer = ctx->CreateBuffer({
         .Size = dataSize,

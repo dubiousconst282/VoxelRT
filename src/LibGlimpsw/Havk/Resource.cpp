@@ -105,6 +105,12 @@ ImagePtr DeviceContext::CreateImage(const ImageDesc& desc) {
         .usage = VMA_MEMORY_USAGE_AUTO,
         .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
     };
+    VkImageViewType viewType = desc.ViewType != VK_IMAGE_VIEW_TYPE_MAX_ENUM
+                               ? desc.ViewType : GetViewType(desc.Type, desc.NumLayers >= 2);
+
+    if (viewType == VK_IMAGE_VIEW_TYPE_CUBE) {
+        imageCI.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    }
 
     auto image = Resource::make<Image>(this);
     image->Desc = desc;
@@ -115,7 +121,7 @@ ImagePtr DeviceContext::CreateImage(const ImageDesc& desc) {
     VkImageViewCreateInfo viewCI = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = image->Handle,
-        .viewType = GetViewType(desc.Type, desc.NumLayers >= 2),
+        .viewType = viewType,
         .format = desc.Format,
         .subresourceRange = {
             .aspectMask = GetAspectMask(desc.Format),

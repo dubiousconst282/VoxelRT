@@ -203,6 +203,7 @@ struct ImageDesc {
     uint32_t Width, Height, Depth = 1;
     uint32_t NumLayers = 1;
     uint32_t NumLevels = VK_REMAINING_MIP_LEVELS;
+    VkImageViewType ViewType = VK_IMAGE_VIEW_TYPE_MAX_ENUM; // MAX_ENUM = auto
 };
 
 struct Image final : Resource {

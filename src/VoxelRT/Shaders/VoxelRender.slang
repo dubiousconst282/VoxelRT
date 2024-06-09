@@ -57,8 +57,8 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
             irradiance += throughput * emission;
         }
     } else {
-        albedo = GetSkyColor(rayDir, true);
-        irradiance = float3(1.0);
+        albedo = float3(1.0);
+        irradiance = GetSkyColor(rayDir, true);
         depth = -1.0;
     }
 
@@ -73,10 +73,12 @@ void GetPrimaryRay(int2 screenPos, out float3 rayPos, out float3 rayDir) {
     rayDir = normalize(far.xyz / far.w);
 }
 
-//[SamplerDesc(MagFilter.Linear, MinFilter.Linear, MipFilter.Linear, WrapMode.Repeat, 1.0f, CompareOp.None)]
-//SamplerState g_LinearSampler;
+[vk::binding(0, 1)]
+[SamplerDesc(MagFilter.Linear, MinFilter.Linear, MipFilter.Linear, WrapMode.Repeat)]
+SamplerState g_LinearSampler;
 
 float3 GetSkyColor(float3 dir, bool isPrimary) {
-    return float3(0.2,0.6,1.0);
-    //return pc.SkyTexture.Instance.SampleLevel(g_LinearSampler, dir, isPrimary ? 0 : 3);
+    // return float3(0, 0, 1);
+    // For light bounces, sample smaller mips to maybe improve cache coherency.
+    return pc.SkyTexture.Instance.SampleLevel(g_LinearSampler, dir, isPrimary ? 0 : 3);
 }
