@@ -57,7 +57,7 @@ void Swapchain::Initialize() {
     uint32_t imageCount = SurfaceCaps.minImageCount;
     uint32_t maxImages = SurfaceCaps.maxImageCount;
 
-    if (imageCount < 2) imageCount = 2;
+    if (imageCount < 3) imageCount = 3;
     if (maxImages > 0 && imageCount > maxImages) imageCount = maxImages;
 
     VkSwapchainCreateInfoKHR swapchainCI = {

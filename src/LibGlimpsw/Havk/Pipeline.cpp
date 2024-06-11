@@ -12,11 +12,10 @@ void Pipeline::Bind(CommandList& cmdList) {
 
     auto bindPt = dynamic_cast<GraphicsPipeline*>(this) ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE;
     vkCmdBindPipeline(cmdList.Buffer, bindPt, Handle);
-    vkCmdBindDescriptorSets(cmdList.Buffer, bindPt, LayoutHandle, 0, 1, &Context->DescriptorHeap->Set, 0, nullptr);
 
-    if (SamplerDescriptors.Handle != nullptr) {
-        vkCmdBindDescriptorSets(cmdList.Buffer, bindPt, LayoutHandle, 1, 1, &SamplerDescriptors.Handle, 0, nullptr);
-    }
+    VkDescriptorSet sets[2] = { Context->DescriptorHeap->Set, SamplerDescriptors.Handle };
+    uint32_t numSets = (sets[1] != nullptr ? 2 : 1);
+    vkCmdBindDescriptorSets(cmdList.Buffer, bindPt, LayoutHandle, 0, numSets, sets, 0, nullptr);
 }
 Pipeline::~Pipeline() {
     Context->PipeBuilder->StopTracking(this);

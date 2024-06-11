@@ -333,7 +333,7 @@ struct CommandList {
                  VkAccessFlags dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
 
     // Barrier, layout transition, mark use.
-    ImageHandle GetDescriptorHandle(Image& image, UseBarrier barrier, VkImageLayout layout = VK_IMAGE_LAYOUT_MAX_ENUM);
+    ImageHandle GetDescriptorHandle(Image& image, UseBarrier barrier, VkImageLayout layout);
     VkDeviceAddress GetDeviceAddress(havk::Buffer& buffer, UseBarrier barrier);
 
     void UpdateBuffer(havk::Buffer& buffer, VkDeviceSize destOffset, uint32_t dataSize, const void* data) {
