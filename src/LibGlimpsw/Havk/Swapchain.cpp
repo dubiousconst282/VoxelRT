@@ -27,11 +27,6 @@ static VkPresentModeKHR SelectPresentMode(VkPhysicalDevice device, VkSurfaceKHR 
     vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, presentModes.data());
 
     for (const auto& mode : presentModes) {
-        if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
-            return mode;
-        }
-    }
-    for (const auto& mode : presentModes) {
         if (mode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
             return mode;
         }
@@ -59,12 +54,11 @@ void Swapchain::Initialize() {
     SurfaceFormat = SelectSurfaceFormat(device , Surface);
     PresentMode = SelectPresentMode(device , Surface);
 
-    uint32_t imageCount = SurfaceCaps.minImageCount + 1;
+    uint32_t imageCount = SurfaceCaps.minImageCount;
     uint32_t maxImages = SurfaceCaps.maxImageCount;
 
-    if (maxImages > 0 && imageCount > maxImages) {
-        imageCount = maxImages;
-    }
+    if (imageCount < 2) imageCount = 2;
+    if (maxImages > 0 && imageCount > maxImages) imageCount = maxImages;
 
     VkSwapchainCreateInfoKHR swapchainCI = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,

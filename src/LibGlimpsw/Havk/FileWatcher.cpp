@@ -72,7 +72,8 @@ struct FileWatcher::Impl {
             if (wd < 0) {
                 throw std::system_error(errno, std::generic_category(), "Failed to setup inotify");
             }
-            _subdirs.insert_or_assign(wd, path);
+            auto normPath = path != baseDir ? std::filesystem::relative(path, baseDir) : "";
+            _subdirs.insert_or_assign(wd, normPath);
         };
 
         WatchDir(baseDir);

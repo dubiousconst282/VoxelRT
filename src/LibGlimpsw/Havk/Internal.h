@@ -75,4 +75,30 @@ private:
     struct Impl;
     std::unique_ptr<Impl> _impl;
 };
+
+struct PipelineBuilder::HotReloadTracker {
+    FileWatcher SourceWatcher;
+    std::unordered_map<Pipeline*, PipelineSourceInfo> PipelineSources;
+
+    HotReloadTracker(const std::filesystem::path& basePath) : SourceWatcher(basePath) {}
+};
+struct PipelineBuilder::PipelineSourceInfo {
+    ShaderCompileParams CompilePars;
+    std::string MainSourceFile;
+    std::vector<std::filesystem::path> IncludedSourceFiles;
+    std::unique_ptr<GraphicsPipelineDesc> GraphicsDesc = nullptr;
+
+    bool IsRelatedFile(const std::filesystem::path& path) {
+        if (MainSourceFile == path) {
+            return true;
+        }
+        for (auto& includePath : IncludedSourceFiles) {
+            if (includePath == path) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 };

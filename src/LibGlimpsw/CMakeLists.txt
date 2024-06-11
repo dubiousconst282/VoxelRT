@@ -39,8 +39,15 @@ target_link_libraries(glimpsw PRIVATE
     assimp::assimp
     $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static> # wtf
     magic_enum::magic_enum
-    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libslang.so"
 )
+
+# TODO: fix fucking vcpkg port
+if(CMAKE_HOST_LINUX)
+    target_link_libraries(glimpsw PRIVATE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libslang.so")
+else()
+    target_link_libraries(glimpsw PRIVATE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/slang.lib")
+endif()
+
 
 target_link_libraries(glimpsw PUBLIC
     ${Vulkan_LIBRARIES}

@@ -7,6 +7,7 @@
 #include <string>
 #include <filesystem>
 #include <vector>
+#include <source_location>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -373,6 +374,11 @@ struct Pipeline : Resource {
             vkCmdPushConstants(cmdList.Buffer, LayoutHandle, VK_SHADER_STAGE_ALL, 0, pc.Size, pc.Ptr);
         }
     }
+
+private:
+    friend void MoveHandles(Pipeline* dest, Pipeline* src); // hot reload
+    
+    void Destroy();
 };
 
 // Blittable with VkDrawIndirectCommand. Only exists for more sensible defaults and naming.
@@ -459,19 +465,34 @@ struct PipelineBuilder {
     PipelineBuilder(DeviceContext* ctx, const std::filesystem::path& basePath, bool enableHotReload);
     ~PipelineBuilder();
 
-    GraphicsPipelinePtr CreateGraphics(const std::string& shaderFilename, const GraphicsPipelineDesc& desc, const ShaderCompileParams& compilePars = {});
-    ComputePipelinePtr CreateCompute(const std::string& shaderFilename, const ShaderCompileParams& compilePars = {});
+    GraphicsPipelinePtr CreateGraphics(const std::string& shaderFilename, const GraphicsPipelineDesc& desc,
+                                       const ShaderCompileParams& compilePars = {},
+                                       const std::source_location& debugLoc = std::source_location::current());
+
+    ComputePipelinePtr CreateCompute(const std::string& shaderFilename, const ShaderCompileParams& compilePars = {},
+                                     const std::source_location& debugLoc = std::source_location::current());
 
     ShaderCompileResult Compile(std::string_view filename, const ShaderCompileParams& compilePars = {});
 
 private:
     friend DeviceContext;
+    friend Pipeline;
+
+    struct HotReloadTracker;
+    struct PipelineSourceInfo;
+
+    std::unique_ptr<HotReloadTracker> _reloadTracker = nullptr;
+    void* _slangSession = nullptr;  // IGlobalSession* - this is void* to avoid leaking slang.h
 
     // Check compile result and move handles to pipeline.
-    void InitPipeline(Pipeline* pl, ShaderCompileResult& shader);
+    void InitPipeline(Pipeline* pl, ShaderCompileResult& shader,
+                      const ShaderCompileParams& compilePars,
+                      const GraphicsPipelineDesc* graphicsDesc);
 
     void Refresh();
-    void CreateDescriptorHeap();
+
+    // Called by pipeline destructor.
+    void StopTracking(Pipeline* pl);
 };
 
 namespace BlendingModes {

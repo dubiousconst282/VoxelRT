@@ -19,6 +19,14 @@ void Pipeline::Bind(CommandList& cmdList) {
     }
 }
 Pipeline::~Pipeline() {
+    Context->PipeBuilder->StopTracking(this);
+    Destroy();
+}
+void Pipeline::Destroy() {
+    // Hot-reload will create a new pipeline and move its fields to
+    // the existing one, so we should do nothing here. See MoveHandles()
+    if (Handle == nullptr) return;
+
     Context->SamplerDescPool->DestroySet(SamplerDescriptors);
 
     vkDestroyPipelineLayout(Context->Device, LayoutHandle, nullptr);
@@ -30,7 +38,7 @@ PipelineBuilder::PipelineBuilder(DeviceContext* ctx, const std::filesystem::path
     BasePath = basePath;
 
     if (enableHotReload) {
-        _watcher = std::make_unique<FileWatcher>(BasePath);
+        _reloadTracker = std::make_unique<HotReloadTracker>(basePath);
     }
     slang::createGlobalSession((slang::IGlobalSession**)&_slangSession);
 }
@@ -40,10 +48,10 @@ PipelineBuilder::~PipelineBuilder() {
 }
 
 GraphicsPipelinePtr PipelineBuilder::CreateGraphics(const std::string& shaderFilename, const GraphicsPipelineDesc& desc,
-                                                    const ShaderCompileParams& compilePars) {
+                                                    const ShaderCompileParams& compilePars, const std::source_location& debugLoc) {
     ShaderCompileResult shader = Compile(shaderFilename, compilePars);
     auto pipe = Resource::make<GraphicsPipeline>(Context);
-    InitPipeline(pipe.get(), shader);
+    InitPipeline(pipe.get(), shader, compilePars, & desc);
 
     // Vertex input should be implemented via vertex pulling - death to fixed function pipeline.
     VkPipelineVertexInputStateCreateInfo vertexInputCI = {
@@ -136,10 +144,11 @@ GraphicsPipelinePtr PipelineBuilder::CreateGraphics(const std::string& shaderFil
     return pipe;
 }
 
-ComputePipelinePtr PipelineBuilder::CreateCompute(const std::string& shaderFilename, const ShaderCompileParams& compilePars) {
+ComputePipelinePtr PipelineBuilder::CreateCompute(const std::string& shaderFilename, const ShaderCompileParams& compilePars,
+                                                  const std::source_location& debugLoc) {
     ShaderCompileResult shader = Compile(shaderFilename, compilePars);
     auto pipe = Resource::make<ComputePipeline>(Context);
-    InitPipeline(pipe.get(), shader);
+    InitPipeline(pipe.get(), shader, compilePars, nullptr);
 
     VkComputePipelineCreateInfo pipelineCI = {
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -148,10 +157,20 @@ ComputePipelinePtr PipelineBuilder::CreateCompute(const std::string& shaderFilen
     };
     VK_CHECK(vkCreateComputePipelines(Context->Device, Cache, 1, &pipelineCI, nullptr, &pipe->Handle));
 
+    // TODO:
+    // VkDebugUtilsObjectNameInfoEXT nameInfo = {
+    //     .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+    //     .objectType = VK_OBJECT_TYPE_PIPELINE,
+    //     .objectHandle = (uint64_t)pipe->Handle,
+    //     .pObjectName = debugLoc.file_name()
+    // };
+    // vkSetDebugUtilsObjectNameEXT(Context->Device, &nameInfo);
+
     return pipe;
 }
 
-void PipelineBuilder::InitPipeline(Pipeline* pl, ShaderCompileResult& shader) {
+void PipelineBuilder::InitPipeline(Pipeline* pl, ShaderCompileResult& shader, const ShaderCompileParams& compilePars,
+                                   const GraphicsPipelineDesc* graphicsDesc) {
     if (!shader.InfoLog.empty()) {
         auto level = shader.Success ? LogLevel::Debug : LogLevel::Error;
         pl->Context->Log(level, "Compile log for shader '%s':\n'%s'", shader.SourceFile.data(), shader.InfoLog.data());
@@ -167,16 +186,67 @@ void PipelineBuilder::InitPipeline(Pipeline* pl, ShaderCompileResult& shader) {
     pl->SamplerDescriptors = shader.SamplerDescriptors;
     shader.Layout = nullptr;  // take ownership
 
+    if (_reloadTracker != nullptr) {
+        PipelineSourceInfo& srcInfo = _reloadTracker->PipelineSources[pl];
+        srcInfo = {
+            .CompilePars = compilePars,
+            .MainSourceFile = shader.SourceFile,
+        };
+        if (graphicsDesc != nullptr) {
+            srcInfo.GraphicsDesc = std::make_unique<GraphicsPipelineDesc>(*graphicsDesc);
+        }
+        for (auto& path : shader.IncludedFiles) {
+            srcInfo.IncludedSourceFiles.push_back(path);
+        }
+    }
+}
+
+void PipelineBuilder::StopTracking(Pipeline* pl) {
+    if (_reloadTracker == nullptr) return;
+
+    _reloadTracker->PipelineSources.erase(pl);
+}
+
+void MoveHandles(Pipeline* dest, Pipeline* src) {
+    dest->Context->WaitDeviceIdle();
+    dest->Destroy();
+
+    dest->Handle = src->Handle;
+    dest->LayoutHandle = src->LayoutHandle;
+    dest->SamplerDescriptors = src->SamplerDescriptors;
+
+    // Reset the new pipeline so that the native handles aren't freed by destructor.
+    src->Handle = nullptr;
+    src->LayoutHandle = nullptr;
+    src->SamplerDescriptors.Handle = nullptr;
+}
+
 void PipelineBuilder::Refresh() {
-    if (_watcher == nullptr) return;
+    if (_reloadTracker == nullptr) return;
 
     std::vector<std::filesystem::path> changedFiles;
-    _watcher->PollChanges(changedFiles);
+    _reloadTracker->SourceWatcher.PollChanges(changedFiles);
 
-    for (auto& filePath : changedFiles) {
-        for (auto& pipeline : _trackedPipelines) {
-            if (pipeline.IncludedFiles.contains(filePath.string())) {
-                // Recompile(shader);
+    // This could be optimized using unordered_multimap, but for now this should be fine.
+    for (auto& path : changedFiles) {
+        for (auto& [pl, src] : _reloadTracker->PipelineSources) {
+            if (!src.IsRelatedFile(path)) continue;
+
+            Context->Log(LogLevel::Debug, "Hot-reloading pipeline '%s'", path.string().c_str());
+            try {
+                if (dynamic_cast<ComputePipeline*>(pl)) {
+                    auto newPl = CreateCompute(src.MainSourceFile, src.CompilePars);
+                    MoveHandles(pl, newPl.get());
+                    StopTracking(newPl.get());
+                } else if (dynamic_cast<GraphicsPipeline*>(pl)) {
+                    auto newPl = CreateGraphics(src.MainSourceFile, *src.GraphicsDesc, src.CompilePars);
+                    MoveHandles(pl, newPl.get());
+                    StopTracking(newPl.get());
+                } else {
+                    Context->Log(LogLevel::Debug, "...don't actually know how to reload this pipeline type.");
+                }
+            } catch (std::exception& ex) {
+                Context->Log(LogLevel::Error, "Hot-reloading failed due to compile error:\n%s", ex.what());
             }
         }
     }
@@ -189,7 +259,7 @@ static void ParseConstSampler(DeviceContext* ctx, slang::UserAttribute* attr, Vk
 ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const ShaderCompileParams& pars) {
     Context->Log(LogLevel::Debug, "Begin compile shader '%s'", filename.data());
     ShaderCompileResult result(Context->Device);
-    result.Filename = filename;
+    result.SourceFile = filename;
 
     auto globalSession = (slang::IGlobalSession*)_slangSession;
 
@@ -321,7 +391,7 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
                 uint32_t index = par->getBindingIndex();
                 uint32_t space = par->getBindingSpace() + par->getOffset(SLANG_PARAMETER_CATEGORY_SUB_ELEMENT_REGISTER_SPACE);
 
-                Context->Log(LogLevel::Trace, "Par '%s' %d: %d-%d", par->getName(), typeLayout->getKind(), index, space);
+                // Context->Log(LogLevel::Trace, "Par '%s' %d: %d-%d", par->getName(), typeLayout->getKind(), index, space);
 
                 if (typeLayout->getKind() == slang::TypeReflection::Kind::SamplerState) {
                     assert(space == 1);
@@ -379,11 +449,10 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
         vkDestroyDescriptorSetLayout(Context->Device, descLayouts[1], nullptr);
     }
 
-    if (_watcher != nullptr) {
-        for (int32_t i = 0; i < session->getLoadedModuleCount(); i++) {
-            slang::IModule* loadedModule = session->getLoadedModule(i);
-            Context->Log(LogLevel::Trace, "Shader '%s' loads '%s'", filename.data(), loadedModule->getFilePath());
-        }
+    for (int32_t i = 0; i < session->getLoadedModuleCount(); i++) {
+        slang::IModule* loadedModule = session->getLoadedModule(i);
+        auto path = std::filesystem::relative(loadedModule->getFilePath(), BasePath);
+        result.IncludedFiles.push_back(path.string());
     }
 
     result.Success = true;
