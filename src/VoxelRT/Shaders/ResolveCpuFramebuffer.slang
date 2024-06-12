@@ -36,4 +36,5 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
 
     pc.GBuffer->AlbedoTex.Instance[pos] = float4(albedo, PackGNormal(normal));
     pc.GBuffer->IrradianceTex.Instance[pos] = float4(irradiance, 0);
+    pc.GBuffer->DepthTex.Instance[pos] = depth;
 }

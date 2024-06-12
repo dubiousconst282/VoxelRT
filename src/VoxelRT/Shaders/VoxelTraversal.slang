@@ -21,7 +21,6 @@ public struct HitInfo {
     public float3 Normal;
     public float2 FaceUV;
     public Material Material;
-    public uint Iters;
 };
 
 public bool RayCast(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir, out HitInfo hit) {
@@ -47,7 +46,7 @@ public bool RayCast(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir, o
         voxelPos = voxelOrigin + int3(floor(currPos));
 
         if (!map.CheckBounds(voxelPos)) {
-            hit.Iters = i;
+            hit = HitInfo();
             return false;
         }
         if (!GetStepPos(map, voxelPos, dir, false)) {
@@ -58,7 +57,6 @@ public bool RayCast(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir, o
             bool3 sideMask = float3(tmin) >= sideDist;
             hit.FaceUV = fract(select(sideMask.xz, currPos.yy, currPos.xz));
             hit.Normal = select(sideMask, -sign(dir), 0.0);
-            hit.Iters = i;
             return true;
         }
     }
@@ -84,7 +82,7 @@ public bool RayCastCoarse(VoxelMap map, int3 voxelOrigin, float3 origin, float3 
         bool coarse = i > 30; // distance(floor(currPos), origin) > 50;
 
         if (!map.CheckBounds(voxelPos)) {
-            hit.Iters = i;
+            hit = HitInfo();
             return false;
         }
         if (!GetStepPos(map, voxelPos, dir, coarse)) {
@@ -95,7 +93,6 @@ public bool RayCastCoarse(VoxelMap map, int3 voxelOrigin, float3 origin, float3 
             bool3 sideMask = float3(tmin) >= sideDist;
             hit.FaceUV = fract(select(sideMask.xz, currPos.yy, currPos.xz));
             hit.Normal = select(sideMask, -sign(dir), 0.0);
-            hit.Iters = i;
             return true;
         }
     }
@@ -126,7 +123,7 @@ bool GetStepPos(VoxelMap map, inout int3 ipos, float3 dir, bool coarse) {
 
     // Mask optimization
     uint dirOctant = (dir.x < 0 ? 0 : 1) + (dir.y < 0 ? 0 : 2) + (dir.z < 0 ? 0 : 4);
-    occMask &= RayMaskOptimizationLUT[maskIdx + dirOctant * 64];
+    //occMask &= RayMaskOptimizationLUT[maskIdx + dirOctant * 64];
 
     int lod = GetIsotropicLOD(occMask, maskIdx) * scale;
 

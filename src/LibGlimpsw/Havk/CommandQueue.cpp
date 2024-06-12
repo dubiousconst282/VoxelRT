@@ -8,7 +8,7 @@ void CommandList::BeginRendering(const RenderingTarget& targets, bool setViewpor
 
     auto PushAttachment = [&](VkRenderingAttachmentInfo const** destListPtr, const AttachmentInfo& info, VkImageAspectFlags aspect) {
         TransitionLayout(*info.Target, VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, aspect,
-                         info.LoadOp != VK_ATTACHMENT_LOAD_OP_CLEAR);
+                         info.LoadOp == VK_ATTACHMENT_LOAD_OP_CLEAR || info.LoadOp == VK_ATTACHMENT_LOAD_OP_DONT_CARE);
 
         attachInfos.push_back({
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,

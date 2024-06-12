@@ -46,7 +46,7 @@ struct GBuffer {
     GBuffer(havk::DeviceContext* ctx) {
         Context = ctx;
 
-        //ReprojShader = ctx->PipeBuilder->CreateCompute("Denoise/Reproject.slang");
+        ReprojShader = ctx->PipeBuilder->CreateCompute("Denoise/Reproject.slang");
         // FilterShader = ctx->PipeBuilder->CreateCompute("Denoise/Filter.slang");
         PresentShader = ctx->PipeBuilder->CreateGraphics("GBufferBlit.slang", {
             .EnableDepthTest = false,
@@ -64,13 +64,15 @@ struct GBuffer {
             RenderSize = renderSize;
 
             const auto CreateImage = [&](VkFormat format) {
-                return Context->CreateImage({
+                havk::ImagePtr image = Context->CreateImage({
                     .Format = format,
                     .Usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                     .Width = renderSize.x,
                     .Height = renderSize.y,
                     .NumLevels = 1,
                 });
+                cmds.TransitionLayout(*image, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                return image;
             };
 
             AlbedoTex = CreateImage(VK_FORMAT_R8G8B8A8_UNORM);
@@ -133,12 +135,20 @@ struct GBuffer {
     void Resolve(havk::Image* target, havk::CommandList& cmds) {
         uint32_t groupsX = (RenderSize.x + 7) / 8;
         uint32_t groupsY = (RenderSize.y + 7) / 8;
-/*
-        if (DebugChannelView != DebugChannel::TraversalIters) {
-            SetUniforms(*ReprojShader);
-            ReprojShader->DispatchCompute(groupsX, groupsY, 1);
 
-            if (NumDenoiserPasses > 0) {
+        if (DebugChannelView != DebugChannel::TraversalIters) {
+            struct ReprojParams {
+                VkDeviceAddress GBuffer;
+                bool ForceResetHistory;
+            };
+            ReprojParams pc = {
+                .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::ComputeRead),
+                .ForceResetHistory = false,
+            };
+            cmds.GetDescriptorHandle(*AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
+            ReprojShader->Dispatch(cmds, { groupsX, groupsY, 1 }, pc);
+
+            /*if (NumDenoiserPasses > 0) {
                 // Variance estimation
                 SetUniforms(*FilterShader);
                 FilterShader->SetUniform("u_PassNo", -1);
@@ -164,19 +174,19 @@ struct GBuffer {
                 if (NumDenoiserPasses % 2 != 0) {
                     std::swap(TempIrradianceTex, IrradianceTex);
                 }
-            }
-        }*/
+            }*/
+        }
 
         // Blit to screen
-        struct PresentConstants {
+        struct PresentParams {
             VkDeviceAddress GBuffer;
             DebugChannel Channel;
         };
-        PresentConstants pc = {
+        PresentParams pc = {
             .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::GraphicsRead),
             .Channel = DebugChannelView,
         };
-        cmds.GetDescriptorHandle(*AlbedoTex, havk::UseBarrier::GraphicsRead);
+        cmds.GetDescriptorHandle(*AlbedoTex, havk::UseBarrier::GraphicsRead, VK_IMAGE_LAYOUT_GENERAL);
 
         cmds.BeginRendering({ .Attachments = { { .Target = target, .LoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE } } }, true);
         PresentShader->Draw(cmds, { .NumVertices = 3 }, pc);

@@ -344,7 +344,7 @@ int main(int argc, char** args) {
 
             ImGui::Render();
 
-            cmdList.BeginRendering({ .Attachments = { { .Target = image, .LoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE } } });
+            cmdList.BeginRendering({ .Attachments = { { .Target = image, .LoadOp = VK_ATTACHMENT_LOAD_OP_LOAD } } });
             cmdList.SetViewport({ 0, 0, (float)image->Desc.Width, (float)image->Desc.Height, 0, +1 });
             cmdList.SetScissor({ { 0, 0 }, { image->Desc.Width, image->Desc.Height } });
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmdList.Buffer);

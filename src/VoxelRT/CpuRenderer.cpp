@@ -467,7 +467,7 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
         .TileShiftX = (uint32_t)std::countr_zero(simd::TileWidth),
         .TileShiftY = (uint32_t)std::countr_zero(simd::TileHeight),
     };
-    cmds.GetDescriptorHandle(*_gbuffer->AlbedoTex, havk::UseBarrier::ComputeReadWrite);
+    cmds.GetDescriptorHandle(*_gbuffer->AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
 
     uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
     _blitShader->Dispatch(cmds, { groupsX, groupsY, 1 }, pc);

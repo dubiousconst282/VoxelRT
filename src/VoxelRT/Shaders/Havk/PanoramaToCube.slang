@@ -26,18 +26,18 @@ float3 UnprojectCubemap(float2 uv, uint faceIdx) {
     }
 }
 
-float3 FetchLerpRow(int2 pos, float fx) {
+float3 FetchLerpRow(uint2 pos, float fx) {
     uint offset = pos.y * pc.SourceImageSize.x;
-
     float3 a = pc.SourceImage[offset + pos.x];
     float3 b = pc.SourceImage[offset + (pos.x + 1 >= pc.SourceImageSize.x ? 0 : pos.x + 1)];
 
     return lerp(a, b, fx);
 }
 float3 GetSourceSample(float2 uv) {
-    int2 ipos = int2(floor(uv * pc.SourceImageSize - 0.5));
+    uint2 ipos = uint2(floor(uv * pc.SourceImageSize - 0.5));
     float2 fpos = fract(uv * pc.SourceImageSize - 0.5);
 
+    ipos.y = min(ipos.y, pc.SourceImageSize.y - 1);
     float3 rowA = FetchLerpRow(ipos, fpos.x);
 
     ipos.y = (ipos.y + 1 >= pc.SourceImageSize.y ? 0 : ipos.y + 1);
