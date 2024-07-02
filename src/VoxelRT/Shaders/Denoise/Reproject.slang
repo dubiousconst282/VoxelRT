@@ -1,10 +1,11 @@
+import Havk.Core;
 import GBuffer;
+
 import DenoiseCommon;
 
 struct DispatchParams {
     GBufferUniforms* GBuffer;
     bool ForceResetHistory;
-    uint padding;
 };
 [vk::push_constant] DispatchParams pc;
 

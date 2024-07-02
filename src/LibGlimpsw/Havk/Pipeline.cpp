@@ -264,6 +264,7 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
 
     std::vector<slang::CompilerOptionEntry> opts;
     opts.push_back({ slang::CompilerOptionName::DebugInformation, { .intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL } });
+    opts.push_back({ slang::CompilerOptionName::Optimization, { .intValue0 = SLANG_OPTIMIZATION_LEVEL_NONE } });
     opts.push_back({ slang::CompilerOptionName::Capability, { .intValue0 =  globalSession->findCapability("spirv_1_6") } });
 
     std::string basePath = BasePath.string();
@@ -382,7 +383,9 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
                     result.AppendLog("error: only a single push constant parameter is supported.");
                     return result;
                 }
-                pcRange.size = typeLayout->getElementTypeLayout()->getSize();
+                // sizeof(T) includes padding, so we want the strided type size.
+                pcRange.size = typeLayout->getElementTypeLayout()->getStride();
+
                 Context->Log(LogLevel::Trace, "PC '%s': %d bytes", par->getName(), pcRange.size);
                 break;
             }

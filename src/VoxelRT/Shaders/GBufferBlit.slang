@@ -8,7 +8,6 @@ enum DebugChannel { None, Albedo, Irradiance, Normals, TraversalIters, Variance 
 struct DispatchParams {
     GBufferUniforms* GBuffer;
     DebugChannel Channel;
-    uint padding;
 };
 [vk::push_constant] DispatchParams pc;
 

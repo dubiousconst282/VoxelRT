@@ -14,7 +14,6 @@ add_library(
     Havk/Pipeline.cpp
     Havk/FileWatcher.cpp
     Havk/ImageIO.cpp
-    Havk/SpirvPatcher.cpp
 )
 target_include_directories(
     glimpsw PUBLIC
@@ -63,6 +62,3 @@ target_compile_definitions(glimpsw PUBLIC
     GLM_FORCE_XYZW_ONLY
 )
 target_include_directories(glimpsw PRIVATE ${Stb_INCLUDE_DIR})
-
-find_path(SPIRV_HEADERS_INCLUDE_DIRS "/spirv/1.0/GLSL.std.450.h")
-target_include_directories(glimpsw PRIVATE ${SPIRV_HEADERS_INCLUDE_DIRS})

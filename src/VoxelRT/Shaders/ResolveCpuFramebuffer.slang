@@ -6,7 +6,6 @@ struct DispatchParams {
     
     uint Width, Height, Stride;
     uint TileShiftX, TileShiftY;
-    uint padding;
     
     uint GetPixelOffset(uint2 pos) {
         uint FieldStride = 1u << (TileShiftX + TileShiftY);

@@ -7,7 +7,6 @@ struct DispatchParams {
     float3* SourceImage; // RGB32
     uint2 SourceImageSize;
     ImageHandleArray2D<float3> DestCube;
-    uint padding;
 };
 [vk::push_constant] DispatchParams pc;
 
