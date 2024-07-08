@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 #include <map>
+#include <unordered_map>
+#include <string_view>
 
 #include <glm/glm.hpp>
-
-#include <Common/Scene.h>
+#include <SwRast/SIMD.h>
 
 struct Voxel {
     uint8_t Data = 0;
@@ -217,7 +219,7 @@ struct VoxelMap {
     void Deserialize(std::string_view filename);
     void Serialize(std::string_view filename);
 
-    void VoxelizeModel(const glim::Model& model, glm::uvec3 pos, glm::uvec3 size);
+    void VoxelizeModel(std::string_view modelPath, glm::uvec3 pos, glm::uvec3 size);
 
     // Iterates over bricks within the specified region (in voxel coords).
     template<typename F>

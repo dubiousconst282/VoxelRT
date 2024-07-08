@@ -33,13 +33,11 @@ public:
         } catch (std::exception& ex) {
             std::cout << "Failed to load voxel map cache: " << ex.what() << std::endl;
 
-            auto model = glim::Model("assets/models/Sponza/Sponza.gltf");
-            // auto model = glim::Model("../SwRastCPP/logs/assets/models/Bistro_GLTF/BistroExterior.gltf");
-            // auto model = glim::Model("logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf");
-            // auto model = glim::Model("logs/assets/models/DamagedHelmet/DamagedHelmet.gltf");
+            auto model = "assets/models/Sponza/Sponza.gltf";
+            // auto model = "../GraphicsAssets/Bistro.glb";
+            // auto model = "logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf";
 
-            _map->VoxelizeModel(model, glm::uvec3(0), glm::uvec3(2048));
-
+            _map->VoxelizeModel(model, glm::uvec3(0), glm::uvec3(4096));
             _map->Serialize("logs/voxels_2k_sponza.dat");
         }
 

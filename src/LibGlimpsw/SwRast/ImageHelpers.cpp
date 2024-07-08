@@ -27,6 +27,23 @@ StbImage StbImage::Load(std::string_view path, PixelType type) {
     };
 }
 
+StbImage StbImage::LoadFromMemory(const uint8_t* data, size_t size, PixelType type) {
+    int width, height;
+    uint8_t* pixels = type == PixelType::RGBA_U8 ? (uint8_t*)stbi_load_from_memory(data, size, &width, &height, nullptr, 4) :
+                      type == PixelType::RGB_F32 ? (uint8_t*)stbi_loadf_from_memory(data, size, &width, &height, nullptr, 3) :
+                                                   nullptr;
+
+    if (pixels == nullptr) {
+        throw std::runtime_error("Failed to load image");
+    }
+    return {
+        .Width = (uint32_t)width,
+        .Height = (uint32_t)height,
+        .Type = type,
+        .Data = { pixels, stbi_image_free },
+    };
+}
+
 StbImage StbImage::Create(uint32_t width, uint32_t height) {
     return {
         .Width = width,

@@ -3,7 +3,6 @@ add_library(
 
     SwRast/ImageHelpers.cpp
 
-    Common/Scene.cpp
     Common/SettingStore.cpp
     Common/BinaryIO.cpp
 
@@ -30,13 +29,11 @@ find_package(imgui CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 
-find_package(assimp CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(magic_enum CONFIG REQUIRED)
 
 target_link_libraries(glimpsw PRIVATE
-    assimp::assimp
-    $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static> # wtf
+    $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>
     magic_enum::magic_enum
 )
 

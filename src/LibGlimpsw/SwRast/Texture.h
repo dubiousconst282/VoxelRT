@@ -222,6 +222,7 @@ struct StbImage {
 
     static StbImage Create(uint32_t width, uint32_t height);
     static StbImage Load(std::string_view path, PixelType type = PixelType::RGBA_U8);
+    static StbImage LoadFromMemory(const uint8_t* data, size_t size, PixelType type = PixelType::RGBA_U8);
 
     // Assumes `Type == RGBA_U8`
     void SavePng(std::string_view path);

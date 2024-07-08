@@ -2,3 +2,8 @@
 	path = deps/FastNoise2
 	url = https://github.com/Auburn/FastNoise2
 	shallow = true
+
+[submodule "deps/fastgltf"]
+	path = deps/fastgltf
+	url = https://github.com/spnda/fastgltf
+	shallow = true

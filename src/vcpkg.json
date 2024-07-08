@@ -7,7 +7,6 @@
         "glfw3",
         "glm",
         "stb",
-        "assimp",
         "zstd",
         "magic-enum"
     ]
