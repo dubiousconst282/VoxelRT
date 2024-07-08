@@ -58,16 +58,16 @@ uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) 
         glm::ivec3 brickPos = sectorPos * MaskIndexer::Size + MaskIndexer::GetPos(i);
         bool isNonEmpty = false;
 
-        brick->DispatchSIMD([&](VoxelDispatchInvocationPars& p) {
-            VFloat noise = VFloat::gather<4>(noiseBuffer.get(), (p.X & 31) + (p.Y & 31) * 32 + (p.Z & 31) * (32 * 32));
+        brick->DispatchSIMD([&](VInt3 pos, VInt& voxelIds) {
+            VFloat noise = VFloat::gather<4>(noiseBuffer.get(), (pos.x & 31) + (pos.y & 31) * 32 + (pos.z & 31) * (32 * 32));
             VMask fillMask = noise < 0.0;
             VInt grassId = 245 + (simd::trunc2i(noise * 1234.5678) & 3); // 4 random grass variants. no, it doesn't look good.
-            p.VoxelIds = simd::csel(fillMask, grassId, 0);
+            voxelIds = simd::csel(fillMask, grassId, 0);
 
-            VFloat3 treePos = VFloat3(simd::conv2f(p.X - 256), simd::conv2f(p.Y - 112), simd::conv2f(p.Z - 256)) * (1/64.0) + 0.5;
-            TreeSDF(treePos, p.VoxelIds);
+            VFloat3 treePos = VFloat3(simd::conv2f(pos.x - 256), simd::conv2f(pos.y - 112), simd::conv2f(pos.z - 256)) * (1/64.0) + 0.5;
+            TreeSDF(treePos, voxelIds);
 
-            isNonEmpty |= simd::any(p.VoxelIds != 0);
+            isNonEmpty |= simd::any(voxelIds != 0);
             return true;
         }, brickPos);
 
