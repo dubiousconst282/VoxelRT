@@ -13,8 +13,10 @@ public struct GBufferUniforms {
     public float4x4 HistoryProjMat, HistoryInvProjMat;
     public float3 OriginFrac, HistoryOriginFrac;
     public float3 OriginDelta;
+    public int3 WorldOrigin;
     public uint FrameNo;
-
+    public uint NumSteadyFrames;
+    
     public property uint2 RenderSize {
         [__ref]
         get {

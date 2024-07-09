@@ -15,7 +15,9 @@ struct GBufferUniforms {
     glm::mat4 HistoryProjMat, HistoryInvProjMat;
     glm::vec3 OriginFrac, HistoryOriginFrac;
     glm::vec3 OriginDelta;
+    glm::ivec3 WorldOrigin;
     uint32_t FrameNo;
+    uint32_t NumSteadyFrames;
 };
 
 struct GBuffer {
@@ -35,7 +37,7 @@ struct GBuffer {
 
     glm::mat4 CurrentProj, HistoryProj;
     glm::dvec3 CurrentPos, HistoryPos;
-    uint32_t FrameNo = 0;
+    uint32_t FrameNo = 0, NumSteadyFrames = 0;
 
     DebugChannel DebugChannelView = DebugChannel::None;
     uint32_t NumDenoiserPasses = 5;
@@ -101,11 +103,10 @@ struct GBuffer {
         std::swap(MomentsTex, PrevMomentsTex);
         FrameNo++;
 
-        // ReprojShader->SetUniform("u_ForceResetHistory", resetHistory);
-        WriteUniforms(cmds, *UniformBuffer);
+        WriteUniforms(cmds, *UniformBuffer, resetHistory);
     }
 
-    void WriteUniforms(havk::CommandList& cmds, havk::Buffer& buffer) {
+    void WriteUniforms(havk::CommandList& cmds, havk::Buffer& buffer, bool resetHistory) {
         GBufferUniforms u;
 
         u.AlbedoTex = AlbedoTex->DescriptorHandle;
@@ -127,7 +128,15 @@ struct GBuffer {
         u.OriginFrac = glm::vec3(glm::fract(CurrentPos));
         u.HistoryOriginFrac = glm::vec3(glm::fract(HistoryPos));
         u.OriginDelta = glm::vec3(CurrentPos - HistoryPos);
+        u.WorldOrigin = glm::floor(CurrentPos);
         u.FrameNo = FrameNo;
+
+        glm::vec4 posA = u.InvProjMat * glm::vec4(1.0);
+        glm::vec4 posB = u.HistoryInvProjMat * glm::vec4(1.0);
+        float moveDist = glm::length(glm::abs(glm::vec3(posA) - glm::vec3(posB)) + glm::abs(u.OriginDelta));
+
+        NumSteadyFrames = resetHistory || moveDist > 0.001 ? 0 : NumSteadyFrames + 1;
+        u.NumSteadyFrames = NumSteadyFrames;
 
         cmds.UpdateBuffer(buffer, 0, sizeof(GBufferUniforms), &u);
     }
@@ -139,11 +148,9 @@ struct GBuffer {
         if (DebugChannelView != DebugChannel::TraversalIters) {
             struct ReprojParams {
                 VkDeviceAddress GBuffer;
-                bool ForceResetHistory;
             };
             ReprojParams pc = {
-                .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::ComputeRead),
-                .ForceResetHistory = false,
+                .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::ComputeRead)
             };
             cmds.Barrier(*AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
             ReprojShader->Dispatch(cmds, { groupsX, groupsY, 1 }, pc);
@@ -202,15 +209,7 @@ struct GBuffer {
         glm::mat4 invProj = glm::inverse(mat);
         invProj = glm::translate(invProj, glm::vec3(-1.0f, -1.0f, 0.0f));
         invProj = glm::scale(invProj, glm::vec3(2.0f / viewSize.x, 2.0f / viewSize.y, 1.0f));
-        invProj = glm::translate(invProj, glm::vec3(0.5f, 0.5f, 0.0f)); // offset to pixel center
+        //invProj = glm::translate(invProj, glm::vec3(0.5f, 0.5f, 0.0f)); // offset to pixel center
         return invProj;
     }
-
-    // Temporal anti-alias sub-pixel jitter offsets - Halton(2, 3)
-    static inline const glm::vec2 Halton23[16] = {
-        { 0.50000, 0.33333 }, { 0.25000, 0.66667 }, { 0.75000, 0.11111 }, { 0.12500, 0.44444 },  //
-        { 0.62500, 0.77778 }, { 0.37500, 0.22222 }, { 0.87500, 0.55556 }, { 0.06250, 0.88889 },  //
-        { 0.56250, 0.03704 }, { 0.31250, 0.37037 }, { 0.81250, 0.70370 }, { 0.18750, 0.14815 },  //
-        { 0.68750, 0.48148 }, { 0.43750, 0.81481 }, { 0.93750, 0.25926 }, { 0.03125, 0.59259 },
-    };
 };

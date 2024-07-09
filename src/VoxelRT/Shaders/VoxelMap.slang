@@ -1,9 +1,9 @@
 public struct VoxelStorage {
-    Material Palette[256];
-    uint BaseSlots[VoxelMap.NUM_SECTORS];
-    uint64_t BrickMasks[VoxelMap.NUM_SECTORS];
-    uint64_t SectorMasks[VoxelMap.NUM_SECTORS / 64];
-    uint8_t BrickVoxelData[];
+    public Material Palette[256];
+    public uint BaseSlots[VoxelMap.NUM_SECTORS];
+    public uint64_t BrickMasks[VoxelMap.NUM_SECTORS];
+    public uint64_t SectorMasks[VoxelMap.NUM_SECTORS / 64];
+    public uint8_t BrickVoxelData[];
 };
 
 public struct VoxelMap {
@@ -39,7 +39,7 @@ public struct VoxelMap {
         uint64_t allocMask = Storage->BrickMasks[sectorIdx];
 
         if ((allocMask >> brickIdx & 1) != 0) {
-            return Storage->BaseSlots[sectorIdx] + PopCntVar64(allocMask, brickIdx);
+            return Storage->BaseSlots[sectorIdx] + popcnt_var64(allocMask, brickIdx);
         }
         return none;
     }
@@ -56,17 +56,21 @@ public struct VoxelMap {
         return Storage->SectorMasks[GetLinearIndex(sectorPos / 4, NUM_SECTORS_XZ / 4, NUM_SECTORS_Y / 4)];
     }
 
-    public Material GetVoxelMaterial(uint3 pos) {
+    public uint GetVoxelId(uint3 pos) {
         Optional<uint> brickSlot = GetBrickDataSlot(pos / 8);
         if (!brickSlot.hasValue) {
-            return Material();
+            return 0;
         }
-        return Storage->Palette[GetBrickVoxelId(brickSlot.value, pos)];
+        return GetBrickVoxelId(brickSlot.value, pos);
+    }
+
+    public Material GetMaterialFromId(uint id) {
+        return Storage->Palette[id];
     }
 };
 
 // Count number of set bits in variable range [0..width]
-public uint PopCntVar64(uint64_t mask, uint width) {
+public uint popcnt_var64(uint64_t mask, uint width) {
     uint himask = uint(mask);
     uint count = 0;
 
@@ -78,6 +82,12 @@ public uint PopCntVar64(uint64_t mask, uint width) {
     count += countbits(himask & (m - 1u));
 
     return count;
+}
+public uint tzcnt64(uint64_t mask) {
+    uint a = uint(mask >> 0);
+    uint b = uint(mask >> 32);
+    uint c = firstbitlow(a != 0 ? a : b);
+    return a != 0 ? c : c + 32;
 }
 
 // Returns linear index for 3D grid in XZY order. Sizes **must** be power of two.

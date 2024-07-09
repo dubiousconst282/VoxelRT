@@ -5,18 +5,37 @@ import DenoiseCommon;
 
 struct DispatchParams {
     GBufferUniforms* GBuffer;
-    bool ForceResetHistory;
 };
 [vk::push_constant] DispatchParams pc;
 
 [numthreads(8, 8, 1)]
 void ComputeMain(int2 pos: SV_DispatchThreadID) {
+    // If camera is steady, just do basic accumulation so the edge stopping
+    // functions won't get in the way to anti-aliasing jitters.
+    if (pc.GBuffer->NumSteadyFrames > 0) {
+        StaticAccum(pos);
+        pc.GBuffer->MomentsTex.Instance[pos] = float2(0);
+        return;
+    }
     if (!Reproject(pos)) {
         pc.GBuffer->HistoryLenTex.Instance[pos] = 0;
         pc.GBuffer->MomentsTex.Instance[pos] = float2(0);
     }
 }
 
+void StaticAccum(int2 pos) {
+    uint historyLen = pc.GBuffer->HistoryLenTex.Instance[pos] + 1;
+    float weight = 1.0 / historyLen;
+    pc.GBuffer->HistoryLenTex.Instance[pos] = min(255, historyLen);
+
+    float4 prevIrradiance = pc.GBuffer->PrevIrradianceTex.Instance[pos];
+    float4 currIrradiance = pc.GBuffer->IrradianceTex.Instance[pos];
+    pc.GBuffer->IrradianceTex.Instance[pos] = lerp(prevIrradiance, currIrradiance, weight);
+    
+    float4 prevAlbedo = pc.GBuffer->PrevAlbedoTex.Instance[pos];
+    float4 currAlbedo = pc.GBuffer->AlbedoTex.Instance[pos];
+    pc.GBuffer->AlbedoTex.Instance[pos] = float4(lerp(prevAlbedo, currAlbedo, weight).rgb, currAlbedo.w);
+}
 bool Reproject(int2 pos) {
     float depth = pc.GBuffer->DepthTex.Instance[pos];
     if (depth <= 0) return false;  // sky
@@ -57,7 +76,7 @@ bool Reproject(int2 pos) {
     prevIrradiance /= wsum;
     prevMoments /= wsum;
 
-    if (pc.ForceResetHistory && historyLen > 6) historyLen = 6;
+    // if (pc.ForceResetHistory && historyLen > 6) historyLen = 6;
     float blendFactor = 1.0 / (historyLen + 1);
 
     float4 currIrradiance = pc.GBuffer->IrradianceTex.Instance[pos];
@@ -102,5 +121,5 @@ float2 GetHistoryPos(float3 worldPos) {
     float2 prevUV = prevNDC.xy / prevNDC.w;
     prevUV = prevUV * 0.5 + 0.5;
 
-    return prevUV * pc.GBuffer->RenderSize - 0.5;
+    return prevUV * pc.GBuffer->RenderSize;
 }

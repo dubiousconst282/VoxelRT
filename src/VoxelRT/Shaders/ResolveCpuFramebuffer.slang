@@ -1,4 +1,5 @@
 import GBuffer;
+import Havk.Core;
 
 struct DispatchParams {
     GBufferUniforms* GBuffer;

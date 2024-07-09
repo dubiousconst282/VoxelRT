@@ -222,7 +222,6 @@ GpuRenderer::~GpuRenderer() = default;
 struct RenderDispatchParams {
     GpuVoxelMap Map;
     VkDeviceAddress GBuffer;  // GBufferUniforms*
-    glm::ivec3 WorldOrigin;
 
     uint32_t MaxBounces;
     havk::ImageHandle StbnTexture;
@@ -248,7 +247,6 @@ void GpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
             .VoxelOccupancy = cmds.GetDeviceAddress(*_storage->OccupancyStorage, havk::UseBarrier::ComputeRead),
         },
         .GBuffer = cmds.GetDeviceAddress(*_gbuffer->UniformBuffer, havk::UseBarrier::ComputeRead),
-        .WorldOrigin = glm::ivec3(glm::floor(_gbuffer->CurrentPos)),
         .MaxBounces = _numLightBounces,
         .StbnTexture = _blueNoiseTex->DescriptorHandle,
         .SkyTexture = _skyboxTex->DescriptorHandle,

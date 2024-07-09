@@ -2,12 +2,11 @@ import Havk.Core;
 import VoxelMap;
 import VoxelTraversal;
 import GBuffer;
-import Noise;
+import Utilities;
 
 struct DispatchParams {
     VoxelMap Map;
     GBufferUniforms* GBuffer;
-    int3 WorldOrigin;
 
     uint MaxBounces;
     TextureHandle2D<uint2> StbnTexture;
@@ -94,7 +93,12 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
 }
 
 void GetPrimaryRay(int2 screenPos, out float3 rayPos, out float3 rayDir) {
-    float4 far = mul(pc.GBuffer->InvProjMat, float4(screenPos, 1, 1));
+    float2 pos = float2(screenPos) + 0.5;
+    if (pc.GBuffer->NumSteadyFrames > 0) {
+        float easeWeight = max(1, 10 - pc.GBuffer->NumSteadyFrames);
+        pos += (MartinR2(pc.GBuffer->NumSteadyFrames)  - 0.5)/ easeWeight;
+    }
+    float4 far = mul(pc.GBuffer->InvProjMat, float4(pos, 1, 1));
     rayPos = pc.GBuffer->OriginFrac;
     rayDir = normalize(far.xyz / far.w);
 }
