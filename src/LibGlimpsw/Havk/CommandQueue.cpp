@@ -75,7 +75,7 @@ void CommandList::TransitionLayout(Image& image, VkImageLayout newLayout, VkPipe
     MarkUse(image);
 }
 
-ImageHandle CommandList::GetDescriptorHandle(Image& image, UseBarrier barrier, VkImageLayout layout) {
+void CommandList::Barrier(Image& image, UseBarrier barrier, VkImageLayout layout) {
     VkImageMemoryBarrier vkBarrier = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
@@ -92,11 +92,9 @@ ImageHandle CommandList::GetDescriptorHandle(Image& image, UseBarrier barrier, V
 
     image.CurrentLayout_ = vkBarrier.newLayout;
     MarkUse(image);
-
-    return image.DescriptorHandle;
 }
 
-VkDeviceAddress CommandList::GetDeviceAddress(havk::Buffer& buffer, UseBarrier barrier) {
+void CommandList::Barrier(havk::Buffer& buffer, UseBarrier barrier) {
     VkBufferMemoryBarrier vkBarrier = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
         .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
@@ -110,8 +108,6 @@ VkDeviceAddress CommandList::GetDeviceAddress(havk::Buffer& buffer, UseBarrier b
     vkCmdPipelineBarrier(this->Buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, barrier.Stage, 0, 0, 0, 1, &vkBarrier, 0, nullptr);
 
     MarkUse(buffer);
-
-    return buffer.DeviceAddress;
 }
 
 };

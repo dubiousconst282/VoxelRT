@@ -10,7 +10,7 @@
 
 // Cannot be > 2048*512*2048 because memory index is signed 32-bits
 using ViewSectorIndexer =
-    LinearIndexer3D<10 - MaskIndexer::ShiftXZ - BrickIndexer::ShiftXZ,
+    LinearIndexer3D<11 - MaskIndexer::ShiftXZ - BrickIndexer::ShiftXZ,
                     9 - MaskIndexer::ShiftY - BrickIndexer::ShiftY, false>;
 
 using BrickMaskIndexer = LinearIndexer3D<BrickIndexer::ShiftXZ - 2, BrickIndexer::ShiftY - 2, false>;
@@ -467,7 +467,7 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
         .TileShiftX = (uint32_t)std::countr_zero(simd::TileWidth),
         .TileShiftY = (uint32_t)std::countr_zero(simd::TileHeight),
     };
-    cmds.GetDescriptorHandle(*_gbuffer->AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
+    cmds.Barrier(*_gbuffer->AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
 
     uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
     _blitShader->Dispatch(cmds, { groupsX, groupsY, 1 }, pc);

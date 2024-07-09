@@ -145,7 +145,7 @@ struct GBuffer {
                 .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::ComputeRead),
                 .ForceResetHistory = false,
             };
-            cmds.GetDescriptorHandle(*AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
+            cmds.Barrier(*AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
             ReprojShader->Dispatch(cmds, { groupsX, groupsY, 1 }, pc);
 
             /*if (NumDenoiserPasses > 0) {
@@ -186,7 +186,7 @@ struct GBuffer {
             .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::GraphicsRead),
             .Channel = DebugChannelView,
         };
-        cmds.GetDescriptorHandle(*AlbedoTex, havk::UseBarrier::GraphicsRead, VK_IMAGE_LAYOUT_GENERAL);
+        cmds.Barrier(*AlbedoTex, havk::UseBarrier::GraphicsRead, VK_IMAGE_LAYOUT_GENERAL);
 
         cmds.BeginRendering({ .Attachments = { { .Target = target, .LoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE } } }, true);
         PresentShader->Draw(cmds, { .NumVertices = 3 }, pc);

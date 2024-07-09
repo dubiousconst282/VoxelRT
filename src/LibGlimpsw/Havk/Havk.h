@@ -332,12 +332,23 @@ struct CommandList {
                  VkAccessFlags srcAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
                  VkAccessFlags dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
 
-    // Barrier, layout transition, mark use.
-    ImageHandle GetDescriptorHandle(Image& image, UseBarrier barrier, VkImageLayout layout);
-    VkDeviceAddress GetDeviceAddress(havk::Buffer& buffer, UseBarrier barrier);
+    void Barrier(Image& image, UseBarrier barrier, VkImageLayout layout);
+    void Barrier(havk::Buffer& buffer, UseBarrier barrier);
 
+    // Barrier helper
+    ImageHandle GetDescriptorHandle(Image& image, UseBarrier barrier, VkImageLayout layout) {
+        Barrier(image, barrier, layout);
+        return image.DescriptorHandle;
+    }
+    // Barrier helper
+    VkDeviceAddress GetDeviceAddress(havk::Buffer& buffer, UseBarrier barrier) {
+        Barrier(buffer, barrier);
+        return buffer.DeviceAddress;
+    }
+
+    // Copies host data to buffer. Limited to 64KB per call, see docs for `vkCmdUpdateBuffer`.
     void UpdateBuffer(havk::Buffer& buffer, VkDeviceSize destOffset, uint32_t dataSize, const void* data) {
-        GetDeviceAddress(buffer, { VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
+        Barrier(buffer, { VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
         vkCmdUpdateBuffer(Buffer, buffer.Handle, destOffset, dataSize, data);
     }
     void MarkUse(Resource& res) {
@@ -420,6 +431,13 @@ struct ComputePipeline final : Pipeline {
         Bind(cmdList);
         Push(cmdList, pc);
         vkCmdDispatch(cmdList.Buffer, groupCount.width, groupCount.height, groupCount.depth);
+    }
+    void DispatchIndirect(CommandList& cmdList, Buffer& buffer, VkDeviceSize offset, PushConstantsPtr pc = {}) {
+        Bind(cmdList);
+        Push(cmdList, pc);
+        
+        cmdList.Barrier(buffer, { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT });
+        vkCmdDispatchIndirect(cmdList.Buffer, buffer.Handle, offset);
     }
 };
 
