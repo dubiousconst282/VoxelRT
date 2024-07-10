@@ -17,79 +17,78 @@ struct DispatchParams {
 
 [numthreads(8, 8)]
 void ComputeMain(uint2 pos: SV_DispatchThreadID) {
+    uint clockStart = getRealtimeClockLow();
+
     float3 rayDir, rayPos;
     GetPrimaryRay(pos, rayPos, rayDir);
 
     var blueNoise = BlueNoise(pc.StbnTexture.Instance, pos, pc.GBuffer->FrameNo);
 
-    float3 albedo, irradiance, normal;
-    float depth = -1.0;
+    float3 irradiance = pc.MaxBounces == 0 ? 1.0 : 0.0;
+    float3 throughput = 1.0;
 
-    uint clockStart = getRealtimeClockLow();
+    for (int bounceNo = 0; bounceNo <= pc.MaxBounces; bounceNo++) {
+        HitInfo hit = RayCast(pc.Map, pc.GBuffer->WorldOrigin, rayPos, rayDir, bounceNo != 0);
+        float3 albedo;
+        float emission;
 
-    HitInfo hit;
-    if (RayCast(pc.Map, pc.WorldOrigin, rayPos, rayDir, hit)) {
-        albedo = hit.Material.Color;
-        normal = hit.Normal;
-        
-        float4 projPos = mul(pc.GBuffer->ProjMat, float4(hit.Pos / 16.0, 1.0)); // scale down by 1/16 to minimize precision loss
-        depth = projPos.z / projPos.w;
-        
-        float3 throughput = 1.0;
-        irradiance = albedo * hit.Material.Emission;
+        if (!hit.Miss) {
+            let material = pc.Map.GetMaterialFromId(hit.MaterialId);
+            albedo = material.Color;
+            emission = material.Emission;
 
-        if (pc.MaxBounces == 0) irradiance = 1.0;
-
-        // very non PBR parameters
-        const float3 sunDir = normalize(float3(0.3,0.9,-0.28));
-        const float sunIntensity = 6;
-        const float3 sunColor = float3(1.0, 0.9, 0.7);
-    
-        HitInfo sunHit;
-        if (pc.MaxBounces > 0) {
-            if (!RayCastCoarse(pc.Map, pc.WorldOrigin, hit.Pos + hit.Normal * 0.01, sunDir, sunHit)) {
-                irradiance += sunColor * sunIntensity;
-            } else {
-                throughput *= 0.5;
+            // very non PBR parameters
+            const float3 sunDir = normalize(float3(0.3,0.9,-0.28));
+            const float sunIntensity = 12;
+            const float3 sunColor = float3(1.0, 0.9, 0.7);
+            
+            if (false&&pc.MaxBounces > 0) {
+                if (dot(hit.Normal, sunDir) > 0 &&  // trivial filter
+                    RayCast(pc.Map, pc.GBuffer->WorldOrigin, hit.Pos + hit.Normal * 0.01, sunDir, true).Miss
+                ) {
+                    throughput *= sunColor;
+                    emission += sunIntensity;
+                } else {
+                    throughput *= 0.7;
+                }
             }
         }
-        
-        for (int i = 0; i < pc.MaxBounces; i++) {
-            rayPos = hit.Pos + hit.Normal * 0.01;
 
-            //float fuzziness = getMaterialMetalFuzziness(hit.mat);
-            //if (fuzziness < 1.0) {
-            //    rayDir = normalize(reflect(rayDir, hit.normal) + (fuzziness * random_dir(u_FrameNo, i)));
-            //    if (dot(rayDir, hit.normal) <= 0.0) break;
-            //} else 
-            rayDir = normalize(hit.Normal + GetSphereDir(blueNoise.GetSample()));
-
-            if (!RayCastCoarse(pc.Map, pc.WorldOrigin, rayPos, rayDir, hit)) {
-                irradiance += throughput * GetSkyColor(rayDir, false);
+        if (bounceNo == 0) {
+            if (hit.Miss) {
+                pc.GBuffer->AlbedoTex.Instance[pos] = float4(1.0);
+                irradiance = GetSkyColor(rayDir, true);
+                pc.GBuffer->DepthTex.Instance[pos] = -1.0;
                 break;
             }
-            float emission = hit.Material.Emission;
+            pc.GBuffer->AlbedoTex.Instance[pos] = float4(albedo, PackGNormal(hit.Normal));
 
-            if (i < 2 && !RayCastCoarse(pc.Map, pc.WorldOrigin, hit.Pos + hit.Normal * 0.01, sunDir, sunHit)) {
-                throughput *= sunColor * sunIntensity;
-                emission += sunIntensity;
+            float4 projPos = mul(pc.GBuffer->ProjMat, float4(hit.Pos / 16.0, 1.0)); // scale down by 1/16 to minimize precision loss
+            float depth = projPos.z / projPos.w;
+            pc.GBuffer->DepthTex.Instance[pos] = depth;
+        } else {
+            if (hit.Miss) {
+                irradiance += GetSkyColor(rayDir, false) * throughput;
+                break;
             }
-            
-            throughput *= hit.Material.Color;
-            irradiance += throughput * emission;
+            throughput *= albedo;
         }
-    } else {
-        albedo = float3(1.0);
-        irradiance = GetSkyColor(rayDir, true);
-        depth = -1.0;
+        
+        irradiance += throughput * emission;
+        
+        //float fuzziness = getMaterialMetalFuzziness(hit.mat);
+        //if (fuzziness < 1.0) {
+        //    rayDir = normalize(reflect(rayDir, hit.normal) + (fuzziness * random_dir(u_FrameNo, i)));
+        //    if (dot(rayDir, hit.normal) <= 0.0) break;
+        //} else 
+        rayDir = normalize(hit.Normal + GetSphereDir(blueNoise.GetSample()));
+        rayPos = hit.Pos + hit.Normal * 0.01;
     }
 
     uint clockEnd = getRealtimeClockLow();
-    float clockDiff = (clockEnd - clockStart) / (200.0 * (pc.MaxBounces + 1));
+    float clockDiff = (clockEnd - clockStart) / (3000.0 * (pc.MaxBounces + 1));
 
-    pc.GBuffer->AlbedoTex.Instance[pos] = float4(albedo, PackGNormal(normal));
     pc.GBuffer->IrradianceTex.Instance[pos] = float4(irradiance, clockDiff);
-    pc.GBuffer->DepthTex.Instance[pos] = depth;
 }
 
 void GetPrimaryRay(int2 screenPos, out float3 rayPos, out float3 rayDir) {
@@ -110,5 +109,5 @@ SamplerState g_LinearSampler;
 float3 GetSkyColor(float3 dir, bool isPrimary) {
     // return float3(0, 0, 1);
     // For light bounces, sample smaller mips to maybe improve cache coherency.
-    return pc.SkyTexture.Instance.SampleLevel(g_LinearSampler, dir, isPrimary ? 0 : 3);
+    return pc.SkyTexture.Instance.SampleLevel(g_LinearSampler, dir, isPrimary ? 0 : 3) * (isPrimary?1:4);
 }

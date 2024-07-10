@@ -20,20 +20,27 @@ public struct HitInfo {
     public float3 Pos;
     public float3 Normal;
     public float2 FaceUV;
-    public Material Material;
+    public uint MaterialId;
+
+    public property bool Miss {
+        get { return MaterialId == 0; }
+    }
 };
 
-public bool RayCast(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir, out HitInfo hit) {
+public HitInfo RayCast(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir, bool coarse) {
     float3 invDir = 1.0 / dir;
     float3 tStart = (step(0.0, dir) - origin) * invDir;
 
     float3 startPos = ClipRayToAABB(origin, dir, -voxelOrigin + 1, float3(VoxelMap.GRID_SIZE_XZ, VoxelMap.GRID_SIZE_Y, VoxelMap.GRID_SIZE_XZ) - voxelOrigin - 1);
     int3 voxelPos = voxelOrigin + int3(floor(startPos));
 
-    for (uint i = 0; i < 256; i++) {
-        float3 sideDist = tStart + float3(voxelPos - voxelOrigin) * invDir;
+    float3 sideDist;
+    int i = (coarse ? 80 : 256);
+    
+    while (--i >= 0) {
+        sideDist = tStart + float3(voxelPos - voxelOrigin) * invDir;
         float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
-        tmin = bit_cast<float>(bit_cast<uint>(tmin) + 5);
+        tmin = coarse ? tmin + 0.001 : bit_cast<float>(bit_cast<uint>(tmin) + 5);
         float3 currPos = origin + tmin * dir;
 
         // Accurate DDA masks, helps in a few cases but hurts on others.
@@ -45,59 +52,27 @@ public bool RayCast(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir, o
         //voxelPos = voxelOrigin + ivec3(floor(mix(currPos, currPos + dir*0.01, sideMask)));
         voxelPos = voxelOrigin + int3(floor(currPos));
 
-        if (!map.CheckBounds(voxelPos)) {
-            hit = HitInfo();
-            return false;
-        }
-        if (!GetStepPos(map, voxelPos, dir, false)) {
-            hit.Material = map.GetVoxelMaterial(voxelPos);
-            hit.Dist = tmin;
-            hit.Pos = currPos;
-
-            bool3 sideMask = float3(tmin) >= sideDist;
-            hit.FaceUV = fract(select(sideMask.xz, currPos.yy, currPos.xz));
-            hit.Normal = select(sideMask, -sign(dir), 0.0);
-            return true;
-        }
+        if (!map.CheckBounds(voxelPos)) { i = 0; }
+        else if (!GetStepPos(map, voxelPos, dir, coarse && i < 60)) break;
     }
-    hit = HitInfo();
-    return false;
-}
 
+    HitInfo hit;
+    hit.MaterialId = 0;
+    if (i < 0) return hit; // miss
 
-public bool RayCastCoarse(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir, out HitInfo hit) {
-    float3 invDir = 1.0 / dir;
-    float3 tStart = (step(0.0, dir) - origin) * invDir;
+    // Recalculating final position outside the loop helps minimize divergence and reduced VGPR usage
+    hit.MaterialId = map.GetVoxelId(voxelPos);
 
-    float3 startPos = ClipRayToAABB(origin, dir, -voxelOrigin + 1, float3(VoxelMap.GRID_SIZE_XZ, VoxelMap.GRID_SIZE_Y, VoxelMap.GRID_SIZE_XZ) - voxelOrigin - 1);
-    int3 voxelPos = voxelOrigin + int3(floor(startPos));
+    float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
+    float3 currPos = origin + tmin * dir;
+    hit.Dist = tmin;
+    hit.Pos = currPos;
 
-    for (uint i = 0; i < 96; i++) {
-        float3 sideDist = tStart + float3(voxelPos - voxelOrigin) * invDir;
-        float tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + 0.001;
-        float3 currPos = origin + tmin * dir;
+    bool3 sideMask = float3(tmin) >= sideDist;
+    hit.FaceUV = fract(select(sideMask.xz, currPos.yy, currPos.xz));
+    hit.Normal = select(sideMask, -sign(dir), 0.0);
 
-        voxelPos = voxelOrigin + int3(floor(currPos));
-        
-        bool coarse = i > 30; // distance(floor(currPos), origin) > 50;
-
-        if (!map.CheckBounds(voxelPos)) {
-            hit = HitInfo();
-            return false;
-        }
-        if (!GetStepPos(map, voxelPos, dir, coarse)) {
-            hit.Material = map.GetVoxelMaterial(voxelPos);
-            hit.Dist = tmin;
-            hit.Pos = currPos;
-
-            bool3 sideMask = float3(tmin) >= sideDist;
-            hit.FaceUV = fract(select(sideMask.xz, currPos.yy, currPos.xz));
-            hit.Normal = select(sideMask, -sign(dir), 0.0);
-            return true;
-        }
-    }
-    hit = HitInfo();
-    return false;
+    return hit;
 }
 
 bool GetStepPos(VoxelMap map, inout int3 ipos, float3 dir, bool coarse) {
@@ -123,12 +98,13 @@ bool GetStepPos(VoxelMap map, inout int3 ipos, float3 dir, bool coarse) {
 
     // Mask optimization
     uint dirOctant = (dir.x < 0 ? 0 : 1) + (dir.y < 0 ? 0 : 2) + (dir.z < 0 ? 0 : 4);
-    //occMask &= RayMaskOptimizationLUT[maskIdx + dirOctant * 64];
+    occMask &= RayMaskOptimizationLUT[maskIdx + dirOctant * 64];
 
     int lod = GetIsotropicLOD(occMask, maskIdx) * scale;
 
     if (coarse && lod < 4) {
-        ipos = FindAnyOccupiedPos(ipos, occMask);
+        int3 occPos = tzcnt64(occMask) >> int3(0, 4, 2) & 3;
+        ipos = (ipos & ~3) | occPos;
         return false;
     }
     ipos = AlignToCellBoundaries(ipos, dir, lod);
@@ -153,17 +129,3 @@ int3 AlignToCellBoundaries(int3 pos, float3 dir, int cellSize) {
     pos.z = dir.z < 0 ? (pos.z & ~cellMask) : (pos.z | cellMask);
     return pos;
 }
-int3 FindAnyOccupiedPos(int3 pos, uint64_t mask) {
-    uint currMask = uint(mask);
-    uint idx = 0;
-
-    if (mask.x == 0) {
-        idx += 32;
-        currMask = uint(mask >> 32);
-    }
-    idx += firstbitlow(currMask);
-
-    int3 occPos = int3(idx) >> int3(0, 4, 2) & 3;
-    return (pos & ~3) | occPos;
-}
-
