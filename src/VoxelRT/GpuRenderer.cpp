@@ -82,7 +82,7 @@ struct GpuVoxelStorageManager {
             StorageBuffer = Device->CreateBuffer({
                 .Size = bufferSize,
                 .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
             });
             OccupancyStorage = Device->CreateBuffer({
                 .Size = maxBricksInBuffer * (BrickIndexer::MaxArea / 8),

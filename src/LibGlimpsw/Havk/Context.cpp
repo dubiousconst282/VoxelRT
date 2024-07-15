@@ -136,6 +136,7 @@ static VkDevice CreateLogicalDevice(const DeviceInfo& devInfo, const DeviceCreat
         .pNext = &vulkan13Features,
 
         .uniformAndStorageBuffer8BitAccess = VK_TRUE,
+        .shaderBufferInt64Atomics = VK_TRUE,
         .shaderFloat16 = VK_TRUE,
         .shaderInt8 = VK_TRUE,
 

@@ -421,7 +421,8 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
     auto outputBuffer = _ctx->CreateBuffer({
         .Size = fbSize,
         .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
     });
 
     auto destTiles = (RenderedTile*)outputBuffer->MappedData;

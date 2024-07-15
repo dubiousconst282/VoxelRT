@@ -165,7 +165,12 @@ static inline constexpr uint32_t InvalidHandle = ~0u;
 struct BufferDesc {
     uint64_t Size;
     VkBufferUsageFlags Usage;
-    VmaAllocationCreateFlags VmaFlags = 0; // HOST_ACCESS_* implies CREATE_MAPPED
+
+    // HOST_ACCESS_* implies CREATE_MAPPED.
+    VmaAllocationCreateFlags AllocFlags = 0;
+    VmaMemoryUsage AllocType = VMA_MEMORY_USAGE_AUTO;
+    VkMemoryPropertyFlags RequiredFlags = 0;
+    VkMemoryPropertyFlags PreferredFlags = 0;
 };
 struct Buffer final : Resource {
     VkBuffer Handle;

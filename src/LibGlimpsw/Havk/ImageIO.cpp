@@ -120,7 +120,8 @@ ImagePtr Image::LoadFilePanoramaToCube(DeviceContext* ctx, std::string_view path
     BufferPtr stageBuffer = ctx->CreateBuffer({
         .Size = dataSize,
         .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
     });
     stageBuffer->Write(pixels, 0, dataSize);
     stbi_image_free(pixels);

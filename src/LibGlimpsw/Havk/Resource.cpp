@@ -23,10 +23,12 @@ BufferPtr DeviceContext::CreateBuffer(const BufferDesc& desc) {
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
     VmaAllocationCreateInfo allocCI = {
-        .flags = desc.VmaFlags,
-        .usage = VMA_MEMORY_USAGE_AUTO,
+        .flags = desc.AllocFlags,
+        .usage = desc.AllocType,
+        .requiredFlags = desc.RequiredFlags,
+        .preferredFlags = desc.PreferredFlags,
     };
-    if (desc.VmaFlags & (VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT)) {
+    if (allocCI.flags & (VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT)) {
         allocCI.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
     }
 
@@ -144,7 +146,7 @@ Future Image::Upload(const void* data, size_t dataSize, VkRect2D destRect, VkIma
     BufferPtr stageBuffer = Context->CreateBuffer({
         .Size = dataSize,
         .Usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+        .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
     });
     stageBuffer->Write(data, 0, dataSize);
 
