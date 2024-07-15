@@ -126,21 +126,25 @@ struct Brick {
         for (int32_t i = 0; i < BrickIndexer::MaxArea; i += simd::VectorWidth) {
             VInt3 pos = (basePos * BrickIndexer::Size) + BrickIndexer::GetPos<VInt3>(i + simd::LaneIdx);
 
-#ifdef SIMD_AVX512
-            VInt voxelIds = _mm512_cvtepu8_epi32(_mm_loadu_epi8(&Data[i]));
-            if (fn(pos, voxelIds)) {
-                _mm_storeu_epi8(&Data[i], _mm512_cvtepi32_epi8(voxelIds));
+#if SIMD_AVX512
+            VInt currIds = _mm512_cvtepu8_epi32(_mm_loadu_epi8(&Data[i]));
+            VInt newIds = currIds;
+            fn(pos, newIds);
+            if (simd::any(currIds != newIds)) {
+                _mm_storeu_epi8(&Data[i], _mm512_cvtepi32_epi8(newIds));
                 result.Changed = true;
             }
 #else
-            VInt voxelIds = _mm256_cvtepu8_epi32(_mm_loadu_si64(&Data[i]));
-            if (fn(pos, voxelIds)) {
+            VInt currIds = _mm256_cvtepu8_epi32(_mm_loadu_si64(&Data[i]));
+            VInt newIds = currIds;
+            fn(pos, newIds);
+            if (simd::any(currIds != newIds)) {
                 auto tmp = _mm_packus_epi32(_mm256_extracti128_si256(voxelIds, 0), _mm256_extracti128_si256(voxelIds, 1));
                 _mm_storeu_si64(&Data[i], _mm_packus_epi16(tmp, tmp));
                 result.Changed = true;
             }
 #endif
-            result.Empty &= simd::all(voxelIds == 0);
+            result.Empty &= simd::all(newIds == 0);
         }
         return result;
     }
@@ -157,7 +161,27 @@ struct Sector {
     // Bulk delete bricks indicated by mask
     void DeleteBricks(uint64_t mask);
 
-    uint64_t GetAllocationMask();
+    uint64_t GetAllocationMask() const {
+        static_assert(sizeof(BrickSlots) == 64);
+
+#if __AVX512F__&&0
+        uint64_t mask = _mm512_cmpneq_epi8_mask(_mm512_loadu_epi8(BrickSlots), _mm512_set1_epi8(0));
+#elif __AVX2__
+        uint64_t mask = ~0ull;
+        for (uint32_t i = 0; i < 64; i += 32) {
+            __m256i v = _mm256_loadu_si256((__m256i*)&BrickSlots[i]);
+            v = _mm256_cmpeq_epi8(v, _mm256_set1_epi8(0));
+            mask ^= uint64_t(uint32_t(_mm256_movemask_epi8(v))) << i;
+        }
+#else
+        uint64_t mask = 0;
+        for (uint32_t i = 0; i < 64; i++) {
+            uint64_t bit = BrickSlots[i] != 0;
+            mask |= bit << i;
+        }
+#endif
+        return mask;
+    }
     uint64_t DeleteEmptyBricks(uint64_t mask = ~0ull);
 
     static uint32_t GetBrickIndexFromSlot(uint64_t allocMask, uint32_t slotIdx);
@@ -236,6 +260,7 @@ struct VoxelMap {
 
             uint64_t visitMask = filterFn(sectorPos, sector);
             uint64_t dirtyMask = 0, emptyMask = 0;
+            uint64_t initialAllocMask = sector.GetAllocationMask();
 
             for (uint32_t brickIdx : BitIter(visitMask)) {
                 Brick* brick = sector.GetBrick(brickIdx, createEmpty);
@@ -253,7 +278,8 @@ struct VoxelMap {
             } else if (emptyMask != 0) {
                 sector.DeleteBricks(emptyMask);
             }
-            if (dirtyMask != 0 || emptyMask != 0) {
+
+            if (dirtyMask != 0 || (emptyMask & initialAllocMask) != 0) {
                 DirtyLocs[sectorIdx] |= dirtyMask;
             }
         }

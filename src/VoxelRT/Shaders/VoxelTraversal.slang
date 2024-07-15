@@ -31,8 +31,9 @@ public HitInfo RayCast(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir
     float3 invDir = 1.0 / dir;
     float3 tStart = (step(0.0, dir) - origin) * invDir;
 
-    float3 startPos = ClipRayToAABB(origin, dir, -voxelOrigin + 1, float3(VoxelMap.GRID_SIZE_XZ, VoxelMap.GRID_SIZE_Y, VoxelMap.GRID_SIZE_XZ) - voxelOrigin - 1);
+    float3 startPos = ClipRayToAABB(origin, dir, -voxelOrigin, float3(VoxelMap.GRID_SIZE_XZ, VoxelMap.GRID_SIZE_Y, VoxelMap.GRID_SIZE_XZ) - voxelOrigin);
     int3 voxelPos = voxelOrigin + int3(floor(startPos));
+    //int3 voxelPos = int3(floor(voxelOrigin + origin));
 
     float3 sideDist;
     int i = (coarse ? 80 : 256);
@@ -58,6 +59,7 @@ public HitInfo RayCast(VoxelMap map, int3 voxelOrigin, float3 origin, float3 dir
 
     HitInfo hit;
     hit.MaterialId = 0;
+    
     if (i < 0) return hit; // miss
 
     // Recalculating final position outside the loop helps minimize divergence and reduced VGPR usage

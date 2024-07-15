@@ -1,4 +1,3 @@
-[require(glsl_spirv_1_6, SPV_EXT_descriptor_indexing, GL_EXT_nonuniform_qualifier)]
 module Havk;
 
 public struct ImageHandle<T> {

@@ -1,10 +1,37 @@
 public struct VoxelStorage {
     public Material Palette[256];
-    public uint BaseSlots[VoxelMap.NUM_SECTORS];
-    public uint64_t BrickMasks[VoxelMap.NUM_SECTORS];
+    public SectorInfo Sectors[VoxelMap.NUM_SECTORS];
+    public uint64_t AllocMasks[VoxelMap.NUM_SECTORS];
     public uint64_t SectorMasks[VoxelMap.NUM_SECTORS / 64];
     public uint8_t BrickVoxelData[];
-};
+}
+
+public struct SectorInfo {
+    uint32_t PackedData;
+
+    public property uint BaseAddress {
+        get { return PackedData & ~15u; }
+    }
+    public property uint LevelOfDetail {
+        get { return PackedData & 3; }
+    }
+
+    public property uint BrickStride {
+        get { return VoxelMap.BRICK_STRIDE >> (LevelOfDetail * 3); }
+    }
+
+    [__ref]
+    void SendRequestIfUnloaded() {
+        if ((PackedData >> 2 & 1) != 0) return;
+
+        InterlockedOr(PackedData, 1 << 2);
+
+        // elect should prevent dupes within wave and serve as scalar hint.
+        if (WaveMaskIsFirstLane(BaseAddress == 0)) {
+            // InterlockedAdd()
+        }
+    }
+}
 
 public struct VoxelMap {
     // NOTE: keep in sync with GpuRenderer.cpp
@@ -28,40 +55,42 @@ public struct VoxelMap {
     public static bool CheckBounds(int3 pos) {
         return uint(pos.x | pos.z) < GRID_SIZE_XZ && uint(pos.y) < GRID_SIZE_Y;
     }
-    public uint GetBrickVoxelId(uint brickSlot, uint3 pos) {
+    public uint GetBrickVoxelId(uint address, uint3 pos) {
         uint offset = GetLinearIndex(pos, BRICK_SIZE, BRICK_SIZE);
-        return Storage->BrickVoxelData[brickSlot * BRICK_STRIDE + offset];
+        return Storage->BrickVoxelData[address + offset];
     }
 
-    public Optional<uint> GetBrickDataSlot(uint3 brickPos) {
+    public uint GetBrickAddress(uint3 brickPos) {
         uint sectorIdx = GetLinearIndex(brickPos / 4, NUM_SECTORS_XZ, NUM_SECTORS_Y);
         uint brickIdx = GetLinearIndex(brickPos, 4, 4);
-        uint64_t allocMask = Storage->BrickMasks[sectorIdx];
-
+        uint64_t allocMask = Storage->AllocMasks[sectorIdx];
+        
         if ((allocMask >> brickIdx & 1) != 0) {
-            return Storage->BaseSlots[sectorIdx] + popcnt_var64(allocMask, brickIdx);
+            SectorInfo sector = Storage->Sectors[sectorIdx];
+            return sector.BaseAddress + popcnt_var64(allocMask, brickIdx) * sector.BrickStride;
         }
-        return none;
+        return 0;
     }
 
     public uint64_t GetVoxelMask(uint3 pos) {
-        uint brickSlot = GetBrickDataSlot(pos / 8).value;
+        uint address = GetBrickAddress(pos / BRICK_SIZE);
         uint cellOffset = GetLinearIndex(pos / 4, BRICK_SIZE / 4, BRICK_SIZE / 4);
-        return VoxelOccupancy[brickSlot * OCC_STRIDE + cellOffset];
+        return VoxelOccupancy[(address / 64) + cellOffset];
     }
     public uint64_t GetBrickMask(uint3 sectorPos) {
-        return Storage->BrickMasks[GetLinearIndex(sectorPos, NUM_SECTORS_XZ, NUM_SECTORS_Y)];
+        uint sectorIdx = GetLinearIndex(sectorPos, NUM_SECTORS_XZ, NUM_SECTORS_Y);
+        return Storage->AllocMasks[sectorIdx];
     }
     public uint64_t GetSectorMask(uint3 sectorPos) {
         return Storage->SectorMasks[GetLinearIndex(sectorPos / 4, NUM_SECTORS_XZ / 4, NUM_SECTORS_Y / 4)];
     }
 
     public uint GetVoxelId(uint3 pos) {
-        Optional<uint> brickSlot = GetBrickDataSlot(pos / 8);
-        if (!brickSlot.hasValue) {
+        uint address = GetBrickAddress(pos / BRICK_SIZE);
+        if (address == 0) {
             return 0;
         }
-        return GetBrickVoxelId(brickSlot.value, pos);
+        return GetBrickVoxelId(address, pos);
     }
 
     public Material GetMaterialFromId(uint id) {
@@ -71,6 +100,7 @@ public struct VoxelMap {
 
 // Count number of set bits in variable range [0..width]
 public uint popcnt_var64(uint64_t mask, uint width) {
+    // return popcnt64(mask & ((1ull << mask) - 1));
     uint himask = uint(mask);
     uint count = 0;
 
@@ -82,6 +112,11 @@ public uint popcnt_var64(uint64_t mask, uint width) {
     count += countbits(himask & (m - 1u));
 
     return count;
+}
+public uint popcnt64(uint64_t mask) {
+    uint a = countbits(uint(mask >> 0));
+    uint b = countbits(uint(mask >> 32));
+    return a + b;
 }
 public uint tzcnt64(uint64_t mask) {
     uint a = uint(mask >> 0);

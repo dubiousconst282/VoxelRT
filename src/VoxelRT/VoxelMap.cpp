@@ -50,20 +50,6 @@ void Sector::DeleteBricks(uint64_t mask) {
     Storage.shrink_to_fit();*/
 }
 
-uint64_t Sector::GetAllocationMask() {
-    static_assert(sizeof(BrickSlots) == 64);
-
-#ifdef __AVX512F__
-    uint64_t mask = _mm512_cmpneq_epi8_mask(_mm512_loadu_epi8(BrickSlots), _mm512_set1_epi8(0));
-#else
-    uint64_t mask = 0;
-    for (uint32_t i = 0; i < 64; i++) {
-        uint64_t bit = BrickSlots[i] != 0;
-        mask |= bit << i;
-    }
-#endif
-    return mask;
-}
 uint64_t Sector::DeleteEmptyBricks(uint64_t mask) {
     uint64_t emptyMask = 0;
 

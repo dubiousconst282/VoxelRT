@@ -9,6 +9,7 @@ add_executable(
     BrickSlotAllocator.cpp
     TerrainGenerator.cpp
     Brush.cpp
+    GenerateLOD.cpp
 )
 
 set(FASTNOISE2_NOISETOOL OFF CACHE BOOL "Build Noise Tool" FORCE)

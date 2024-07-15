@@ -16,7 +16,7 @@ void BrushSession::Dispatch(VoxelMap& map) {
     VRandom rng(Pars.RandomSeed);
 
     auto start = std::chrono::high_resolution_clock::now();
-    uint32_t visits = 0;
+    uint32_t numInvocs = 0;
 
     map.RegionDispatchSIMD(
         minPos, maxPos, !isErasing,
@@ -31,8 +31,7 @@ void BrushSession::Dispatch(VoxelMap& map) {
                 mask &= voxelIds != 0;
             }
             voxelIds.set_if(mask, Pars.Material.Data);
-            visits++;
-            return simd::any(mask);
+            numInvocs++;
         },
         // Generate filter mask for bricks that might be affected
         [&](glm::ivec3 sectorPos, Sector& sector) -> uint64_t {
@@ -60,7 +59,7 @@ void BrushSession::Dispatch(VoxelMap& map) {
 
     auto end = std::chrono::high_resolution_clock::now();
     double elapsedMs = (end - start).count() / 1000000.0;
-    double numVoxelsMl = visits * (uint64_t)simd::VectorWidth / 1000000.0;
+    double numVoxelsMl = numInvocs * (uint64_t)simd::VectorWidth / 1000000.0;
     printf("Brush: %.2fms  %.2fM voxels (%.2fM voxels/s)\n", elapsedMs, numVoxelsMl, numVoxelsMl * (1000.0 / elapsedMs));
     fflush(stdout);
 }

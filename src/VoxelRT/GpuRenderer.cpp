@@ -13,11 +13,19 @@ struct GpuVoxelStorage {
     uint32_t BaseSlots[NumViewSectors];
     uint64_t BrickMasks[NumViewSectors];
     uint64_t SectorMasks[NumViewSectors / 64];
-    Brick BrickVoxelData[];
+    uint8_t BrickVoxelData[];
 };
 struct GpuVoxelMap {
     VkDeviceAddress Storage;         // MainStorageBlock*
     VkDeviceAddress VoxelOccupancy;  // uint64_t*
+};
+
+struct GpuSectorUpdateRecord {
+    uint32_t SectorIdx;
+    uint32_t AllocInfo;
+    uint64_t AllocMask;
+    uint64_t DirtyMask;
+    VkDeviceAddress SourceData;
 };
 
 struct GpuVoxelStorageManager {
@@ -25,181 +33,154 @@ struct GpuVoxelStorageManager {
     havk::BufferPtr StorageBuffer;
     havk::BufferPtr OccupancyStorage;
 
-    havk::ComputePipelinePtr BuildOccupancyShader;
+    havk::ComputePipelinePtr UpdateShader;
 
     BrickSlotAllocator SlotAllocator = { ViewSize };
-    glm::ivec3 ViewOffset; // world view offset in sector scale
-    uint64_t SectorOccupancy[NumViewSectors / 64] = {};  // Occupancy masks at sector level (host copy)
-
+    
     GpuVoxelStorageManager(havk::DeviceContext* ctx) {
         Device = ctx;
-        BuildOccupancyShader = ctx->PipeBuilder->CreateCompute("UpdateOccupancy.slang");
+        UpdateShader = ctx->PipeBuilder->CreateCompute("UpdateMap.slang");
+
+        size_t voxelStorageSize = 1024 * 1024 * 1024 * 2.0;  // 2GB to start with...
+
+        StorageBuffer = Device->CreateBuffer({
+            .Size = sizeof(GpuVoxelStorage) + voxelStorageSize,
+            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        });
+        OccupancyStorage = Device->CreateBuffer({
+            .Size = voxelStorageSize / 8,
+            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        });
     }
 
     void SyncBuffers(VoxelMap& map, havk::CommandList& cmds) {
-        std::vector<std::tuple<uint32_t, uint64_t>> updateBatch;
+        const size_t MaxUpdateDataSize = 1024 * 1024 * 64;
+        const size_t MaxUpdateSectors = 32768;
 
-        uint32_t maxSlotId = SlotAllocator.Arena.NumAllocated;
-        uint32_t dirtyBricksInBatch = 0;
+        std::vector<std::tuple<uint32_t, uint64_t>> batch;
+        uint32_t updateSize = 0;
+        uint64_t maxAddress = 0;
 
         // Allocate slots for dirty bricks
-        for (auto [sectorIdx, dirtyMask] : map.DirtyLocs) {
-            glm::ivec3 sectorPos = WorldSectorIndexer::GetPos(sectorIdx);
-            auto sectorAlloc = SlotAllocator.GetSector(sectorPos);
-            if (sectorAlloc == nullptr) continue;
+        for (auto iter = map.DirtyLocs.begin(); iter != map.DirtyLocs.end(); ) {
+            auto [sectorIdx, dirtyMask] = *iter;
+            map.DirtyLocs.erase(iter++);
 
-            uint64_t freeMask;
+            glm::ivec3 sectorPos = WorldSectorIndexer::GetPos(sectorIdx);
+            SectorAllocInfo* sectorAlloc = SlotAllocator.GetSector(sectorPos);
+            if (sectorAlloc == nullptr) continue;
 
             if (map.Sectors.contains(sectorIdx)) {
                 Sector& sector = map.Sectors[sectorIdx];
                 uint64_t allocMask = sector.GetAllocationMask();
-                dirtyMask &= allocMask;
-                freeMask = sectorAlloc->AllocMask & ~allocMask;
+                uint32_t levelOfDetail = GetSectorLOD(sectorPos);
+
+                SlotAllocator.Reserve(sectorAlloc, allocMask, levelOfDetail);
             } else {
+                SlotAllocator.Reserve(sectorAlloc, 0, 0);
                 dirtyMask = 0;
-                freeMask = ~0ull;
             }
 
-            if (freeMask != 0) {
-                dirtyMask |= SlotAllocator.Free(sectorAlloc, freeMask);
-            }
             if (dirtyMask != 0) {
-                dirtyMask |= SlotAllocator.Alloc(sectorAlloc, dirtyMask);
-                maxSlotId = std::max(maxSlotId, sectorAlloc->BaseSlot + (uint32_t)std::popcount(sectorAlloc->AllocMask));
-                dirtyBricksInBatch += (uint32_t)std::popcount(dirtyMask);
+                uint32_t dataSize = sectorAlloc->GetDataSize();
+                updateSize += dataSize;
+                maxAddress = std::max(maxAddress, sectorAlloc->GetBaseAddress() + dataSize);
             }
-            updateBatch.push_back({ sectorIdx, dirtyMask });
-        }
-        map.DirtyLocs.clear();
-        
-        // Initialize buffers
-        uint32_t maxBricksInBuffer = std::bit_ceil(maxSlotId);
-        size_t bufferSize = sizeof(GpuVoxelStorage) + maxBricksInBuffer * sizeof(Brick);
+            batch.push_back({ sectorIdx, dirtyMask });
+            updateSize += sizeof(GpuSectorUpdateRecord);
 
-        if (StorageBuffer == nullptr || StorageBuffer->Size < bufferSize) {
-            bool isResizing = StorageBuffer != nullptr;
-
-            StorageBuffer = Device->CreateBuffer({
-                .Size = bufferSize,
-                .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-            });
-            OccupancyStorage = Device->CreateBuffer({
-                .Size = maxBricksInBuffer * (BrickIndexer::MaxArea / 8),
-                .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-            });
-
-            if (isResizing || maxSlotId < 1024) {
-                map.MarkAllDirty();
-                SlotAllocator = { ViewSize };
-                return;
-            }
-        }
-        auto mappedStorage = (GpuVoxelStorage*)StorageBuffer->MappedData;  // write only!
-
-        // TODO: consider not updating palette every frame 
-        for (uint32_t i = 0; i < 256; i++) {
-            mappedStorage->Palette[i] = map.Palette[i].GetEncoded();
+            if (batch.size() >= MaxUpdateSectors || updateSize >= MaxUpdateDataSize) break;
         }
 
-        if (updateBatch.empty()) {
-            StorageBuffer->Flush(offsetof(GpuVoxelStorage, Palette), sizeof(GpuVoxelStorage::Palette));
-            return;
-        }
-        // Upload brick data
+        SyncPalette(map, cmds);
+        if (batch.empty()) return;
 
-        havk::BufferPtr updateBuffer;
-        glm::uvec3* updateLocs = nullptr;
-        uint32_t updateLocIdx = 0;
+        assert(maxAddress < StorageBuffer->Size); // TODO
 
-        if (dirtyBricksInBatch != 0) {
-            updateBuffer = Device->CreateBuffer({
-                .Size = dirtyBricksInBatch * sizeof(glm::uvec3),
-                .Usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                .VmaFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-            });
-            updateLocs = (glm::uvec3*)updateBuffer->MappedData;
-        }
+        // Initialize staging buffer
+        auto stagingBuffer = Device->CreateBuffer({
+            .Size = updateSize,
+            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        });
+        auto updateRecords = (GpuSectorUpdateRecord*)stagingBuffer->MappedData;
+        auto updateData = (uint8_t*)&updateRecords[batch.size()];
+        assert(uintptr_t(updateData) % 16 == 0);  // must be aligned
 
-        for (auto [sectorIdx, dirtyMask] : updateBatch) {
+        for (auto [sectorIdx, dirtyMask] : batch) {
             glm::ivec3 sectorPos = WorldSectorIndexer::GetPos(sectorIdx);
             auto sectorAlloc = SlotAllocator.GetSector(sectorPos);
 
-            // Write bricks to GPU storage
+            *updateRecords++ = {
+                .SectorIdx = GetLinearIndex(sectorPos, ViewSize.x, ViewSize.y),
+                .AllocInfo = sectorAlloc->GetPackedHeader(),
+                .AllocMask = sectorAlloc->AllocMask,
+                .DirtyMask = dirtyMask,
+                .SourceData = stagingBuffer->DeviceAddress + uint64_t(updateData - (uint8_t*)stagingBuffer->MappedData),
+            };
+            //printf("Update %d %d %d  %08x %d %d\n", sectorPos.x*32,sectorPos.y*32,sectorPos.z*32, sectorAlloc->GetBaseAddress(), sectorAlloc->GetDataSize(), std::popcount(dirtyMask));
+            //fflush(stdout);
+
             if (dirtyMask != 0) {
+                assert(map.Sectors.contains(sectorIdx));
                 Sector& sector = map.Sectors[sectorIdx];
 
-                for (uint32_t brickIdx : BitIter(dirtyMask)) {
-                    uint32_t slotIdx = sectorAlloc->GetSlot(brickIdx) - 1;
-                    assert(slotIdx < maxBricksInBuffer);
+                // TODO: support updates at brick level
+                uint64_t updateMask = sector.GetAllocationMask();
 
+                for (uint32_t brickIdx : BitIter(updateMask)) {
                     Brick* brick = sector.GetBrick(brickIdx);
-                    mappedStorage->BrickVoxelData[slotIdx] = *brick;
 
-                    glm::uvec3 brickPos = sectorPos * MaskIndexer::Size + MaskIndexer::GetPos(brickIdx);
-                    updateLocs[updateLocIdx++] = brickPos;
+                    brick->GenerateLOD((Voxel*)updateData, sectorAlloc->LevelOfDetail);
+                    updateData += SectorAllocInfo::GetBrickStride(sectorAlloc->LevelOfDetail);
                 }
             }
-
-            // Sector-level occupancy mask
-            uint32_t sectorMaskIdx = GetLinearIndex(sectorPos / 4, ViewSize.x / 4, ViewSize.y / 4);
-            uint64_t& sectorOccMask = SectorOccupancy[sectorMaskIdx];
-            uint32_t sectorOccIdx = GetLinearIndex(sectorPos, 4, 4);
-
-            if (sectorAlloc->AllocMask != 0) {
-                sectorOccMask |= (1ull << sectorOccIdx);
-            } else {
-                sectorOccMask &= ~(1ull << sectorOccIdx);
-            }
-
-            // Write headers to GPU storage
-            uint32_t viewSectorIdx = sectorAlloc - SlotAllocator.Sectors.get();
-            mappedStorage->BrickMasks[viewSectorIdx] = sectorAlloc->AllocMask;
-            mappedStorage->BaseSlots[viewSectorIdx] = sectorAlloc->BaseSlot - 1;
-            mappedStorage->SectorMasks[sectorMaskIdx] = sectorOccMask;
         }
-        StorageBuffer->Flush();
+        stagingBuffer->Flush();
 
-        if (dirtyBricksInBatch == 0) return;
-
-        updateBuffer->Flush();
-
-        struct OcmUpdateDispatchParams {
-            uint32_t NumBricks;
-            VkDeviceAddress BrickLocs;
+        // Dispatch sync shader
+        struct UpdateParams {
+            uint32_t NumRecords;
+            VkDeviceAddress Records;
             GpuVoxelMap Map;
         };
-        OcmUpdateDispatchParams updatePars = {
-            .NumBricks = updateLocIdx,
-            .BrickLocs = cmds.GetDeviceAddress(*updateBuffer, havk::UseBarrier::ComputeRead),
+        UpdateParams updatePars = {
+            .NumRecords = uint32_t(batch.size()),
+            .Records = cmds.GetDeviceAddress(*stagingBuffer, havk::UseBarrier::ComputeRead),
             .Map = {
-                .Storage = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
+                .Storage = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeReadWrite),
                 .VoxelOccupancy = cmds.GetDeviceAddress(*OccupancyStorage, havk::UseBarrier::ComputeReadWrite),
             },
         };
-        BuildOccupancyShader->Dispatch(cmds, { (updateLocIdx + 63) / 64, 1, 1 }, updatePars);
+        UpdateShader->Dispatch(cmds, { (updatePars.NumRecords + 63) / 64, 1, 1 }, updatePars);
     }
 
-    void ShiftView(glm::dvec3 cameraPos) {
-        double dist = glm::distance(cameraPos / glm::dvec3(SectorSize), glm::dvec3(ViewOffset) + 0.5);
-        if (dist < 2.0) return;
+    uint32_t GetSectorLOD(glm::ivec3 pos) {
+        return 0;
+    }
 
-        glm::ivec3 newOffset = glm::floor(cameraPos);
-        glm::ivec3 shift = ViewOffset - newOffset;
-        glm::ivec3 disp = glm::min(glm::abs(shift), glm::ivec3(ViewSize.x, ViewSize.y, ViewSize.x));
-        ViewOffset = newOffset;
-        
-        for (int32_t dy = 0; dy < disp.y; dy++) {
-            for (int32_t dz = 0; dz < ViewSize.x; dz++) {
-                for (int32_t dx = 0; dx < ViewSize.x; dx++) {
-                    glm::ivec3 srcPos = glm::ivec3(dx, dy, dz);
-                    auto srcSector = SlotAllocator.GetSector(srcPos);
-                    auto dstSector = SlotAllocator.GetSector(srcPos + shift);
+private:
+    uint64_t _palette[256] = {};
 
-                    // TODO
-                }
+    void SyncPalette(VoxelMap& map, havk::CommandList& cmds) {
+        uint32_t changedMin = UINT_MAX, changedMax = 0;
+
+        for (uint32_t i = 0; i < 256; i++) {
+            uint64_t encoded = map.Palette[i].GetEncoded();
+
+            if (_palette[i] != encoded) {
+                _palette[i] = encoded;
+                changedMin = std::min(changedMin, i);
+                changedMax = i;
             }
         }
+        if (changedMin == UINT_MAX) return;
+
+        uint32_t numChanges = changedMax - changedMin + 1;
+        cmds.UpdateBuffer(*StorageBuffer, offsetof(GpuVoxelStorage, Palette[changedMin]), sizeof(uint64_t) * numChanges, &_palette[changedMin]);
     }
 };
 
@@ -216,6 +197,8 @@ GpuRenderer::GpuRenderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map
     _blueNoiseTex = havk::Image::LoadFile(ctx, "assets/bluenoise/stbn_vec2_2Dx1D_128x128x64_combined.png",
                                           VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8_UINT, 1);
     _skyboxTex = havk::Image::LoadFilePanoramaToCube(ctx, "assets/skyboxes/evening_road_01_puresky_4k.hdr");
+
+    _map->MarkAllDirty();
 }
 GpuRenderer::~GpuRenderer() = default;
 
@@ -287,12 +270,15 @@ void GpuRenderer::DrawSettings(glim::SettingStore& settings) {
     }
 
     if (_storage->StorageBuffer != nullptr) {
-        ImGui::Text("Storage: %.1fMB (%zu free ranges)", _storage->StorageBuffer->Size / 1048576.0, _storage->SlotAllocator.Arena.FreeRanges.size());
+        ImGui::Text("Storage: %.1fMB/%.1fMB (%zu free ranges)",
+                    (sizeof(GpuVoxelStorage) + _storage->SlotAllocator.Arena.NumAllocated * SectorAllocInfo::PageSize) / 1048576.0,
+                    _storage->StorageBuffer->Size / 1048576.0,
+                    _storage->SlotAllocator.Arena.FreeRanges.size());
 
-        uint32_t v2 = 0;
+        uint32_t numBricks = 0;
         for (auto & sector : _map->Sectors) {
-            v2 += (uint32_t)std::popcount(sector.second.GetAllocationMask());
+            numBricks += (uint32_t)std::popcount(sector.second.GetAllocationMask());
         }
-        ImGui::Text("Bricks: %.1fK (%.1fK on CPU)", _storage->SlotAllocator.Arena.NumAllocated / 1000.0, v2 / 1000.0);
+        ImGui::Text("Bricks: %.1fK in %.1fK sectors", numBricks / 1000.0, _map->Sectors.size() / 1000.0);
     }
 }

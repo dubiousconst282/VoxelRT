@@ -56,9 +56,8 @@ uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) 
     for (uint32_t i = 0; i < 64; i++) {
         Brick* brick = sector.GetBrick(i, true);
         glm::ivec3 brickPos = sectorPos * MaskIndexer::Size + MaskIndexer::GetPos(i);
-        bool isNonEmpty = false;
 
-        brick->DispatchSIMD([&](VInt3 pos, VInt& voxelIds) {
+        auto info = brick->DispatchSIMD([&](VInt3 pos, VInt& voxelIds) {
             VFloat noise = VFloat::gather<4>(noiseBuffer.get(), (pos.x & 31) + (pos.y & 31) * 32 + (pos.z & 31) * (32 * 32));
             VMask fillMask = noise < 0.0;
             VInt grassId = 245 + (simd::trunc2i(noise * 1234.5678) & 3); // 4 random grass variants. no, it doesn't look good.
@@ -66,12 +65,9 @@ uint64_t TerrainGenerator::GenerateSector(Sector& sector, glm::ivec3 sectorPos) 
 
             VFloat3 treePos = VFloat3(simd::conv2f(pos.x - 256), simd::conv2f(pos.y - 112), simd::conv2f(pos.z - 256)) * (1/64.0) + 0.5;
             TreeSDF(treePos, voxelIds);
-
-            isNonEmpty |= simd::any(voxelIds != 0);
-            return true;
         }, brickPos);
 
-        if (isNonEmpty) {
+        if (!info.Empty) {
             mask |= 1ull << i;
         }
     }
@@ -109,14 +105,14 @@ struct TerrainGenerator::RequestQueue {
 
     std::queue<glm::ivec3> RequestQueue;
     std::queue<GeneratedSector> OutputQueue;
-    volatile bool Exit = false; // TODO: should this be atomic_bool?
+    std::atomic_bool Exit = false;
 
     bool WaitRequest(glm::ivec3& pos) {
         std::unique_lock<std::mutex> lock(Mutex);
-        while (RequestQueue.empty() && !Exit) {
+        while (RequestQueue.empty() && !Exit.load(std::memory_order_relaxed)) {
             AvailRequest.wait(lock);
         }
-        if (Exit) return false;
+        if (Exit.load(std::memory_order_relaxed)) return false;
 
         pos = RequestQueue.front();
         RequestQueue.pop();

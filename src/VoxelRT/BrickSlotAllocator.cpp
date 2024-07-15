@@ -2,41 +2,34 @@
 
 #include <stdexcept>
 
-uint64_t BrickSlotAllocator::Alloc(SectorInfo* sector, uint64_t mask) {
-    uint64_t newMask = sector->AllocMask | mask;
-    if (newMask == sector->AllocMask) return 0;
+static uint32_t GetNumPages(uint64_t mask, uint32_t levelOfDetail) {
+    uint32_t size = (uint32_t)std::popcount(mask) * SectorAllocInfo::GetBrickStride(levelOfDetail);
 
-    uint32_t currSize = (uint32_t)std::popcount(sector->AllocMask);
-    uint32_t newSize = (uint32_t)std::popcount(newMask);
-    uint32_t newBase = Arena.Realloc(sector->BaseSlot, currSize, newSize);
-
-    if (newBase == 0) {
-        // TODO: defrag storage? and/or maybe add heuristics in FreeList::Realloc to minimize fragmentation
-        throw std::runtime_error("Could not allocate brick slots");
-    }
-    sector->BaseSlot = newBase;
-    sector->AllocMask = newMask;
-
-    // Even if newBase hasn't changed, some of the old slots will be offset if
-    // new bricks are allocated in the middle of the old mask.
-    // For now, we'll just always say that the entire sector must be updated.
-    return newMask;
+    const uint32_t m = SectorAllocInfo::PageSize;
+    return (size + m - 1) / m; // ceil div
 }
 
-uint64_t BrickSlotAllocator::Free(SectorInfo* sector, uint64_t mask) {
-    uint64_t newMask = sector->AllocMask & ~mask;
-    if (newMask == sector->AllocMask) return 0;
+void BrickSlotAllocator::Reserve(SectorAllocInfo* sector, uint64_t newMask, uint32_t newLod) {
+    uint32_t currSize = GetNumPages(sector->AllocMask, sector->LevelOfDetail);
+    uint32_t newSize = GetNumPages(newMask, newLod);
 
-    uint32_t currSize = (uint32_t)std::popcount(sector->AllocMask);
-    uint32_t newSize = (uint32_t)std::popcount(newMask);
-    Arena.Free(sector->BaseSlot + newSize, currSize - newSize);
+    if (newSize > currSize) {
+        sector->BasePage = Arena.Realloc(sector->BasePage, currSize, newSize);
 
-    if (newMask == 0) {
-        sector->BaseSlot = 0;
+        if (sector->BasePage == 0) {
+            // TODO: defrag storage? and/or maybe add heuristics in FreeList::Realloc to minimize fragmentation
+            throw std::runtime_error("Could not allocate sector storage");
+        }
+    } else if (newSize < currSize) {
+        Arena.Free(sector->BasePage + newSize, currSize - newSize);
+
+        if (newSize == 0) {
+            sector->BasePage = 0;
+        }
     }
-    sector->AllocMask = newMask;
 
-    return newMask;
+    sector->AllocMask = newMask;
+    sector->LevelOfDetail = newLod;
 }
 
 uint32_t FreeList::Realloc(uint32_t baseAddr, uint32_t currSize, uint32_t newSize) {
