@@ -1,4 +1,5 @@
-import VoxelMap;
+import Map;
+import "../BackendCommon";
 
 struct SectorUpdateRecord {
     uint32_t SectorIdx;
@@ -6,12 +7,12 @@ struct SectorUpdateRecord {
     uint64_t AllocMask;
     uint64_t DirtyMask;
     uint8_t* SourceData;
-};
+}
 struct DispatchParams {
     uint NumRecords;
     SectorUpdateRecord* Records;
     VoxelMap Map;
-};
+}
 [vk::push_constant] DispatchParams pc;
 
 void GenerateVoxelMasks(uint8_t* source, uint64_t* dest) {

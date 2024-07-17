@@ -7,7 +7,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
-#include "Renderer.h"
+#include "Render/Renderer.h"
 #include "TerrainGenerator.h"
 #include "Brush.h"
 
@@ -97,13 +97,10 @@ public:
             glfwSwapInterval(useVSync ? 1 : 0);
         }
 
-        static bool useCpuRenderer = false;
-        if (_settings.Checkbox("Use CPU Renderer", &useCpuRenderer) || _renderer == nullptr) {
-            if (useCpuRenderer) {
-                _renderer = std::make_unique<CpuRenderer>(_ctx, _map);
-            } else {
-                _renderer = std::make_unique<GpuRenderer>(_ctx, _map);
-            }
+        static auto rendererId = RendererId::XBrickMap;
+        ImGui::SetNextItemWidth(150);
+        if (_settings.Combo("Renderer", &rendererId) || _renderer == nullptr) {
+            _renderer = Renderer::Create(_ctx, _map, rendererId);
         }
 
         _renderer->DrawSettings(_settings);

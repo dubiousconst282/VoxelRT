@@ -3,13 +3,15 @@ add_executable(
 
     Main.cpp
     VoxelMap.cpp
-    Voxelize.cpp
-    GpuRenderer.cpp
-    CpuRenderer.cpp
-    BrickSlotAllocator.cpp
     TerrainGenerator.cpp
-    Brush.cpp
     GenerateLOD.cpp
+    Voxelize.cpp
+    Brush.cpp
+    
+    Render/RendererXBrickMap.cpp
+    Render/RendererCPU.cpp
+    
+    Render/BrickSlotAllocator.cpp
 )
 
 set(FASTNOISE2_NOISETOOL OFF CACHE BOOL "Build Noise Tool" FORCE)

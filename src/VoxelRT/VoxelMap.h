@@ -164,7 +164,7 @@ struct Sector {
     uint64_t GetAllocationMask() const {
         static_assert(sizeof(BrickSlots) == 64);
 
-#if __AVX512F__&&0
+#if __AVX512F__
         uint64_t mask = _mm512_cmpneq_epi8_mask(_mm512_loadu_epi8(BrickSlots), _mm512_set1_epi8(0));
 #elif __AVX2__
         uint64_t mask = ~0ull;

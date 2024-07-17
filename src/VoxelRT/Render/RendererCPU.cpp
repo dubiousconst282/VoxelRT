@@ -15,13 +15,13 @@ using ViewSectorIndexer =
 
 using BrickMaskIndexer = LinearIndexer3D<BrickIndexer::ShiftXZ - 2, BrickIndexer::ShiftY - 2, false>;
 
-struct FlatVoxelStorage {
+struct StorageManager {
     std::unique_ptr<uint8_t[]> StorageBuffer;
     std::unique_ptr<uint64_t[]> OccupancyStorage;
     uint64_t SectorMasks[ViewSectorIndexer::MaxArea] = {};
     uint64_t Palette[256];
 
-    FlatVoxelStorage() {
+    StorageManager() {
         size_t storageCap = ViewSectorIndexer::MaxArea * (MaskIndexer::MaxArea * BrickIndexer::MaxArea);
         // TODO: implement sparse memory alloc using VirtualAlloc? page remapping could also be useful for something
         StorageBuffer = std::make_unique<uint8_t[]>(storageCap);
@@ -115,7 +115,7 @@ static VMask GetInboundMask(VInt x, VInt y, VInt z) {
 }
 
 // 2 dependent gathers: >=50 latency + index calc
-static VInt GetVoxelMaterial(const FlatVoxelStorage& map, VInt3 pos, VMask mask) {
+static VInt GetVoxelMaterial(const StorageManager& map, VInt3 pos, VMask mask) {
     VInt sectorIdx = ViewSectorIndexer::GetIndex(pos.x >> SectorVoxelShiftXZ, pos.y >> SectorVoxelShiftY, pos.z >> SectorVoxelShiftXZ);
     VInt maskIdx = MaskIndexer::GetIndex(pos.x >> BrickIndexer::ShiftXZ, pos.y >> BrickIndexer::ShiftY, pos.z >> BrickIndexer::ShiftXZ);
     VInt voxelIdx = BrickIndexer::GetIndex(pos.x, pos.y, pos.z);
@@ -130,7 +130,7 @@ static VInt GetVoxelMaterial(const FlatVoxelStorage& map, VInt3 pos, VMask mask)
 }
 
 // 2/4 independet gathers: >=30/60 latency + ALU
-static VMask GetStepPos(const FlatVoxelStorage& map, VInt3& pos, VFloat3 dir, VMask mask) {
+static VMask GetStepPos(const StorageManager& map, VInt3& pos, VFloat3 dir, VMask mask) {
     VInt sectorIdx = ViewSectorIndexer::GetIndex(pos.x >> SectorVoxelShiftXZ, pos.y >> SectorVoxelShiftY, pos.z >> SectorVoxelShiftXZ);
 
     VInt mask_0 = VInt::mask_gather<8>((uint8_t*)map.SectorMasks + 0, sectorIdx, mask);
@@ -167,7 +167,7 @@ static VMask GetStepPos(const FlatVoxelStorage& map, VInt3& pos, VFloat3 dir, VM
 
     return level0;
 }
-static VHitResult RayCast(const FlatVoxelStorage& map, VFloat3 origin, VFloat3 dir, VMask activeMask, glm::ivec3 worldOrigin) {
+static VHitResult RayCast(const StorageManager& map, VFloat3 origin, VFloat3 dir, VMask activeMask, glm::ivec3 worldOrigin) {
     VFloat3 invDir = 1.0f / dir;
     // VFloat3 tStart = (max(sign(dir), 0.0) - origin) * invDir;
     VFloat3 tStart = {
@@ -301,7 +301,7 @@ static swr::HdrTexture2D _skyBox = swr::texutil::LoadCubemapFromPanoramaHDR("ass
 static VBlueNoise _blueNoise = VBlueNoise();
 
 struct FrameConstants {
-    FlatVoxelStorage& Storage;
+    StorageManager& Storage;
     glm::uvec2 Size;
     glm::ivec3 WorldOrigin;
     glm::vec3 OriginFrac;
@@ -390,38 +390,51 @@ static void RenderRow(const FrameConstants& fc, RenderedTile* dest, uint32_t y) 
     }
 }
 
-CpuRenderer::CpuRenderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
-    _ctx = ctx;
-    _map = std::move(map);
-    _storage = std::make_unique<FlatVoxelStorage>();
-    _gbuffer = std::make_unique<GBuffer>(ctx);
+struct RendererCPU : public Renderer {
+    RendererCPU(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
+        _ctx = ctx;
+        _map = std::move(map);
+        _storage = std::make_unique<StorageManager>();
+        _gbuffer = std::make_unique<GBuffer>(ctx);
 
-    _blitShader = ctx->PipeBuilder->CreateCompute("ResolveCpuFramebuffer.slang");
-    _map->MarkAllDirty();
+        _blitShader = ctx->PipeBuilder->CreateCompute("Backends/ResolveCpuFramebuffer.slang");
+        _map->MarkAllDirty();
+    }
+
+    virtual void RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds);
+    virtual void DrawSettings(glim::SettingStore& settings);
+
+private:
+    std::unique_ptr<StorageManager> _storage;
+    havk::ComputePipelinePtr _blitShader;
+};
+
+template<>
+std::unique_ptr<Renderer> Renderer::Create<RendererId::CPU>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
+    return std::make_unique<RendererCPU>(ctx, map);
 }
 
-CpuRenderer::~CpuRenderer() = default;
+void RendererCPU::RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds) {
+    glm::uvec2 renderSize = glm::round(glm::vec2(target->Desc.Width, target->Desc.Height) * _renderScale);
 
-void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds) {
-    glm::uvec2 viewSize = glm::uvec2(target->Desc.Width, target->Desc.Height);
 #ifndef NDEBUG  // debug builds are slow af
-    viewSize /= 4;
+    renderSize /= 4;
 #endif
-    viewSize &= ~3u;  // round down to 4x4 steps
+    renderSize &= ~3u;  // round down to 4x4 steps
 
     bool worldChanged = _map->DirtyLocs.size() > 0;
     _storage->SyncBuffers(*_map);
-    _gbuffer->SetCamera(cmds, cam, viewSize, worldChanged);
+    _gbuffer->SetCamera(cmds, cam, renderSize, worldChanged);
 
-    uint32_t tilesX = viewSize.x / simd::TileWidth;
-    uint32_t tilesY = viewSize.y / simd::TileHeight;
+    uint32_t tilesX = renderSize.x / simd::TileWidth;
+    uint32_t tilesY = renderSize.y / simd::TileHeight;
     size_t fbSize = tilesX * tilesY * sizeof(RenderedTile);
 
     // Buffer orphaning to avoid having to deal with sync issues
     auto outputBuffer = _ctx->CreateBuffer({
         .Size = fbSize,
         .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
         .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
     });
 
@@ -431,20 +444,20 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
 
     FrameConstants fc = {
         .Storage = *_storage,
-        .Size = viewSize,
+        .Size = renderSize,
         .WorldOrigin = glm::floor(_gbuffer->CurrentPos),
         .OriginFrac = glm::fract(_gbuffer->CurrentPos),
         .FrameNo = _gbuffer->FrameNo,
         .NumLightBounces = _numLightBounces,
         .CurrentProj = _gbuffer->CurrentProj,
-        .InvProj = GBuffer::GetInverseProjScreenMat(_gbuffer->CurrentProj, viewSize),
+        .InvProj = GBuffer::GetInverseProjScreenMat(_gbuffer->CurrentProj, renderSize),
     };
 
-    auto rows = std::ranges::iota_view(0u, viewSize.y / simd::TileHeight);
+    auto rows = std::ranges::iota_view(0u, renderSize.y / simd::TileHeight);
     std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
         // VRandom rng(rowId + _gbuffer->FrameNo * 123456ull);
         uint32_t y = rowId * simd::TileHeight;
-        auto destRow = &destTiles[(y / simd::TileHeight) * (viewSize.x / simd::TileWidth)];
+        auto destRow = &destTiles[(y / simd::TileHeight) * (renderSize.x / simd::TileWidth)];
 
         RenderRow(fc, destRow, y);
     });
@@ -462,38 +475,19 @@ void CpuRenderer::RenderFrame(glim::Camera& cam, havk::Image* target, havk::Comm
     BlitConstants pc = {
         .GBuffer = cmds.GetDeviceAddress(*_gbuffer->UniformBuffer, havk::UseBarrier::ComputeRead),
         .PixelData = cmds.GetDeviceAddress(*outputBuffer, havk::UseBarrier::ComputeRead),
-        .Width = viewSize.x,
-        .Height = viewSize.y,
-        .Stride = viewSize.x / simd::TileWidth,
+        .Width = renderSize.x,
+        .Height = renderSize.y,
+        .Stride = renderSize.x / simd::TileWidth,
         .TileShiftX = (uint32_t)std::countr_zero(simd::TileWidth),
         .TileShiftY = (uint32_t)std::countr_zero(simd::TileHeight),
     };
     cmds.Barrier(*_gbuffer->AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
 
-    uint32_t groupsX = (viewSize.x + 7) / 8, groupsY = (viewSize.y + 7) / 8;
+    uint32_t groupsX = (renderSize.x + 7) / 8, groupsY = (renderSize.y + 7) / 8;
     _blitShader->Dispatch(cmds, { groupsX, groupsY, 1 }, pc);
 
     _gbuffer->Resolve(target, cmds);
 }
-void CpuRenderer::DrawSettings(glim::SettingStore& settings) {
-    ImGui::SeparatorText("Renderer##CPU");
-    ImGui::PushItemWidth(150);
-    settings.Combo("Debug Channel", &_gbuffer->DebugChannelView);
-    settings.Slider("Light Bounces", &_numLightBounces, 1, 0u, 5u);
-    settings.Slider("Denoiser Passes", &_gbuffer->NumDenoiserPasses, 1, 0u, 5u);
-    ImGui::PopItemWidth();
-
-    ImGui::Separator();
-    _frameTime.Draw("Frame Time");
-
-    if (_gbuffer->AlbedoTex != nullptr) {
-        double frameMs, frameDevMs;
-        _frameTime.GetElapsedMs(frameMs, frameDevMs);
-
-        uint32_t numPixels = _gbuffer->AlbedoTex->Desc.Width * _gbuffer->AlbedoTex->Desc.Height;
-        uint32_t raysPerPixel = _numLightBounces + 1;
-        double raysPerSec = numPixels * raysPerPixel * (1000 / frameMs);
-
-        ImGui::Text("Rays/sec: %.2fM", raysPerSec / 1000000.0);
-    }
+void RendererCPU::DrawSettings(glim::SettingStore& settings) {
+    Renderer::DrawSettings(settings);
 }

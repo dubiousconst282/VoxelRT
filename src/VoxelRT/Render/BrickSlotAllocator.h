@@ -1,6 +1,6 @@
 #pragma once
 
-#include "VoxelMap.h"
+#include "../VoxelMap.h"
 
 // Simple allocator based on free-lists
 struct FreeList {
