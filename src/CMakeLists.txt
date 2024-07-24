@@ -1,12 +1,13 @@
 cmake_minimum_required(VERSION 3.25)
 
 set(VCPKG_MANIFEST_MODE ON)
-set(VCPKG_BUILD_TYPE "release")
 set(CMAKE_BINARY_DIR "${CMAKE_CURRENT_LIST_DIR}/../build")
 set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
 
 if(CMAKE_HOST_LINUX)
-    set(VCPKG_TARGET_TRIPLET "x64-linux-dynamic") # static link takes way too long
+    set(VCPKG_TARGET_TRIPLET "x64-linux-dynamic-release") # static link takes way too long
+elseif(CMAKE_HOST_WIN32)
+	set(VCPKG_TARGET_TRIPLET "x64-windows-release")
 endif()
 
 project("VoxelRT")

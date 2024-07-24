@@ -1,32 +1,20 @@
 module Havk;
 
+[vk::binding(0, 0)] __DynamicResource havk__TextureHeap[];
+[vk::binding(1, 0)] __DynamicResource havk__RWTextureHeap[];
+
 public struct ImageHandle<T> {
     uint DescriptorIndex;
-};
+}
 
-#define HANDLE_TYPE(_T, _E, bdn) \
-    [vk::binding(bdn, 0)] _T<_E> havk__DescriptorHeap__ ##_T ##_ ##_E []; \
-    public extension ImageHandle<_T<_E>> {\
-        public property _T<_E> Instance {\
-            get { return havk__DescriptorHeap__ ##_T ##_ ##_E [DescriptorIndex];  }\
-        }\
+__generic<E, Shape: __ITextureShape, let isArray: int, let isMS: int, let sampleCount: int, let access: int, let isShadow: int, let isCombined: int, let format: int>
+public extension ImageHandle<__TextureImpl<E, Shape, isArray, isMS, sampleCount, access, isShadow, isCombined, format>> {
+    typealias TextureType = __TextureImpl<E, Shape, isArray, isMS, sampleCount, access, isShadow, isCombined, format>;
+
+    public property TextureType Instance {
+        get { return (access != 0 ? havk__RWTextureHeap : havk__TextureHeap)[DescriptorIndex].as<TextureType>(); }
     }
-
-HANDLE_TYPE(Texture2D, float, 0)
-HANDLE_TYPE(Texture2D, float2, 0)
-HANDLE_TYPE(Texture2D, float4, 0)
-HANDLE_TYPE(Texture2D, uint, 0)
-HANDLE_TYPE(Texture2D, uint2, 0)
-HANDLE_TYPE(Texture2D, uint4, 0)
-HANDLE_TYPE(TextureCube, float3, 0)
-
-HANDLE_TYPE(RWTexture2D, float, 1)
-HANDLE_TYPE(RWTexture2D, float2, 1)
-HANDLE_TYPE(RWTexture2D, float4, 1)
-HANDLE_TYPE(RWTexture2D, uint, 1)
-HANDLE_TYPE(RWTexture2D, uint2, 1)
-HANDLE_TYPE(RWTexture2D, uint4, 1)
-HANDLE_TYPE(RWTexture2DArray, float3, 1)
+}
 
 public typealias TextureHandle2D<F = float4> = ImageHandle<Texture2D<F>>;
 public typealias TextureHandle3D<F = float4> = ImageHandle<Texture3D<F>>;
@@ -53,6 +41,17 @@ public extension __TextureImpl<T, __Shape2D, 1, 0, 0, access, isShadow, isCombin
             uint width, height, layers;
             GetDimensions(width, height, layers);
             return uint3(width, height, layers);
+        }
+    }
+}
+
+__generic<T, let access : int, let isShadow : int, let isCombined : int, let format : int>
+public extension __TextureImpl<T, __Shape3D, 0, 0, 0, access, isShadow, isCombined, format> {
+    public property uint3 Size {
+        get {
+            uint width, height, depth;
+            GetDimensions(width, height, depth);
+            return uint3(width, height, depth);
         }
     }
 }

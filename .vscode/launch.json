@@ -18,9 +18,6 @@
             "request": "launch",
             "program": "${command:cmake.launchTargetPath}",
             "args": [],
-            "env": {
-                "INTEL_DEBUG": "cs"
-            },
             "cwd": "${workspaceFolder}",
             "console": "internalConsole",
         },
