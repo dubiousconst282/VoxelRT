@@ -10,6 +10,7 @@ add_executable(
     
     Render/RendererXBrickMap.cpp
     Render/RendererCPU.cpp
+    Render/RendererFlatDDA.cpp
     
     Render/BrickSlotAllocator.cpp
 )

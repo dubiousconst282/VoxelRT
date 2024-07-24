@@ -197,7 +197,7 @@ struct RendererBrickMap : public GpuRenderer {
 
     RendererBrickMap(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : GpuRenderer(ctx, map) {
         Storage = std::make_unique<GpuStorageManager>(ctx);
-        RenderShader = ctx->PipeBuilder->CreateCompute("Backends/Render.slang", { .PrepDefs = { { "BACKEND_ID", "0" }}});
+        RenderShader = ctx->PipeBuilder->CreateCompute("Backends/Render.slang", { .PrepDefs = { { "BACKEND_ID", "1" }}});
 
         _map->MarkAllDirty();
     }

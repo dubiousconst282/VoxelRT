@@ -48,15 +48,7 @@ void ComputeMain(uint idx: SV_DispatchThreadID) {
 
     uint3 sectorPos = GetPosFromLinearIndex(rec.SectorIdx, VoxelMap.NUM_SECTORS_XZ, VoxelMap.NUM_SECTORS_Y);
     uint64_t* sectorMask = &storage->SectorMasks[GetLinearIndex(sectorPos / 4, VoxelMap.NUM_SECTORS_XZ / 4, VoxelMap.NUM_SECTORS_Y / 4)];
-    uint64_t flag = 1ull << GetLinearIndex(sectorPos,4,4);
-    
-    if (rec.AllocMask != 0) {
-        __spirvInterlocked_or(*sectorMask, flag);
-        //InterlockedOr(*sectorMask, flag);
-    } else {
-        __spirvInterlocked_and(*sectorMask, ~flag);
-        //InterlockedAnd(*sectorMask, ~flag);
-    }
+    InterlockedSetBit(*sectorMask, GetLinearIndex(sectorPos, 4, 4), rec.AllocMask != 0);
 
     // Copy incoming data
     uint8_t* storageData = &pc.Map.Storage->BrickVoxelData[rec.AllocInfo.BaseAddress];

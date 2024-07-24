@@ -1,5 +1,5 @@
 public interface IVoxelMap {
-    public HitInfo RayCast(int3 voxelOrigin, float3 origin, float3 dir, bool coarse);
+    public HitInfo RayCast(int3 worldOrigin, float3 origin, float3 dir, bool coarse);
     public Material GetMaterialFromId(uint materialId);
 }
 
@@ -16,6 +16,9 @@ public struct HitInfo {
 }
 
 public struct Material {
+    public static const Material DefaultEmpty = { uint2(0) };
+    public static const Material DefaultOpaque = { uint2((31 << 11) | (63 << 5) | 31) };
+
     public uint2 Data;
 
     public property float3 Color {
@@ -96,4 +99,16 @@ public uint tzcnt64(uint64_t mask) {
     uint b = uint(mask >> 32);
     uint c = firstbitlow(a != 0 ? a : b);
     return a != 0 ? c : c + 32;
+}
+
+public void InterlockedSetBit(__ref uint64_t dest, uint index, bool value) {
+    // Workaround for 64-bit atomics which are slightly fucked on slang's spirv target atm
+    uint mask = 1 << (index & 31);
+    uint* ptr = (uint*)&dest + (index / 32u);
+
+    if (value) {
+        InterlockedOr(*ptr, mask);
+    } else {
+        InterlockedAnd(*ptr, ~mask);
+    }
 }

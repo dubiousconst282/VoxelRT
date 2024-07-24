@@ -3,7 +3,7 @@
 import Havk.Core;
 import GBuffer;
 
-enum DebugChannel { None, Albedo, Irradiance, Normals, TraversalIters, Variance };
+enum DebugChannel { None, Albedo, Irradiance, Normals, HeatMap, Variance };
 
 struct DispatchParams {
     GBufferUniforms* GBuffer;
@@ -57,8 +57,8 @@ float4 FragmentMain(float2 uv: TEXCOORD0) {
             float3 normal = UnpackGNormal(pc.GBuffer.AlbedoTex.Instance[pos].w);
             return float4(normal * 0.5 + 0.5, 1.0);
         }
-        case DebugChannel.TraversalIters: {
-            // radiance.w == rayStepIters unless overwritten by reproj / SVGF passes.
+        case DebugChannel.HeatMap: {
+            // radiance.w == renderClocks unless overwritten by reproj / SVGF passes.
             float iters = pc.GBuffer.IrradianceTex.Instance[pos].w;
 
             if (iters < 64) return float4(iters.xxx / 64.0, 1.0);

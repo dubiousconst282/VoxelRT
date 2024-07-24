@@ -21,7 +21,7 @@ struct GBufferUniforms {
 };
 
 struct GBuffer {
-    enum class DebugChannel { None, Albedo, Irradiance, Normals, TraversalIters, Variance };
+    enum class DebugChannel { None, Albedo, Irradiance, Normals, HeatMap, Variance };
 
     havk::DeviceContext* Context;
     havk::ComputePipelinePtr ReprojShader, FilterShader;
@@ -41,6 +41,7 @@ struct GBuffer {
 
     DebugChannel DebugChannelView = DebugChannel::None;
     uint32_t NumDenoiserPasses = 5;
+    bool EnableTAA = true;
 
     glm::uvec2 RenderSize = {};
     float _renderScale = 1.0f;
@@ -135,7 +136,7 @@ struct GBuffer {
         glm::vec4 posB = u.HistoryInvProjMat * glm::vec4(1.0);
         float moveDist = glm::length(glm::abs(glm::vec3(posA) - glm::vec3(posB)) + glm::abs(u.OriginDelta));
 
-        NumSteadyFrames = resetHistory || moveDist > 0.001 ? 0 : NumSteadyFrames + 1;
+        NumSteadyFrames = resetHistory || moveDist || !EnableTAA > 0.001 ? 0 : NumSteadyFrames + 1;
         u.NumSteadyFrames = NumSteadyFrames;
 
         cmds.UpdateBuffer(buffer, 0, sizeof(GBufferUniforms), &u);
@@ -145,7 +146,7 @@ struct GBuffer {
         uint32_t groupsX = (RenderSize.x + 7) / 8;
         uint32_t groupsY = (RenderSize.y + 7) / 8;
 
-        if (DebugChannelView != DebugChannel::TraversalIters) {
+        if (DebugChannelView != DebugChannel::HeatMap) {
             struct ReprojParams {
                 VkDeviceAddress GBuffer;
             };

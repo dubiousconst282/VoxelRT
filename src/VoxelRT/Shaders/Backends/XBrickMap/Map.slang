@@ -104,6 +104,9 @@ public struct VoxelMap : IVoxelMap {
         float3 invDir = 1.0 / dir;
         float3 tStart = (step(0.0, dir) - origin) * invDir;
 
+        // ULP increment doesn't work when origin is at exact integer coords
+        if (!coarse) tStart += select(tStart == 0.0, 0.001, 0);
+
         float3 startPos = ClipRayToAABB(origin, dir, -voxelOrigin - 0.001, float3(GRID_SIZE_XZ, GRID_SIZE_Y, GRID_SIZE_XZ) - voxelOrigin + 0.001);
         int3 voxelPos = voxelOrigin + int3(floor(startPos));
         //int3 voxelPos = int3(floor(voxelOrigin + origin));

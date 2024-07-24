@@ -14,11 +14,12 @@
 
 enum class RendererId {
     CPU,            // Minimal CPU-SIMD port of XBrickMap
-    XBrickMap,      // 3-level grid with 4x4x4 sectors -> 8x8x8 bricks, plus 4x4x4 masks for finer space skipping
-    // PlainDDA,    // Flat grid, unaccelerated DDA
-    // NestedDDA,   // 2-level grid with 8x8x8 bricks, two skipping levels
+    XBrickMap,      // 3-level grid with 4x4x4 sectors to 8x8x8 bricks, plus 4x4x4 masks for finer space skipping
+    PlainDDA,       // Flat grid, unaccelerated DDA
+    MultiDDA,       // Flat grid, space skipping through 8x8x8 bricks using nested DDA loops
     // ManhattanDF, // Flat grid, space skipping through Manhattan distance field
     // EuclideanDF, // Flat grid, space skipping through Euclidean distance field
+    // DirectionalDF,// XBrickMap with (64/2)³ 8-directional distance fields
     // ESVO         // 1:1 ESVO port
     // Tree64,      // 4³-tree
     // Tree512,     // 8³-tree
@@ -41,6 +42,8 @@ struct Renderer {
         sprintf(label, "%.3gx (%dx%d)", _renderScale, _gbuffer->RenderSize.x, _gbuffer->RenderSize.y);
         settings.Slider("Render Scale", &_renderScale, 1, 0.25f, 4.0f, label);
         _renderScale = std::round(_renderScale / 0.25f) * 0.25f;
+
+        settings.Checkbox("Temporal AA", &_gbuffer->EnableTAA);
 
         ImGui::PopItemWidth();
         ImGui::PopID();
@@ -71,6 +74,8 @@ struct Renderer {
         switch (id) {
             case RendererId::CPU: return Create<RendererId::CPU>(ctx, map);
             case RendererId::XBrickMap: return Create<RendererId::XBrickMap>(ctx, map);
+            case RendererId::PlainDDA: return Create<RendererId::PlainDDA>(ctx, map);
+            case RendererId::MultiDDA: return Create<RendererId::MultiDDA>(ctx, map);
             default: throw std::runtime_error("Unknown renderer ID");
         }
     }
@@ -92,6 +97,8 @@ private:
 
     template<> std::unique_ptr<Renderer> Create<RendererId::CPU>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::XBrickMap>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
+    template<> std::unique_ptr<Renderer> Create<RendererId::PlainDDA>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
+    template<> std::unique_ptr<Renderer> Create<RendererId::MultiDDA>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
 };
 
 struct GpuRenderer : public Renderer {

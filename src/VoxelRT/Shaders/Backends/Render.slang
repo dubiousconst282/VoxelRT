@@ -4,12 +4,20 @@ import GBuffer;
 import Utilities;
 
 #ifndef BACKEND_ID
-    #define BACKEND_ID 0
+    #define BACKEND_ID 2
 #endif
 
-#if BACKEND_ID == 0
+#if BACKEND_ID == 1
     import XBrickMap.Map;
     typealias TVoxelMap = VoxelMap;
+#elif BACKEND_ID == 2
+    import FlatDDA.Map;
+    typealias TVoxelMap = backend::flat_dda::VoxelMap;
+#elif BACKEND_ID == 3
+    import FlatDDA.Map;
+    typealias TVoxelMap = backend::flat_dda::VoxelMap_MultiDDA;
+#else
+    static_assert(false, "Unknown renderer backend ID");
 #endif
 
 struct DispatchParams {
@@ -25,7 +33,7 @@ struct DispatchParams {
 
 [numthreads(8, 8)]
 void ComputeMain(uint2 pos: SV_DispatchThreadID) {
-    uint clockStart = getRealtimeClockLow();
+    uint64_t clockStart = clockARB();
 
     float3 rayDir, rayPos;
     GetPrimaryRay(pos, rayPos, rayDir);
@@ -34,6 +42,11 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
 
     float3 irradiance = pc.MaxBounces == 0 ? 1.0 : 0.0;
     float3 throughput = 1.0;
+
+    // very non PBR parameters
+    const float3 sunDir = normalize(float3(0.3,0.9,-0.28));
+    const float sunIntensity = 12;
+    const float3 sunColor = float3(1.0, 0.9, 0.7);
 
     for (int bounceNo = 0; bounceNo <= pc.MaxBounces; bounceNo++) {
         HitInfo hit = pc.Map.RayCast(pc.GBuffer->WorldOrigin, rayPos, rayDir, bounceNo != 0);
@@ -44,11 +57,6 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
             let material = pc.Map.GetMaterialFromId(hit.MaterialId);
             albedo = material.Color;
             emission = material.Emission;
-
-            // very non PBR parameters
-            const float3 sunDir = normalize(float3(0.3,0.9,-0.28));
-            const float sunIntensity = 12;
-            const float3 sunColor = float3(1.0, 0.9, 0.7);
         }
 
         if (bounceNo == 0) {
@@ -57,6 +65,12 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
                 irradiance = GetSkyColor(rayDir, true);
                 pc.GBuffer->DepthTex.Instance[pos] = -1.0;
                 break;
+            }
+            if (pc.MaxBounces == 0) {
+                // fake lighting just so that faces are distinguishable
+                irradiance *= hit.Normal.x != 0 ? 0.8 : 
+                              hit.Normal.z != 0 ? 0.5 : 
+                              hit.Normal.y  < 0 ? 0.3 : 1.0;
             }
             pc.GBuffer->AlbedoTex.Instance[pos] = float4(albedo, PackGNormal(hit.Normal));
 
@@ -82,7 +96,7 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
         rayPos = hit.Pos + hit.Normal * 0.01;
     }
 
-    uint clockEnd = getRealtimeClockLow();
+    uint64_t clockEnd = clockARB();
     float clockDiff = (clockEnd - clockStart) / (3000.0 * (pc.MaxBounces + 1));
 
     pc.GBuffer->IrradianceTex.Instance[pos] = float4(irradiance, clockDiff);
