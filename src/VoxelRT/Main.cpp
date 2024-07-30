@@ -20,6 +20,7 @@ class Application {
     havk::DeviceContext* _ctx;
     std::unique_ptr<Renderer> _renderer;
     std::unique_ptr<TerrainGenerator> _terrainGen;
+    std::unique_ptr<GBuffer> _gbuffer;
 
     BrushSession _brush;
 
@@ -92,20 +93,61 @@ public:
 
         ImGui::SeparatorText("General");
 
-        static bool useVSync = true;
-        if (_settings.Checkbox("VSync", &useVSync)) {
-            glfwSwapInterval(useVSync ? 1 : 0);
-        }
+        // static bool useVSync = true;
+        // if (_settings.Checkbox("VSync", &useVSync)) {
+        //     glfwSwapInterval(useVSync ? 1 : 0);
+        // }
 
         static auto rendererId = RendererId::XBrickMap;
-        ImGui::SetNextItemWidth(150);
+        ImGui::PushItemWidth(150);
         if (_settings.Combo("Renderer", &rendererId) || _renderer == nullptr) {
             _renderer = Renderer::Create(_ctx, _map, rendererId);
         }
 
-        _renderer->DrawSettings(_settings);
+        glm::uvec2 renderSize = _gbuffer->RenderSize;
+        if (renderSize.x == 0 || renderSize.y == 0) {
+            renderSize = glm::uvec2(target->Desc.Width, target->Desc.Height);
+        }
 
-        ImGui::Text("Total Sectors: %zu (%d pending gen)", _map->Sectors.size(), _terrainGen->GetNumPendingRequests());
+        _settings.Combo("Debug Channel", &_gbuffer->DebugChannelView);
+
+        char label[32];
+        snprintf(label, sizeof(label), "%dx%d", renderSize.x, renderSize.y);
+        if (ImGui::BeginCombo("Render Size", label)) {
+            for (float scale = 0.25; scale <= 2.0; scale += 0.25) {
+                uint32_t width = round(target->Desc.Width * scale);
+                uint32_t height = round(target->Desc.Height * scale);
+                bool isCurrent = renderSize.x == width && renderSize.y == height;
+
+                snprintf(label, sizeof(label), "%dx%d", width, height);
+                if (ImGui::Selectable(label, isCurrent)) {
+                    renderSize = glm::uvec2(width, height);
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        _settings.Slider("Denoiser Passes", &_gbuffer->NumDenoiserPasses, 1, 0u, 5u);
+        _settings.Checkbox("Temporal AA", &_gbuffer->EnableTAA);
+
+        ImGui::PushID(typeid(_renderer).hash_code());
+        _renderer->DrawSettings(_settings);
+        ImGui::PopID();
+
+        if (auto gpur = dynamic_cast<GpuRenderer*>(_renderer.get())) {
+            ImGui::SeparatorText("Stats");
+            gpur->DrawPerfCounters();
+            
+            ImGui::Button("Benchmark");
+        }
+
+        ImGui::PopItemWidth();
+
+        uint32_t numBricks = 0;
+        for (auto& [idx, sector] : _map->Sectors) {
+            numBricks += (uint32_t)std::popcount(sector.GetAllocationMask());
+        }
+        ImGui::Text("Bricks: %.1fK in %.1fK sectors (%d pending gen)", numBricks / 1000.0, _map->Sectors.size() / 1000.0, _terrainGen->GetNumPendingRequests());
 
         ImGui::SeparatorText("Camera");
         _settings.Input("Pos", &_cam.Position.x, 3, "%.1f");
@@ -114,7 +156,10 @@ public:
         _settings.Drag("FOV", &_cam.FieldOfView, 1, 10.0f, 120.0f, 0.5f, "%.1f deg");
         ImGui::End();
 
-        _renderer->RenderFrame(_cam, target, cmds);
+        _gbuffer->SetCamera(cmds, _cam, renderSize, _map->DirtyLocs.size() > 0);
+        _renderer->RenderFrame(_cam, _gbuffer.get(), cmds);
+
+        _gbuffer->Resolve(target, cmds);
     }
 
     void DrawBrushParams() {
@@ -282,6 +327,8 @@ void InitImGui(havk::DeviceContext* ctx, GLFWwindow* window, VkDescriptorPool& d
 }
 
 int main(int argc, char** args) {
+    setlinebuf(stdout);
+
     if (!glfwInit()) return -1;
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -317,8 +364,6 @@ int main(int argc, char** args) {
         Application app(ctx.get());
 
         while (!glfwWindowShouldClose(window)) {
-            glfwPollEvents();
-
             int display_w, display_h;
             glfwGetFramebufferSize(window, &display_w, &display_h);
 
@@ -328,6 +373,10 @@ int main(int argc, char** args) {
             }
 
             auto [image, cmdList] = ctx->Swapchain->AcquireImage();
+
+            // Poll events after AcquireImage() to minimize input lag, because
+            // it may block for too long and make events stale
+            glfwPollEvents();
 
             // Start the Dear ImGui frame
             ImGui_ImplVulkan_NewFrame();

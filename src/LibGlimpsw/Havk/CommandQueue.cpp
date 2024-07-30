@@ -69,16 +69,18 @@ void CommandList::TransitionLayout(Image& image, VkImageLayout newLayout, VkPipe
         .image = image.Handle,
         .subresourceRange = { .aspectMask = aspect, .levelCount = image.Desc.NumLevels, .layerCount = image.Desc.NumLayers },
     };
-    vkCmdPipelineBarrier(Buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, destStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    vkCmdPipelineBarrier(Buffer, image.CurrentStage_, destStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
+    image.CurrentStage_ = destStage;
     image.CurrentLayout_ = newLayout;
+
     MarkUse(image);
 }
 
 void CommandList::Barrier(Image& image, UseBarrier barrier, VkImageLayout layout) {
     VkImageMemoryBarrier vkBarrier = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+        .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
         .dstAccessMask = barrier.Access,
         .oldLayout = image.CurrentLayout_,
         .newLayout = layout == VK_IMAGE_LAYOUT_MAX_ENUM ? image.CurrentLayout_ : layout,
@@ -88,16 +90,20 @@ void CommandList::Barrier(Image& image, UseBarrier barrier, VkImageLayout layout
         // TODO: handle this annoying aspect thingy
         .subresourceRange = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = image.Desc.NumLevels, .layerCount = image.Desc.NumLayers },
     };
-    vkCmdPipelineBarrier(Buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, barrier.Stage, 0, 0, nullptr, 0, nullptr, 1, &vkBarrier);
+    if (vkBarrier.oldLayout != vkBarrier.newLayout) vkBarrier.srcAccessMask |= VK_ACCESS_MEMORY_READ_BIT;
+    
+    vkCmdPipelineBarrier(Buffer, image.CurrentStage_, barrier.Stage, 0, 0, nullptr, 0, nullptr, 1, &vkBarrier);
 
+    image.CurrentStage_ = barrier.Stage;
     image.CurrentLayout_ = vkBarrier.newLayout;
+
     MarkUse(image);
 }
 
 void CommandList::Barrier(havk::Buffer& buffer, UseBarrier barrier) {
     VkBufferMemoryBarrier vkBarrier = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-        .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+        .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
         .dstAccessMask = barrier.Access,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -105,8 +111,10 @@ void CommandList::Barrier(havk::Buffer& buffer, UseBarrier barrier) {
         .offset = 0,
         .size = VK_WHOLE_SIZE,
     };
-    vkCmdPipelineBarrier(this->Buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, barrier.Stage, 0, 0, 0, 1, &vkBarrier, 0, nullptr);
+    vkCmdPipelineBarrier(this->Buffer, buffer.CurrentStage_, barrier.Stage, 0, 0, 0, 1, &vkBarrier, 0, nullptr);
 
+    buffer.CurrentStage_ = barrier.Stage;
+    
     MarkUse(buffer);
 }
 

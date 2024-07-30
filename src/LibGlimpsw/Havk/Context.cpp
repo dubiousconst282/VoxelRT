@@ -125,8 +125,14 @@ static VkDevice CreateLogicalDevice(const DeviceInfo& devInfo, const DeviceCreat
         .pQueuePriorities = &queuePriority,
     };
 
+    VkPhysicalDeviceShaderClockFeaturesKHR shaderClockFeatures = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CLOCK_FEATURES_KHR,
+        .shaderSubgroupClock = VK_TRUE,
+    };
+
     VkPhysicalDeviceVulkan13Features vulkan13Features = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+        .pNext = &shaderClockFeatures,
 
         .synchronization2 = VK_TRUE,
         .dynamicRendering = VK_TRUE,
@@ -136,6 +142,7 @@ static VkDevice CreateLogicalDevice(const DeviceInfo& devInfo, const DeviceCreat
         .pNext = &vulkan13Features,
 
         .uniformAndStorageBuffer8BitAccess = VK_TRUE,
+        .storagePushConstant8 = VK_TRUE,
         .shaderBufferInt64Atomics = VK_TRUE,
         .shaderFloat16 = VK_TRUE,
         .shaderInt8 = VK_TRUE,
@@ -151,6 +158,7 @@ static VkDevice CreateLogicalDevice(const DeviceInfo& devInfo, const DeviceCreat
         .runtimeDescriptorArray = VK_TRUE,
 
         .scalarBlockLayout = VK_TRUE,
+        .hostQueryReset = VK_TRUE,
         .timelineSemaphore = VK_TRUE,
         .bufferDeviceAddress = VK_TRUE,
     };
@@ -159,6 +167,7 @@ static VkDevice CreateLogicalDevice(const DeviceInfo& devInfo, const DeviceCreat
         .pNext = &vulkan12Features,
 
         .uniformAndStorageBuffer16BitAccess = VK_TRUE,
+        .storagePushConstant16 = VK_TRUE,
         .variablePointersStorageBuffer = VK_TRUE,
         .variablePointers = VK_TRUE,
     };
@@ -292,7 +301,7 @@ DeviceContextPtr Create(DeviceCreateParams pars) {
     }
     pars.RequiredDeviceExtensions.push_back(VK_KHR_VARIABLE_POINTERS_EXTENSION_NAME);
     pars.RequiredDeviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
-
+    pars.RequiredDeviceExtensions.push_back(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
 
     DeviceInfo devInfo = SelectPhysicalDevice(ctx->Instance, surface, pars);
     ctx->PhysicalDeviceInfo = devInfo;

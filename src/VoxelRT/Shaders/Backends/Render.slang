@@ -3,19 +3,27 @@ import BackendCommon;
 import GBuffer;
 import Utilities;
 
+#include "PerfCounters.h.slang"
+
 #ifndef BACKEND_ID
-    #define BACKEND_ID 2
+    #define BACKEND_ID 1
 #endif
 
 #if BACKEND_ID == 1
     import XBrickMap.Map;
-    typealias TVoxelMap = VoxelMap;
+    typealias TVoxelMap = backend::xbrickmap::VoxelMap;
 #elif BACKEND_ID == 2
     import FlatDDA.Map;
     typealias TVoxelMap = backend::flat_dda::VoxelMap;
 #elif BACKEND_ID == 3
     import FlatDDA.Map;
     typealias TVoxelMap = backend::flat_dda::VoxelMap_MultiDDA;
+#elif BACKEND_ID == 4
+    import DistField.Map;
+    typealias TVoxelMap = backend::distfield::VoxelMap<1>;
+#elif BACKEND_ID == 5
+    import DistField.Map;
+    typealias TVoxelMap = backend::distfield::VoxelMap<2>;
 #else
     static_assert(false, "Unknown renderer backend ID");
 #endif
@@ -27,12 +35,15 @@ struct DispatchParams {
     uint MaxBounces;
     TextureHandle2D<uint2> StbnTexture;
     TextureHandleCube<float3> SkyTexture;
+    PerfStats* PerfCounters;
 };
 
 [vk::push_constant] DispatchParams pc;
 
 [numthreads(8, 8)]
 void ComputeMain(uint2 pos: SV_DispatchThreadID) {
+    g_PerfTracker = pc.PerfCounters;
+
     uint64_t clockStart = clockARB();
 
     float3 rayDir, rayPos;
@@ -49,7 +60,11 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
     const float3 sunColor = float3(1.0, 0.9, 0.7);
 
     for (int bounceNo = 0; bounceNo <= pc.MaxBounces; bounceNo++) {
+        PERF_STAT_INC(RayCasts, 1);
+        PERF_TIME_BEGIN(ClocksPerRay);
         HitInfo hit = pc.Map.RayCast(pc.GBuffer->WorldOrigin, rayPos, rayDir, bounceNo != 0);
+        PERF_TIME_END(ClocksPerRay);
+
         float3 albedo;
         float emission;
 

@@ -395,15 +395,76 @@ struct RendererCPU : public Renderer {
         _ctx = ctx;
         _map = std::move(map);
         _storage = std::make_unique<StorageManager>();
-        _gbuffer = std::make_unique<GBuffer>(ctx);
 
         _blitShader = ctx->PipeBuilder->CreateCompute("Backends/ResolveCpuFramebuffer.slang");
         _map->MarkAllDirty();
     }
 
-    virtual void RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds);
-    virtual void DrawSettings(glim::SettingStore& settings);
+    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+        glm::uvec2 renderSize = target->RenderSize;
 
+        #if !NDEBUG
+        renderSize /= 4; // debug builds are unusable without this
+        #endif
+
+        _storage->SyncBuffers(*_map);
+
+        uint32_t tilesX = renderSize.x / simd::TileWidth;
+        uint32_t tilesY = renderSize.y / simd::TileHeight;
+        size_t fbSize = tilesX * tilesY * sizeof(RenderedTile);
+
+        // Buffer orphaning to avoid having to deal with sync issues
+        auto outputBuffer = _ctx->CreateBuffer({
+            .Size = fbSize,
+            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        });
+
+        auto destTiles = (RenderedTile*)outputBuffer->MappedData;
+
+        FrameConstants fc = {
+            .Storage = *_storage,
+            .Size = renderSize,
+            .WorldOrigin = glm::floor(target->CurrentPos),
+            .OriginFrac = glm::fract(target->CurrentPos),
+            .FrameNo = target->FrameNo,
+            .NumLightBounces = _numLightBounces,
+            .CurrentProj = target->CurrentProj,
+            .InvProj = GBuffer::GetInverseProjScreenMat(target->CurrentProj, renderSize),
+        };
+
+        auto rows = std::ranges::iota_view(0u, renderSize.y / simd::TileHeight);
+        std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
+            // VRandom rng(rowId + _gbuffer->FrameNo * 123456ull);
+            uint32_t y = rowId * simd::TileHeight;
+            auto destRow = &destTiles[(y / simd::TileHeight) * (renderSize.x / simd::TileWidth)];
+
+            RenderRow(fc, destRow, y);
+        });
+        outputBuffer->Flush();
+
+        struct BlitParams {
+            VkDeviceAddress GBuffer;
+            VkDeviceAddress PixelData;
+
+            uint32_t Width, Height, Stride;
+            uint32_t TileShiftX, TileShiftY;
+        };
+        uint32_t groupsX = (renderSize.x + 7) / 8, groupsY = (renderSize.y + 7) / 8;
+        
+        cmds.Barrier(*target->AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
+        _blitShader->Dispatch(cmds, { groupsX, groupsY, 1 }, BlitParams {
+            .GBuffer = cmds.GetDeviceAddress(*target->UniformBuffer, havk::UseBarrier::ComputeRead),
+            .PixelData = cmds.GetDeviceAddress(*outputBuffer, havk::UseBarrier::ComputeRead),
+            .Width = renderSize.x,
+            .Height = renderSize.y,
+            .Stride = renderSize.x / simd::TileWidth,
+            .TileShiftX = (uint32_t)std::countr_zero(simd::TileWidth),
+            .TileShiftY = (uint32_t)std::countr_zero(simd::TileHeight),
+        });
+    }
+    
 private:
     std::unique_ptr<StorageManager> _storage;
     havk::ComputePipelinePtr _blitShader;
@@ -412,82 +473,4 @@ private:
 template<>
 std::unique_ptr<Renderer> Renderer::Create<RendererId::CPU>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
     return std::make_unique<RendererCPU>(ctx, map);
-}
-
-void RendererCPU::RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds) {
-    glm::uvec2 renderSize = glm::round(glm::vec2(target->Desc.Width, target->Desc.Height) * _renderScale);
-
-#ifndef NDEBUG  // debug builds are slow af
-    renderSize /= 4;
-#endif
-    renderSize &= ~3u;  // round down to 4x4 steps
-
-    bool worldChanged = _map->DirtyLocs.size() > 0;
-    _storage->SyncBuffers(*_map);
-    _gbuffer->SetCamera(cmds, cam, renderSize, worldChanged);
-
-    uint32_t tilesX = renderSize.x / simd::TileWidth;
-    uint32_t tilesY = renderSize.y / simd::TileHeight;
-    size_t fbSize = tilesX * tilesY * sizeof(RenderedTile);
-
-    // Buffer orphaning to avoid having to deal with sync issues
-    auto outputBuffer = _ctx->CreateBuffer({
-        .Size = fbSize,
-        .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
-        .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-    });
-
-    auto destTiles = (RenderedTile*)outputBuffer->MappedData;
-
-    _frameTime.Begin();
-
-    FrameConstants fc = {
-        .Storage = *_storage,
-        .Size = renderSize,
-        .WorldOrigin = glm::floor(_gbuffer->CurrentPos),
-        .OriginFrac = glm::fract(_gbuffer->CurrentPos),
-        .FrameNo = _gbuffer->FrameNo,
-        .NumLightBounces = _numLightBounces,
-        .CurrentProj = _gbuffer->CurrentProj,
-        .InvProj = GBuffer::GetInverseProjScreenMat(_gbuffer->CurrentProj, renderSize),
-    };
-
-    auto rows = std::ranges::iota_view(0u, renderSize.y / simd::TileHeight);
-    std::for_each(std::execution::par_unseq, rows.begin(), rows.end(), [&](uint32_t rowId) {
-        // VRandom rng(rowId + _gbuffer->FrameNo * 123456ull);
-        uint32_t y = rowId * simd::TileHeight;
-        auto destRow = &destTiles[(y / simd::TileHeight) * (renderSize.x / simd::TileWidth)];
-
-        RenderRow(fc, destRow, y);
-    });
-    outputBuffer->Flush();
-
-    _frameTime.End();
-
-    struct BlitConstants {
-        VkDeviceAddress GBuffer;
-        VkDeviceAddress PixelData;
-        
-        uint32_t Width, Height, Stride;
-        uint32_t TileShiftX, TileShiftY;
-    };
-    BlitConstants pc = {
-        .GBuffer = cmds.GetDeviceAddress(*_gbuffer->UniformBuffer, havk::UseBarrier::ComputeRead),
-        .PixelData = cmds.GetDeviceAddress(*outputBuffer, havk::UseBarrier::ComputeRead),
-        .Width = renderSize.x,
-        .Height = renderSize.y,
-        .Stride = renderSize.x / simd::TileWidth,
-        .TileShiftX = (uint32_t)std::countr_zero(simd::TileWidth),
-        .TileShiftY = (uint32_t)std::countr_zero(simd::TileHeight),
-    };
-    cmds.Barrier(*_gbuffer->AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
-
-    uint32_t groupsX = (renderSize.x + 7) / 8, groupsY = (renderSize.y + 7) / 8;
-    _blitShader->Dispatch(cmds, { groupsX, groupsY, 1 }, pc);
-
-    _gbuffer->Resolve(target, cmds);
-}
-void RendererCPU::DrawSettings(glim::SettingStore& settings) {
-    Renderer::DrawSettings(settings);
 }

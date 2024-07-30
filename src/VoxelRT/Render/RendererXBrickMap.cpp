@@ -1,6 +1,11 @@
 #include "Renderer.h"
 #include "BrickSlotAllocator.h"
 
+// Annoynmous namespace needed to avoid struct naming collisions with other CUs.
+// These *do not* manifest at compile time but templates will only be instantiated
+// once and lead to very confusing behavior like push constant sizes being wrong.
+namespace {
+
 // NOTE: keep in sync with VoxelMap.slang
 // TODO: implement this via specialization constants
 static constexpr auto SectorSize = MaskIndexer::Size * BrickIndexer::Size;
@@ -40,22 +45,24 @@ struct GpuStorageManager {
     GpuStorageManager(havk::DeviceContext* ctx) {
         Device = ctx;
         UpdateShader = ctx->PipeBuilder->CreateCompute("Backends/XBrickMap/UpdateMap.slang");
-
-        size_t storageSize = 1024 * 1024 * 1024 * 2.0;  // 2GB to start with...
-
-        StorageBuffer = Device->CreateBuffer({
-            .Size = sizeof(GpuVoxelStorage) + storageSize,
-            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        });
-        OccupancyStorage = Device->CreateBuffer({
-            .Size = storageSize / 8,
-            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        });
     }
 
     void SyncBuffers(VoxelMap& map, havk::CommandList& cmds) {
+        if (StorageBuffer == nullptr) {
+            size_t storageSize = 1024 * 1024 * 1024 * 2.0;  // 2GB to start with...
+
+            StorageBuffer = Device->CreateBuffer({
+                .Size = sizeof(GpuVoxelStorage) + storageSize,
+                .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            });
+            OccupancyStorage = Device->CreateBuffer({
+                .Size = storageSize / 8,
+                .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            });
+            cmds.Fill(*StorageBuffer, 0, 0, sizeof(GpuVoxelStorage));
+        }
         const size_t MaxUpdateDataSize = 1024 * 1024 * 64;
         const size_t MaxUpdateSectors = 32768;
 
@@ -146,15 +153,14 @@ struct GpuStorageManager {
             VkDeviceAddress Records;
             GpuVoxelMap Map;
         };
-        UpdateParams updatePars = {
+        UpdateShader->Dispatch(cmds, { uint32_t(batch.size() + 63) / 64, 1, 1 }, UpdateParams {
             .NumRecords = uint32_t(batch.size()),
             .Records = cmds.GetDeviceAddress(*stagingBuffer, havk::UseBarrier::ComputeRead),
             .Map = {
                 .Storage = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeReadWrite),
                 .VoxelOccupancy = cmds.GetDeviceAddress(*OccupancyStorage, havk::UseBarrier::ComputeReadWrite),
             },
-        };
-        UpdateShader->Dispatch(cmds, { (updatePars.NumRecords + 63) / 64, 1, 1 }, updatePars);
+        });
     }
 
     uint32_t GetSectorLOD(glm::ivec3 pos) {
@@ -193,69 +199,41 @@ private:
 
 struct RendererBrickMap : public GpuRenderer {
     std::unique_ptr<GpuStorageManager> Storage;
-    havk::ComputePipelinePtr RenderShader;
 
-    RendererBrickMap(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : GpuRenderer(ctx, map) {
+    RendererBrickMap(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : GpuRenderer(ctx, map, RendererId::XBrickMap) {
         Storage = std::make_unique<GpuStorageManager>(ctx);
-        RenderShader = ctx->PipeBuilder->CreateCompute("Backends/Render.slang", { .PrepDefs = { { "BACKEND_ID", "1" }}});
-
         _map->MarkAllDirty();
     }
 
-    virtual void RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds);
-    virtual void DrawSettings(glim::SettingStore& settings);
+    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+        // Sync buffers
+        if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
+            _map->MarkAllDirty();
+            Storage->SlotAllocator = BrickSlotAllocator(ViewSize);
+        }
+        Storage->SectorViewPos = glm::floor(cam.ViewPosition / glm::dvec3(SectorSize));
+        Storage->SyncBuffers(*_map, cmds);
+
+        GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
+            .Storage = cmds.GetDeviceAddress(*Storage->StorageBuffer, havk::UseBarrier::ComputeRead),
+            .VoxelOccupancy = cmds.GetDeviceAddress(*Storage->OccupancyStorage, havk::UseBarrier::ComputeRead),
+        });
+    }
+    
+    void DrawSettings(glim::SettingStore& settings) override {
+        GpuRenderer::DrawSettings(settings);
+
+        if (Storage->StorageBuffer != nullptr) {
+            ImGui::Text("Storage: %.1fMB/%.1fMB (%zu free ranges)",
+                        (sizeof(GpuVoxelStorage) + Storage->SlotAllocator.Arena.NumAllocated * SectorAllocInfo::PageSize) / 1048576.0,
+                        Storage->StorageBuffer->Size / 1048576.0, Storage->SlotAllocator.Arena.FreeRanges.size());
+        }
+    }
 };
+
+}; // namespace
 
 template<>
 std::unique_ptr<Renderer> Renderer::Create<RendererId::XBrickMap>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
     return std::make_unique<RendererBrickMap>(ctx, map);
-}
-
-struct RenderDispatchParams {
-    GpuVoxelMap Map;
-    VkDeviceAddress GBuffer;  // GBufferUniforms*
-
-    uint32_t MaxBounces;
-    havk::ImageHandle StbnTexture;
-    havk::ImageHandle SkyTexture;
-};
-
-void RendererBrickMap::RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds) {
-    bool worldChanged = _map->DirtyLocs.size() > 0;
-
-    // Sync buffers
-    if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
-        _map->MarkAllDirty();
-        Storage->SlotAllocator = BrickSlotAllocator(ViewSize);
-    }
-    Storage->SectorViewPos = glm::floor(cam.ViewPosition / glm::dvec3(SectorSize));
-    Storage->SyncBuffers(*_map, cmds);
-
-    glm::uvec2 renderSize = glm::round(glm::vec2(target->Desc.Width, target->Desc.Height) * _renderScale);
-    _gbuffer->SetCamera(cmds, cam, renderSize, worldChanged);
-
-    RenderDispatchParams renderPars = {
-        .Map = {
-            .Storage = cmds.GetDeviceAddress(*Storage->StorageBuffer, havk::UseBarrier::ComputeRead),
-            .VoxelOccupancy = cmds.GetDeviceAddress(*Storage->OccupancyStorage, havk::UseBarrier::ComputeRead),
-        },
-        .GBuffer = cmds.GetDeviceAddress(*_gbuffer->UniformBuffer, havk::UseBarrier::ComputeRead),
-        .MaxBounces = _numLightBounces,
-        .StbnTexture = _blueNoiseTex->DescriptorHandle,
-        .SkyTexture = _skyboxTex->DescriptorHandle,
-    };
-    uint32_t groupsX = (renderSize.x + 7) / 8, groupsY = (renderSize.y + 7) / 8;
-    RenderShader->Dispatch(cmds, { groupsX, groupsY, 1 }, renderPars);
-
-    _gbuffer->Resolve(target, cmds);
-}
-void RendererBrickMap::DrawSettings(glim::SettingStore& settings) {
-    GpuRenderer::DrawSettings(settings);
-    
-    if (Storage->StorageBuffer != nullptr) {
-        ImGui::Text("Storage: %.1fMB/%.1fMB (%zu free ranges)",
-                    (sizeof(GpuVoxelStorage) + Storage->SlotAllocator.Arena.NumAllocated * SectorAllocInfo::PageSize) / 1048576.0,
-                    Storage->StorageBuffer->Size / 1048576.0,
-                    Storage->SlotAllocator.Arena.FreeRanges.size());
-    }
 }

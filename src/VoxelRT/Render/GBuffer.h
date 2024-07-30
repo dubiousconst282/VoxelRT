@@ -44,7 +44,6 @@ struct GBuffer {
     bool EnableTAA = true;
 
     glm::uvec2 RenderSize = {};
-    float _renderScale = 1.0f;
 
     GBuffer(havk::DeviceContext* ctx) {
         Context = ctx;
@@ -150,11 +149,10 @@ struct GBuffer {
             struct ReprojParams {
                 VkDeviceAddress GBuffer;
             };
-            ReprojParams pc = {
-                .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::ComputeRead)
-            };
             cmds.Barrier(*AlbedoTex, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
-            ReprojShader->Dispatch(cmds, { groupsX, groupsY, 1 }, pc);
+            ReprojShader->Dispatch(cmds, { groupsX, groupsY, 1 }, ReprojParams {
+                .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::ComputeRead),
+            });
 
             /*if (NumDenoiserPasses > 0) {
                 // Variance estimation

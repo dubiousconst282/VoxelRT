@@ -200,6 +200,81 @@ Image::~Image() {
     }
 }
 
+
+QueryPoolPtr DeviceContext::CreateQueryPool(VkQueryType type, uint32_t numQueries, VkQueryPipelineStatisticFlags stats) {
+    VkQueryPoolCreateInfo poolCI = {
+        .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+        .queryType = type,
+        .queryCount = numQueries,
+        .pipelineStatistics = stats
+    };
+    auto pool = Resource::make<QueryPool>(this);
+    pool->NumQueries = numQueries;
+    VK_CHECK(vkCreateQueryPool(Device, &poolCI, nullptr, &pool->Handle));
+    vkResetQueryPool(Device, pool->Handle, 0, numQueries);
+
+    return pool;
+}
+
+void QueryPool::WriteTimestamp(CommandList& cmds, uint32_t querySlot, VkPipelineStageFlagBits stage) {
+    vkCmdWriteTimestamp(cmds.Buffer, stage, Handle, querySlot);
+
+    cmds.MarkUse(*this);
+}
+void QueryPool::CopyResults(CommandList& cmds, Buffer& dest, size_t destOffset, uint32_t firstSlot, uint32_t numSlots) {
+    if (numSlots == UINT_MAX) numSlots = NumQueries;
+    assert(firstSlot + numSlots <= NumQueries);
+
+    cmds.Barrier(dest, { VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
+    vkCmdCopyQueryPoolResults(cmds.Buffer, Handle, firstSlot, numSlots, dest.Handle, destOffset, 8, VK_QUERY_RESULT_64_BIT);
+    vkCmdResetQueryPool(cmds.Buffer, Handle, firstSlot, numSlots);
+
+    cmds.MarkUse(*this);
+}
+QueryPool::~QueryPool() {
+    vkDestroyQueryPool(Context->Device, Handle, nullptr);
+}
+
+TransientBufferPtr DeviceContext::CreateTransientBuffer(const BufferDesc& desc) {
+    assert(desc.Usage & (VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+
+    auto tb = std::make_unique<TransientBuffer>();
+    tb->DeviceBuffer = CreateBuffer(desc);
+    tb->HostBuffer = CreateBuffer({
+        .Size = tb->GetStagingStride() * Swapchain->GetImageCount(),
+        .Usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+        .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+    });
+    return tb;
+}
+void TransientBuffer::Write(havk::CommandList& cmds, const void* data, size_t offset, size_t length) {
+    if (length == VK_WHOLE_SIZE) length = DeviceBuffer->Size;
+    assert(offset + length <= DeviceBuffer->Size);
+
+    if (data != nullptr) {
+        uint32_t stageOffset = GetStagingStride() * DeviceBuffer->Context->Swapchain->GetFlightId();
+        HostBuffer->Write(data, stageOffset + offset, length);
+
+        cmds.CopyBuffer(*HostBuffer, *DeviceBuffer, stageOffset, 0, DeviceBuffer->Size);
+    } else {
+        cmds.Barrier(*DeviceBuffer, { VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
+        vkCmdFillBuffer(cmds.Buffer, DeviceBuffer->Handle, 0, length, 0);
+    }
+}
+
+const void* TransientBuffer::ReadBack(havk::CommandList& cmds) {
+    uint32_t stageOffset = GetStagingStride() * DeviceBuffer->Context->Swapchain->GetFlightId();
+
+    cmds.CopyBuffer(*DeviceBuffer, *HostBuffer, 0, stageOffset, DeviceBuffer->Size);
+
+    cmds.Barrier(*HostBuffer, { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_HOST_BIT });
+    HostBuffer->Invalidate(stageOffset);
+
+    return (uint8_t*)HostBuffer->MappedData + stageOffset;
+}
+
+
 DescriptorHeap::DescriptorHeap(DeviceContext* ctx) {
     Context = ctx;
 

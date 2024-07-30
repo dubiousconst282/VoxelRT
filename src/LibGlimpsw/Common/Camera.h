@@ -73,9 +73,20 @@ struct Camera {
                 // TODO: implement panning for arcball camera
             }
         }
-        ViewRotation = glm::slerp(ViewRotation, destRotation, blend);
-        ViewPosition = glm::lerp(ViewPosition, Position, (double)blend);
 
+        // Avoid interpolating when close to final position to prevent
+        // chaotic sign-flipping/jittering from precision error.
+        if (glm::abs(glm::dot(ViewRotation, destRotation)) < 0.99999905f) {
+            ViewRotation = glm::slerp(ViewRotation, destRotation, blend);
+        } else {
+            ViewRotation = destRotation;
+        }
+        if (glm::distance(ViewPosition, Position) > MoveSpeed * 0.0005) {
+            ViewPosition = glm::lerp(ViewPosition, Position, (double)blend);
+        } else {
+            ViewPosition = Position;
+        }
+        
         AspectRatio = io.DisplaySize.x / io.DisplaySize.y;
     }
 

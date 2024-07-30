@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -47,9 +48,13 @@ HAVK_FWD_RESOURCE_DEF(GraphicsPipeline);
 HAVK_FWD_RESOURCE_DEF(ComputePipeline);
 HAVK_FWD_RESOURCE_DEF(Buffer);
 HAVK_FWD_RESOURCE_DEF(Image);
+HAVK_FWD_RESOURCE_DEF(QueryPool);
+#undef HAVK_FWD_RESOURCE_DEF
+
 using DeviceContextPtr = std::unique_ptr<DeviceContext>;
 
-#undef HAVK_FWD_RESOURCE_DEF
+struct TransientBuffer;
+using TransientBufferPtr = std::unique_ptr<TransientBuffer>;
 
 
 // Managed resource with queued deletion.
@@ -133,6 +138,9 @@ struct DeviceContext {
     BufferPtr CreateBuffer(const BufferDesc& desc);
     ImagePtr CreateImage(const ImageDesc& desc);
 
+    TransientBufferPtr CreateTransientBuffer(const BufferDesc& desc);
+    QueryPoolPtr CreateQueryPool(VkQueryType type, uint32_t numQueries, VkQueryPipelineStatisticFlags stats = 0);
+
     // Executes commands recorded by the callback.
     Future Submit(std::function<void(CommandList)> cb);
     Future Submit(VkCommandBuffer cmdBuffer, VkSemaphore waitSemaphore, VkPipelineStageFlags waitMask, VkSemaphore signalSemaphore,
@@ -182,6 +190,11 @@ struct Buffer final : Resource {
     void* MappedData;
     VkDeviceAddress DeviceAddress;
 
+    // Internal
+    VkPipelineStageFlags CurrentStage_ = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+
+    ~Buffer();
+
     void Write(const void* src, uint64_t destOffset, size_t byteCount);
 
     // Needs to be called before reading from a mapped memory for memory types that are not HOST_COHERENT.
@@ -189,15 +202,6 @@ struct Buffer final : Resource {
 
     // Needs to be called after writing to a mapped memory for memory types that are not HOST_COHERENT.
     void Flush(uint64_t destOffset = 0, uint64_t byteCount = VK_WHOLE_SIZE);
-
-    ~Buffer();
-};
-
-// Buffer that will be updated by host and read by GPU every frame.
-// This is effectively one device buffer and N staging host buffers, where N =frames in flight.
-struct TransientBuffer final : Resource {
-    // TODO
-    // https://edw.is/learning-vulkan/ Handling dynamic data which needs to be uploaded every frame
 };
 
 struct ImageDesc {
@@ -212,7 +216,7 @@ struct ImageDesc {
     VkImageViewType ViewType = VK_IMAGE_VIEW_TYPE_MAX_ENUM; // MAX_ENUM = auto
 };
 
-struct Image final : Resource {
+struct Image : Resource {
     VkImage Handle;
     VkImageView ViewHandle;
     VmaAllocation Allocation = nullptr; // Null if this is a swapchain image.
@@ -220,7 +224,8 @@ struct Image final : Resource {
 
     ImageHandle DescriptorHandle = InvalidHandle;
 
-    // Internal state tracking
+    // Internal
+    VkPipelineStageFlags CurrentStage_ = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     VkImageLayout CurrentLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
 
     ~Image() override;
@@ -238,6 +243,46 @@ struct Image final : Resource {
                              Future* uploadSync = nullptr);
     static ImagePtr LoadFilePanoramaToCube(DeviceContext* ctx, std::string_view path, VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT,
                                            Future* uploadSync = nullptr);
+};
+
+// Helper for a buffer that will be written/read by host and read/written by GPU every frame.
+// This is effectively one device buffer and N staging host buffers, where N=frames in flight.
+//
+// https://edw.is/learning-vulkan/ Handling dynamic data which needs to be uploaded every frame
+struct TransientBuffer {
+    BufferPtr DeviceBuffer;
+    BufferPtr HostBuffer;
+
+    // Write data for current frame being recorded. If `data` is null, buffer will be filled with zeroes.
+    //
+    // Note that calling both Read() and Write() on the same TransientBuffer instance is not
+    // currently supported (apart from when `data` is null), because there is only one staging buffer.
+    void Write(havk::CommandList& cmds, const void* data, size_t offset = 0, size_t length = VK_WHOLE_SIZE);
+
+    // Read data from oldest frame in swapchain.
+    const void* ReadBack(havk::CommandList& cmds);
+
+    size_t GetStagingStride() const { return (DeviceBuffer->Size | 63) + 1; }
+};
+struct QueryPool : Resource {
+    VkQueryPool Handle;
+    uint32_t NumQueries;
+
+    ~QueryPool() override;
+
+    void WriteTimestamp(CommandList& cmds, uint32_t querySlot, VkPipelineStageFlagBits stage);
+
+    // Copy 64-bit results to given buffer and reset queries.
+    void CopyResults(CommandList& cmds, Buffer& dest, size_t destOffset = 0, uint32_t firstSlot = 0, uint32_t numSlots = UINT_MAX);
+
+    uint64_t GetTimestampNanos(uint64_t ts) const {
+        double period = Context->PhysicalDeviceInfo.Props.limits.timestampPeriod;
+        return uint64_t(ts * period + 0.5);
+    }
+    double GetElapsedMillis(uint64_t ts1, uint64_t ts2) const {
+        double period = Context->PhysicalDeviceInfo.Props.limits.timestampPeriod;
+        return (ts2 - ts1) * period / 1000000.0;
+    }
 };
 
 struct Swapchain {
@@ -263,6 +308,8 @@ struct Swapchain {
     void Initialize();
 
     uint32_t GetImageCount() const { return _images.size(); }
+    uint32_t GetFlightId() const { return _currSyncIdx; }
+
     VkExtent2D GetSurfaceSize() const {
         auto& desc = _images[0].Target->Desc;
         return { desc.Width, desc.Height };
@@ -333,6 +380,23 @@ struct CommandList {
     void TransitionLayout(Image& image, VkImageLayout newLayout, VkPipelineStageFlags destStage,
                           VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool discardContents = false);
 
+    void Clear(Image& image, const VkClearColorValue& color) {
+        VkImageSubresourceRange range = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = VK_REMAINING_MIP_LEVELS,
+            .baseArrayLayer = 0,
+            .layerCount = VK_REMAINING_ARRAY_LAYERS,
+        };
+        Barrier(image, { VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT }, image.CurrentLayout_);
+        vkCmdClearColorImage(Buffer, image.Handle, image.CurrentLayout_, &color, 1, &range);
+    }
+    // Splats the given 32-bit value to the specified buffer range (which must be 4-byte aligned).
+    void Fill(havk::Buffer& buffer, uint32_t value, size_t offset = 0, size_t size = VK_WHOLE_SIZE) {
+        Barrier(buffer, { VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
+        vkCmdFillBuffer(Buffer, buffer.Handle, offset, size, value);
+    }
+
     void Barrier(VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
                  VkAccessFlags srcAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
                  VkAccessFlags dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
@@ -342,11 +406,15 @@ struct CommandList {
 
     // Barrier helper
     ImageHandle GetDescriptorHandle(Image& image, UseBarrier barrier, VkImageLayout layout) {
+        assert(image.DescriptorHandle != InvalidHandle &&
+               "Image has no descriptor. Make sure you have set STORAGE|SAMPLED usage flags.");
         Barrier(image, barrier, layout);
         return image.DescriptorHandle;
     }
     // Barrier helper
     VkDeviceAddress GetDeviceAddress(havk::Buffer& buffer, UseBarrier barrier) {
+        assert(buffer.DeviceAddress != InvalidHandle &&
+               "Buffer has no device address. Make sure you have set STORAGE|UNIFORM usage flags.");
         Barrier(buffer, barrier);
         return buffer.DeviceAddress;
     }
@@ -355,6 +423,13 @@ struct CommandList {
     void UpdateBuffer(havk::Buffer& buffer, VkDeviceSize destOffset, uint32_t dataSize, const void* data) {
         Barrier(buffer, { VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
         vkCmdUpdateBuffer(Buffer, buffer.Handle, destOffset, dataSize, data);
+    }
+    void CopyBuffer(havk::Buffer& source, havk::Buffer& dest,
+                    VkDeviceSize srcOffset = 0, VkDeviceSize dstOffset = 0, VkDeviceSize size = VK_WHOLE_SIZE) {
+        Barrier(source, { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
+        Barrier(dest, { VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
+        VkBufferCopy region = { srcOffset, dstOffset, size };
+        vkCmdCopyBuffer(Buffer, source.Handle, dest.Handle, 1, &region);
     }
     void MarkUse(Resource& res) {
         res.LastUseTimestamp = Context->NextQueueTimestamp;
@@ -367,6 +442,8 @@ struct PushConstantsPtr {
 
     template<typename T>
     constexpr PushConstantsPtr(const T& ref) : Ptr(&ref), Size(sizeof(T)) {}
+
+    PushConstantsPtr(const void* ptr, uint32_t size) : Ptr(ptr), Size(size) {}
 
     PushConstantsPtr() = default;
 };

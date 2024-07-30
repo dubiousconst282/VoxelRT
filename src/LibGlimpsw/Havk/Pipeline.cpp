@@ -263,7 +263,7 @@ ShaderCompileResult PipelineBuilder::Compile(std::string_view filename, const Sh
     auto globalSession = (slang::IGlobalSession*)_slangSession;
 
     std::vector<slang::CompilerOptionEntry> opts;
-    opts.push_back({ slang::CompilerOptionName::DebugInformation, { .intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL } });
+    opts.push_back({ slang::CompilerOptionName::DebugInformation, { .intValue0 = SLANG_DEBUG_INFO_LEVEL_NONE } });
     opts.push_back({ slang::CompilerOptionName::Optimization, { .intValue0 = SLANG_OPTIMIZATION_LEVEL_NONE } });
     opts.push_back({ slang::CompilerOptionName::Capability, { .intValue0 =  globalSession->findCapability("spirv_1_6") } });
 

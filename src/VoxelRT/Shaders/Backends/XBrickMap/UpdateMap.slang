@@ -1,6 +1,8 @@
 import Map;
 import "../BackendCommon";
 
+using namespace backend::xbrickmap;
+
 struct SectorUpdateRecord {
     uint32_t SectorIdx;
     SectorInfo AllocInfo;

@@ -105,8 +105,9 @@ using BrickIndexer = LinearIndexer3D<3, 3, false>;
 
 struct Brick {
     static constexpr glm::ivec3 Size = BrickIndexer::Size;
+    static constexpr uint32_t NumVoxels = BrickIndexer::MaxArea;
 
-    Voxel Data[BrickIndexer::MaxArea] = {};
+    Voxel Data[NumVoxels] = {};
 
     bool IsEmpty() const;
     void GenerateLOD(Voxel* dest, uint32_t level) const;
@@ -118,12 +119,12 @@ struct Brick {
     // Iterates over voxels within this brick.
     template<typename F>
     DispatchResult DispatchSIMD(F fn, glm::ivec3 basePos = {}) {
-        static_assert(simd::VectorWidth <= BrickIndexer::MaxArea);
-        static_assert(BrickIndexer::MaxArea % simd::VectorWidth == 0);
+        static_assert(simd::VectorWidth <= NumVoxels);
+        static_assert(NumVoxels % simd::VectorWidth == 0);
 
         DispatchResult result = { .Empty = true };
 
-        for (int32_t i = 0; i < BrickIndexer::MaxArea; i += simd::VectorWidth) {
+        for (int32_t i = 0; i < NumVoxels; i += simd::VectorWidth) {
             VInt3 pos = (basePos * BrickIndexer::Size) + BrickIndexer::GetPos<VInt3>(i + simd::LaneIdx);
 
 #if SIMD_AVX512
@@ -148,6 +149,41 @@ struct Brick {
         }
         return result;
     }
+
+    // Note: indexing is brick-wise linear XZY, not tiled.
+    static void GetOccupancyMask(const Brick* brick, uint64_t dest[NumVoxels / 64]) {
+        static_assert(sizeof(Voxel) == 1);
+
+        if (!brick) {
+            memset(dest, 0, NumVoxels / 8);
+            return;
+        }
+
+        for (uint32_t i = 0; i < NumVoxels; i += 64) {
+            dest[i / 64] = PackBits64((uint8_t*)&brick->Data[i]);
+        }
+    }
+
+    // Create 64-bit mask of `data[i] != 0`
+    static uint64_t PackBits64(const uint8_t data[64]) {
+#if __AVX512F__
+        uint64_t mask = _mm512_cmpneq_epi8_mask(_mm512_loadu_epi8(data), _mm512_set1_epi8(0));
+#elif __AVX2__
+        uint64_t mask = ~0ull;
+        for (uint32_t i = 0; i < 64; i += 32) {
+            __m256i v = _mm256_loadu_si256((__m256i*)&data[i]);
+            v = _mm256_cmpeq_epi8(v, _mm256_set1_epi8(0));
+            mask ^= uint64_t(uint32_t(_mm256_movemask_epi8(v))) << i;
+        }
+#else
+        uint64_t mask = 0;
+        for (uint32_t i = 0; i < 64; i++) {
+            uint64_t bit = data[i] != 0;
+            mask |= bit << i;
+        }
+#endif
+        return mask;
+    }
 };
 
 // 4x4x4 region of bricks.
@@ -163,24 +199,7 @@ struct Sector {
 
     uint64_t GetAllocationMask() const {
         static_assert(sizeof(BrickSlots) == 64);
-
-#if __AVX512F__
-        uint64_t mask = _mm512_cmpneq_epi8_mask(_mm512_loadu_epi8(BrickSlots), _mm512_set1_epi8(0));
-#elif __AVX2__
-        uint64_t mask = ~0ull;
-        for (uint32_t i = 0; i < 64; i += 32) {
-            __m256i v = _mm256_loadu_si256((__m256i*)&BrickSlots[i]);
-            v = _mm256_cmpeq_epi8(v, _mm256_set1_epi8(0));
-            mask ^= uint64_t(uint32_t(_mm256_movemask_epi8(v))) << i;
-        }
-#else
-        uint64_t mask = 0;
-        for (uint32_t i = 0; i < 64; i++) {
-            uint64_t bit = BrickSlots[i] != 0;
-            mask |= bit << i;
-        }
-#endif
-        return mask;
+        return Brick::PackBits64(BrickSlots);
     }
     uint64_t DeleteEmptyBricks(uint64_t mask = ~0ull);
 

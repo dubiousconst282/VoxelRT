@@ -21,40 +21,34 @@ public typealias TextureHandle3D<F = float4> = ImageHandle<Texture3D<F>>;
 public typealias ImageHandle2D<F = float4> = ImageHandle<RWTexture2D<F>>;
 public typealias ImageHandle3D<F = float4> = ImageHandle<RWTexture3D<F>>;
 
+public typealias RWTextureCube<F = float4> = __TextureImpl<F, __ShapeCube, 0, 0, 0, 1, 0, 0, 0>;
+
 public typealias TextureHandleCube<F = float4> = ImageHandle<TextureCube<F>>;
+public typealias ImageHandleCube<F = float4> = ImageHandle<RWTextureCube<F>>;
+
 public typealias ImageHandleArray2D<F = float4> = ImageHandle<RWTexture2DArray<F>>;
 
-__generic<T, let access : int, let isShadow : int, let isCombined : int, let format : int>
-public extension __TextureImpl<T, __Shape2D, 0, 0, 0, access, isShadow, isCombined, format> {
-    public property uint2 Size {
-        get {
-            uint width, height;
-            GetDimensions(width, height);
-            return uint2(width, height);
-        }
-    }
-}
-__generic<T, let access : int, let isShadow : int, let isCombined : int, let format : int>
-public extension __TextureImpl<T, __Shape2D, 1, 0, 0, access, isShadow, isCombined, format> {
-    public property uint3 Size {
-        get {
-            uint width, height, layers;
-            GetDimensions(width, height, layers);
-            return uint3(width, height, layers);
-        }
-    }
-}
+#define DESTRUCT_VEC1(var) var.x
+#define DESTRUCT_VEC2(var) var.x, var.y
+#define DESTRUCT_VEC3(var) var.x, var.y, var.z
 
-__generic<T, let access : int, let isShadow : int, let isCombined : int, let format : int>
-public extension __TextureImpl<T, __Shape3D, 0, 0, 0, access, isShadow, isCombined, format> {
-    public property uint3 Size {
-        get {
-            uint width, height, depth;
-            GetDimensions(width, height, depth);
-            return uint3(width, height, depth);
-        }
+#define DEF_TEXTURE_SIZE_EXT(shape, isArray, dim) \
+    __generic<T, let access : int, let isShadow : int, let isCombined : int, let format : int> \
+    public extension __TextureImpl<T, shape, isArray, 0, 0, access, isShadow, isCombined, format> { \
+        public property uint##dim Size { \
+            get { \
+                uint##dim res; \
+                GetDimensions(DESTRUCT_VEC##dim(res)); \
+                return res; \
+            } \
+        } \
     }
-}
+
+DEF_TEXTURE_SIZE_EXT(__Shape2D, 0, 2);
+DEF_TEXTURE_SIZE_EXT(__Shape2D, 1, 3);
+DEF_TEXTURE_SIZE_EXT(__Shape3D, 0, 3);
+
+DEF_TEXTURE_SIZE_EXT(__ShapeCube, 0, 2);
 
 /*
 __generic<T>

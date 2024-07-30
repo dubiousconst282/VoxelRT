@@ -1,10 +1,14 @@
 #include "Renderer.h"
 
+namespace {
+
 // NOTE: keep in sync with shaders
 struct GpuMapStorage {
-    static constexpr auto kGridSize = glm::uvec2(2048, 1024);
-    static constexpr auto kNumVoxels = uint64_t(kGridSize.x) * kGridSize.y * kGridSize.x;
+    static constexpr glm::uvec2 kGridSize = glm::uvec2(2048, 1024);
+    static constexpr uint64_t kNumVoxels = uint64_t(kGridSize.x) * kGridSize.y * kGridSize.x;
+    static constexpr uint32_t kBrickSize = 8, kNumBricks = kNumVoxels / (kBrickSize*kBrickSize*kBrickSize);
 
+    uint64_t BrickMasks[kNumBricks / 64];
     uint64_t VoxelMasks[kNumVoxels / 64];
 };
 struct GpuVoxelMap {
@@ -12,44 +16,44 @@ struct GpuVoxelMap {
 };
 struct GpuBrickUpdateRecord {
     glm::ivec3 BrickPos;
-    uint64_t Data[(8 * 8 * 8) / 64];
+    uint64_t Data[Brick::NumVoxels / 64];
 };
 
 struct RendererFlatDDA : public GpuRenderer {
     havk::BufferPtr StorageBuffer;
 
-    havk::ComputePipelinePtr RenderShader;
     havk::ComputePipelinePtr UpdateShader;
 
-    RendererFlatDDA(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map, bool multiDDA) : GpuRenderer(ctx, map) {
-        RenderShader = ctx->PipeBuilder->CreateCompute("Backends/Render.slang", { .PrepDefs = { { "BACKEND_ID", (multiDDA ? "3" : "2" )} } });
+    RendererFlatDDA(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map, RendererId type) : GpuRenderer(ctx, map, type) {
         UpdateShader = ctx->PipeBuilder->CreateCompute("Backends/FlatDDA/UpdateMap.slang");
 
         _map->MarkAllDirty();
-
-        StorageBuffer = ctx->CreateBuffer({
-            .Size = sizeof(GpuMapStorage),
-            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE
-        });
     }
 
-    virtual void RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds);
-    virtual void DrawSettings(glim::SettingStore& settings);
+    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+        // Sync buffers
+        if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
+            _map->MarkAllDirty();
+        }
+        SyncMap(cmds);
+
+        GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
+            .Storage = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
+        });
+    }
 
     void SyncMap(havk::CommandList& cmds);
 };
 
-template<>
-std::unique_ptr<Renderer> Renderer::Create<RendererId::PlainDDA>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
-    return std::make_unique<RendererFlatDDA>(ctx, map, false);
-}
-template<>
-std::unique_ptr<Renderer> Renderer::Create<RendererId::MultiDDA>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
-    return std::make_unique<RendererFlatDDA>(ctx, map, true);
-}
-
 void RendererFlatDDA::SyncMap(havk::CommandList& cmds) {
+    if (StorageBuffer == nullptr) {
+        StorageBuffer = _ctx->CreateBuffer({
+            .Size = sizeof(GpuMapStorage),
+            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        });
+        cmds.Fill(*StorageBuffer, 0);
+    }
     #ifdef NDEBUG
     const size_t MaxUpdateDataSize = 1024 * 1024 * 16;
     #else
@@ -74,19 +78,7 @@ void RendererFlatDDA::SyncMap(havk::CommandList& cmds) {
             Brick* brick = sector ? sector->GetBrick(brickIdx) : nullptr;
             auto& record = batch.emplace_back();
             record.BrickPos = sectorPos * 4 + MaskIndexer::GetPos(brickIdx);
-
-            if (brick) {
-                for (uint32_t i = 0; i < BrickIndexer::MaxArea; i += 64) {
-                    uint64_t mask = 0;
-
-                    for (uint32_t j = 0; j < 64; j++) {
-                        mask |= uint64_t(brick->Data[i + j].Data != 0) << j;
-                    }
-                    record.Data[i / 64] = mask;
-                }
-            } else {
-                memset(record.Data, 0, sizeof(record.Data));
-            }
+            Brick::GetOccupancyMask(brick, record.Data);
         }
 
         if (batch.size() * sizeof(GpuBrickUpdateRecord) >= MaxUpdateDataSize) break;
@@ -105,50 +97,22 @@ void RendererFlatDDA::SyncMap(havk::CommandList& cmds) {
         VkDeviceAddress Records;
         GpuVoxelMap Map;
     };
-    DispatchParams updatePars = {
+    UpdateShader->Dispatch(cmds, { uint32_t(batch.size() + 63) / 64, 1, 1 }, DispatchParams {
         .NumRecords = uint32_t(batch.size()),
         .Records = cmds.GetDeviceAddress(*stagingBuffer, havk::UseBarrier::ComputeRead),
         .Map = {
             .Storage = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeReadWrite)
         }
-    };
-    UpdateShader->Dispatch(cmds, { (updatePars.NumRecords + 63) / 64, 1, 1 }, updatePars);
+    });
 }
 
-void RendererFlatDDA::RenderFrame(glim::Camera& cam, havk::Image* target, havk::CommandList& cmds) {
-    bool worldChanged = _map->DirtyLocs.size() > 0;
+};  // namespace
 
-    // Sync buffers
-    if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
-        _map->MarkAllDirty();
-    }
-    SyncMap(cmds);
-
-    glm::uvec2 renderSize = glm::round(glm::vec2(target->Desc.Width, target->Desc.Height) * _renderScale);
-    _gbuffer->SetCamera(cmds, cam, renderSize, worldChanged);
-
-    struct RenderParams {
-        GpuVoxelMap Map;
-        VkDeviceAddress GBuffer;  // GBufferUniforms*
-
-        uint32_t MaxBounces;
-        havk::ImageHandle StbnTexture;
-        havk::ImageHandle SkyTexture;
-    };
-    RenderParams renderPars = {
-        .Map = {
-            .Storage = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
-        },
-        .GBuffer = cmds.GetDeviceAddress(*_gbuffer->UniformBuffer, havk::UseBarrier::ComputeRead),
-        .MaxBounces = _numLightBounces,
-        .StbnTexture = _blueNoiseTex->DescriptorHandle,
-        .SkyTexture = _skyboxTex->DescriptorHandle,
-    };
-    uint32_t groupsX = (renderSize.x + 7) / 8, groupsY = (renderSize.y + 7) / 8;
-    RenderShader->Dispatch(cmds, { groupsX, groupsY, 1 }, renderPars);
-
-    _gbuffer->Resolve(target, cmds);
+template<>
+std::unique_ptr<Renderer> Renderer::Create<RendererId::PlainDDA>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
+    return std::make_unique<RendererFlatDDA>(ctx, map, RendererId::PlainDDA);
 }
-void RendererFlatDDA::DrawSettings(glim::SettingStore& settings) {
-    GpuRenderer::DrawSettings(settings);
+template<>
+std::unique_ptr<Renderer> Renderer::Create<RendererId::MultiDDA>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
+    return std::make_unique<RendererFlatDDA>(ctx, map, RendererId::MultiDDA);
 }

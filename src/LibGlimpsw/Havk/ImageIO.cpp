@@ -127,20 +127,19 @@ ImagePtr Image::LoadFilePanoramaToCube(DeviceContext* ctx, std::string_view path
     stbi_image_free(pixels);
 
     auto shader = ctx->PipeBuilder->CreateCompute("Havk/PanoramaToCube.slang");
-    struct ConvertDispatchParams {
-        VkDeviceAddress SourceImage;  // RGB32
-        uint32_t SourceImageW, SourceImageH;
-        havk::ImageHandle DestCube;
-    };
 
     Future submitSync = ctx->Submit([&](havk::CommandList cmds) {
-        ConvertDispatchParams pc = {
+        struct ConvertParams {
+            VkDeviceAddress SourceImage;  // RGB32
+            uint32_t SourceImageW, SourceImageH;
+            havk::ImageHandle DestCube;
+        };
+        shader->Dispatch(cmds, { (faceSize + 7) / 8, (faceSize + 7) / 8, 6 }, ConvertParams {
             .SourceImage = cmds.GetDeviceAddress(*stageBuffer, UseBarrier::ComputeRead),
             .SourceImageW = uint32_t(width),
             .SourceImageH = uint32_t(height),
             .DestCube = cmds.GetDescriptorHandle(*cubeImage, UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL)
-        };
-        shader->Dispatch(cmds, { (faceSize + 7) / 8, (faceSize + 7) / 8, 6 }, pc);
+        });
 
         auto naturalLayout = (usage & VK_IMAGE_USAGE_STORAGE_BIT) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         cmds.TransitionLayout(*cubeImage, naturalLayout, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);

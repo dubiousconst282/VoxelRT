@@ -1,5 +1,8 @@
 import "../BackendCommon";
+import "../ParametricTraversal";
 import RayMaskOptimizationLUT;
+
+namespace backend::xbrickmap {
 
 public struct VoxelStorage {
     public Material Palette[256];
@@ -36,7 +39,7 @@ public struct SectorInfo {
     }
 }
 
-public struct VoxelMap : IVoxelMap {
+public struct VoxelMap : IVoxelMap, ITraversalStepper {
     // NOTE: keep in sync with GpuRenderer.cpp
     public static const uint
         BRICK_SIZE = 8,
@@ -51,6 +54,8 @@ public struct VoxelMap : IVoxelMap {
         OCC_STRIDE = (BRICK_SIZE / 4) * (BRICK_SIZE / 4) * (BRICK_SIZE / 4),
 
         NUM_SECTORS = NUM_SECTORS_XZ * NUM_SECTORS_XZ * NUM_SECTORS_Y;
+
+    public static const uint2 GridSize = uint2(GRID_SIZE_XZ, GRID_SIZE_Y);
 
     public VoxelStorage* Storage;
     public uint64_t* VoxelOccupancy;
@@ -100,60 +105,11 @@ public struct VoxelMap : IVoxelMap {
         return Storage->Palette[id];
     }
 
-    public HitInfo RayCast(int3 voxelOrigin, float3 origin, float3 dir, bool coarse) {
-        float3 invDir = 1.0 / dir;
-        float3 tStart = (step(0.0, dir) - origin) * invDir;
-
-        // ULP increment doesn't work when origin is at exact integer coords
-        if (!coarse) tStart += select(tStart == 0.0, 0.001, 0);
-
-        float3 startPos = ClipRayToAABB(origin, dir, -voxelOrigin - 0.001, float3(GRID_SIZE_XZ, GRID_SIZE_Y, GRID_SIZE_XZ) - voxelOrigin + 0.001);
-        int3 voxelPos = voxelOrigin + int3(floor(startPos));
-        //int3 voxelPos = int3(floor(voxelOrigin + origin));
-
-        float3 sideDist;
-        int i = (coarse ? 80 : 256);
-        
-        while (--i >= 0) {
-            sideDist = tStart + float3(voxelPos - voxelOrigin) * invDir;
-            float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
-            tmin = coarse ? tmin + 0.001 : bit_cast<float>(bit_cast<uint>(tmin) + 5);
-            float3 currPos = origin + tmin * dir;
-
-            // Accurate DDA masks, helps in a few cases but hurts on others.
-            //sideMask.x = sideDist.x < sideDist.y && sideDist.x < sideDist.z;
-            //sideMask.y = !sideMask.x && sideDist.y < sideDist.z;
-            //sideMask.z = !sideMask.x && !sideMask.y;
-
-            // Accurate stepping, helps when using small bias but alone isn't enough to prevent ray from getting stuck.
-            //voxelPos = voxelOrigin + ivec3(floor(mix(currPos, currPos + dir*0.01, sideMask)));
-            voxelPos = voxelOrigin + int3(floor(currPos));
-
-            if (!CheckBounds(voxelPos)) { i = 0; }
-            else if (!GetStepPos(voxelPos, dir, coarse && i < 60)) break;
-        }
-
-        HitInfo hit;
-        hit.MaterialId = 0;
-        
-        if (i < 0) return hit; // miss
-
-        // Recalculating final position outside the loop helps minimize divergence and reduced VGPR usage
-        hit.MaterialId = GetVoxelId(voxelPos);
-
-        float tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
-        float3 currPos = origin + tmin * dir;
-        hit.Dist = tmin;
-        hit.Pos = currPos;
-
-        bool3 sideMask = float3(tmin) >= sideDist;
-        hit.FaceUV = fract(select(sideMask.xz, currPos.yy, currPos.xz));
-        hit.Normal = select(sideMask, -sign(dir), 0.0);
-
-        return hit;
+    public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {
+        return ParametricRayCast(this, worldOrigin, rayPos, rayDir, coarse);
     }
 
-    bool GetStepPos(inout int3 ipos, float3 dir, bool coarse) {
+    public bool GetStepPos(inout int3 ipos, float3 dir, bool coarse) {
         uint3 pos = uint3(ipos);
         uint3 brickPos = pos / BRICK_SIZE;
         uint3 sectorPos = pos / (BRICK_SIZE * 4);
@@ -200,12 +156,6 @@ public struct VoxelMap : IVoxelMap {
         }
         return 1;
     }
-    static int3 AlignToCellBoundaries(int3 pos, float3 dir, int cellSize) {
-        int cellMask = cellSize - 1;
-        pos.x = dir.x < 0 ? (pos.x & ~cellMask) : (pos.x | cellMask);
-        pos.y = dir.y < 0 ? (pos.y & ~cellMask) : (pos.y | cellMask);
-        pos.z = dir.z < 0 ? (pos.z & ~cellMask) : (pos.z | cellMask);
-        return pos;
-    }
-
 };
+
+}

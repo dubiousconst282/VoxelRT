@@ -8,9 +8,11 @@ add_executable(
     Voxelize.cpp
     Brush.cpp
     
+    Render/Renderer.cpp
     Render/RendererXBrickMap.cpp
     Render/RendererCPU.cpp
     Render/RendererFlatDDA.cpp
+    Render/RendererDistField.cpp
     
     Render/BrickSlotAllocator.cpp
 )

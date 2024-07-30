@@ -6,8 +6,9 @@ import Core;
 struct DispatchParams {
     float3* SourceImage; // RGB32
     uint2 SourceImageSize;
-    ImageHandleArray2D<float3> DestCube;
+    ImageHandleCube<float3> DestCube;
 };
+
 [vk::push_constant] DispatchParams pc;
 
 float3 UnprojectCubemap(float2 uv, uint faceIdx) {
@@ -47,7 +48,7 @@ float3 GetSourceSample(float2 uv) {
 
 [numthreads(8, 8, 1)]
 void ComputeMain(uint3 pos: SV_DispatchThreadID) {
-    float2 faceUV = float2(pos.xy) / pc.DestCube.Instance.Size.xy;
+    float2 faceUV = float2(pos.xy) / pc.DestCube.Instance.Size;
     float3 dir = normalize(UnprojectCubemap(faceUV, pos.z));
     float2 sourceUV = float2(atan2(dir.z, dir.x) / TAU, asin(dir.y) / PI) + 0.5;
 

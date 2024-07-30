@@ -3,6 +3,7 @@
 // https://www.shadertoy.com/view/4dX3zl  "Branchless Voxel Raycasting" by fb39ca4 and others
 
 import "../BackendCommon";
+#include "../PerfCounters.h.slang"
 
 namespace backend::flat_dda {
 
@@ -42,8 +43,9 @@ public struct VoxelMap : IVoxelMap {
         int3 raySign = sign(rayDir);
 
         bool3 stepMask = GetStepMask(sideDist);
+        int i;
         
-        for (int i = 0; i < MAX_RAY_STEPS; i++) {
+        for (i = 0; i < MAX_RAY_STEPS; i++) {
             if (!CheckBounds(mapPos, GRID_SIZE_XZ, GRID_SIZE_Y)) break;
 
             uint brickIdx = GetBrickIndex(mapPos / BRICK_SIZE);
@@ -60,6 +62,7 @@ public struct VoxelMap : IVoxelMap {
             mapPos += select(stepMask, raySign, 0);
             sideDist += select(stepMask, abs(invDir), 0);
         }
+        PERF_STAT_INC(TraversalIters, i);
         
         if (hit.MaterialId != 0) {
             float3 mini = ((mapPos-rayPos) + 0.5 - 0.5*float3(raySign)) * invDir;
@@ -95,8 +98,9 @@ public struct VoxelMap_MultiDDA : VoxelMap {
         int3 raySign = sign(rayDir);
 
         bool3 stepMask = GetStepMask(sideDist);
+        int i = 0;
         
-        for (int i = 0; i < MAX_RAY_STEPS; i++) {
+        for (i = 0; i < MAX_RAY_STEPS; i++) {
             if (!CheckBounds(mapPos, GRID_SIZE_XZ / BRICK_SIZE, GRID_SIZE_Y / BRICK_SIZE)) break;
 
             uint brickIdx = GetBrickIndex(mapPos);
@@ -135,7 +139,11 @@ public struct VoxelMap_MultiDDA : VoxelMap {
             mapPos += select(stepMask, raySign, 0);
             sideDist += select(stepMask, abs(invDir), 0);
         }
-        
+        PERF_STAT_INC(TraversalIters, i);
+        #if PERF_TRACK_LEVEL >= PERF_LEVEL_HIGH
+            InterlockedAdd(g_PerfTracker->RayCastItersHistogram[min(i, 32)], 1);
+        #endif
+
         if (hit.MaterialId != 0) {
             hit.FaceUV = fract(select(stepMask.xz, hit.Pos.yy, hit.Pos.xz));
             hit.Normal = select(stepMask, -sign(rayDir), 0.0);
@@ -174,6 +182,33 @@ static bool3 GetStepMask(float3 sideDist) {
     mask.z = !mask.x && !mask.y;
 
     return mask;
+}
+
+import "../ParametricTraversal";
+
+public struct VoxelMap_ParamBrickStepping : VoxelMap, ITraversalStepper {
+    public static const uint2 GridSize = uint2(GRID_SIZE_XZ, GRID_SIZE_Y);
+
+    public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {
+        return ParametricRayCast(this, worldOrigin, rayPos, rayDir, coarse);
+    }
+    public bool GetStepPos(inout int3 pos, float3 dir, bool coarse) {
+        
+        uint brickIdx = GetBrickIndex(pos / BRICK_SIZE);
+        uint occMask = ((uint*)&Storage->BrickMasks[0])[brickIdx / 32];
+
+        if ((occMask >> (brickIdx & 31) & 1) != 0) {
+            uint* brickData = (uint*)&Storage->VoxelMasks[brickIdx * (BRICK_STRIDE / 64)];
+            uint index = GetLinearIndex(pos, BRICK_SIZE, BRICK_SIZE);
+            return (brickData[index / 32u] >> (index & 31) & 1) == 0;
+        }
+
+        pos = AlignToCellBoundaries(pos, dir, BRICK_SIZE);
+        return true;
+    }
+    public uint GetVoxelId(int3 pos) {
+        return 1;
+    }
 }
 
 };
