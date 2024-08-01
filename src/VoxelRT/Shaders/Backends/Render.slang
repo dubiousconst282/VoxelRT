@@ -24,6 +24,9 @@ import Utilities;
 #elif BACKEND_ID == 5
     import DistField.Map;
     typealias TVoxelMap = backend::distfield::VoxelMap<2>;
+#elif BACKEND_ID == 7
+    import ESVO.Map;
+    typealias TVoxelMap = backend::esvo::VoxelMap;
 #else
     static_assert(false, "Unknown renderer backend ID");
 #endif
@@ -112,7 +115,7 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
     }
 
     uint64_t clockEnd = clockARB();
-    float clockDiff = (clockEnd - clockStart) / (3000.0 * (pc.MaxBounces + 1));
+    float clockDiff = (clockEnd - clockStart) / (1000.0 * (pc.MaxBounces + 1));
 
     pc.GBuffer->IrradianceTex.Instance[pos] = float4(irradiance, clockDiff);
 }

@@ -231,6 +231,7 @@ struct VoxelMap {
 
     Material Palette[256] {};
 
+    Sector* GetSector(glm::ivec3 pos, bool create = false, uint64_t markAsDirty = 0);
     Brick* GetBrick(glm::ivec3 pos, bool create = false, bool markAsDirty = false);
 
     Voxel Get(glm::ivec3 pos) {
