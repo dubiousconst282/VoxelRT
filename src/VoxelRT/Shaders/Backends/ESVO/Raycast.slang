@@ -194,7 +194,7 @@ public CastResult CastRay(Ray ray, uint* rootNode)
                 int ofs = (uint)child_descriptor >> 16; // child pointer
                 if (ofs >= 0xFF00) // far
                 {
-                    ofs = parent[-(ofs - 0xFF00)];
+                    ofs = parent[ofs - 0xFF00];
                 }
                 parent = parent - ofs + countbits(child_masks & 0x7F);
 
