@@ -156,7 +156,7 @@ SIMD_INLINE void set_if(VMask cond, VInt& dest, VInt x) { dest = csel(cond, x, d
 
 SIMD_INLINE bool any(VMask cond) { return _mm256_movemask_epi8(cond) != 0; }
 SIMD_INLINE bool all(VMask cond) { return _mm256_movemask_epi8(cond) == 0xFFFFFFFF; }
-SIMD_INLINE uint32_t movemask(VMask cond) { return _mm256_movemask_ps(_mm256_castps_si256(cond)); }
+SIMD_INLINE uint32_t movemask(VMask cond) { return uint32_t(_mm256_movemask_ps(_mm256_castps_si256(cond))); }
 
 // 16-bit linear interpolation with 15-bit interpolant: a + (b - a) * t
 // mulhrs(a, b) = (a * b + (1 << 14)) >> 15

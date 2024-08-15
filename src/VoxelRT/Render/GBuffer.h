@@ -41,6 +41,7 @@ struct GBuffer {
 
     DebugChannel DebugChannelView = DebugChannel::None;
     uint32_t NumDenoiserPasses = 5;
+    uint32_t NumLightBounces = 1;
     bool EnableTAA = true;
 
     glm::uvec2 RenderSize = {};

@@ -1,0 +1,249 @@
+#include <thread>
+#include "Renderer.h"
+#include <magic_enum.hpp>
+
+namespace {
+
+struct PerfSample {
+    double FrameTimeMs;
+    uint64_t TotalRayCasts;
+    double AvgItersPerRay;
+    double AvgClocksPerIter;
+
+    PerfSample() = default;
+    PerfSample(FramePerfStats& stats) {
+        FrameTimeMs = (stats.Counters[FramePerfStats::Frame_EndTS] - stats.Counters[FramePerfStats::Frame_StartTS]) / 1000000.0;
+        TotalRayCasts = stats.Counters[FramePerfStats::RayCasts];
+        AvgItersPerRay = stats.Counters[FramePerfStats::TraversalIters] / (double)TotalRayCasts;
+        AvgClocksPerIter = stats.Counters[FramePerfStats::ClocksPerRay] / (double)(stats.Counters[FramePerfStats::TraversalIters] + TotalRayCasts);
+    }
+};
+struct ScenePreset {
+    glm::vec3 CamPos;
+    glm::vec2 CamRot;
+    uint32_t MapSize;
+    std::string_view Path;
+    std::string_view Label;
+};
+
+enum class RunnerState {
+    Idle,
+    SetupNext,
+    Sync,
+    Profile,
+};
+
+struct RendererBenchmark : public Renderer {
+    static constexpr int kNumSamplesPerTarget = 256;
+    static constexpr RendererId kTargetIds[] = {
+        RendererId::PlainDDA,    RendererId::MultiDDA,    RendererId::XBrickMap,
+        RendererId::ESVO,
+    };
+    static constexpr ScenePreset kScenePresets[] = {
+        { {  170.5,  80.5, 512.5  }, {  1.57,  0.00 }, 1024, "logs/voxels_1k_sponza.dat", "Sponza 1k" },
+        { {  800.5, 196.5, 768.5  }, { -1.10,  0.05 }, 1024, "logs/voxels_1k_ecohouse.dat", "Eco House 1k" },
+        //{ { 1165.5, 250.5, 2020.5 }, {  1.2,   0.05 }, 4096, "logs/voxels_4k_bistro.dat", "Bistro 4k" },
+        //{ { 1780.5, 450.5, 2020.5 }, {  1.85, -0.50 }, 4096, "logs/voxels_4k_san_miguel.dat", "San Miguel 4k" },
+        //{ { 1130.5, 450.5, 2080.5 }, { -0.85, -0.20 }, 4096, "logs/voxels_4k_forestlake.dat", "Forest Lake 2k" },
+    };
+
+    RendererBenchmark(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : Renderer(ctx, map) { }
+
+    void RenderFrame(glim::Camera& cam, GBuffer* gbuffer, havk::CommandList& cmds) override {
+        ImGui::Begin("Benchmark Runner", nullptr, ImGuiWindowFlags_NoCollapse);
+
+        if (ImGui::Button(_state == RunnerState::Idle ? "Run" : "Cancel")) {
+            ChangeState(RunnerState::SetupNext);
+            _presetIdx = 0;
+            _targetIdx = 0;
+        }
+
+        if (_state == RunnerState::Idle && !_resultsMarkdown.empty()) {
+            ImGui::InputTextMultiline("Markdown", _resultsMarkdown.data(), _resultsMarkdown.size(),
+                                      ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
+        }
+
+        // Switch renderer
+        if (_state == RunnerState::SetupNext && _targetIdx >= _accumData.size()) {
+            _resultsMarkdown += GenerateResultsMarkdown();
+            printf("---- BENCHMARK RESULTS ----\n%s\n\n", _resultsMarkdown.data());
+
+            if (_presetIdx < std::size(kScenePresets)) {
+                auto& preset = kScenePresets[_presetIdx];
+                cam.ViewPosition = cam.Position = preset.CamPos;
+                cam.Euler = preset.CamRot;
+
+                _map->Sectors.clear();
+                _map->Deserialize(preset.Path);
+
+                _accumData.clear();
+                for (RendererId id : kTargetIds) {
+                    if (preset.MapSize > 1024 && (id == RendererId::ManhattanDF || id == RendererId::EuclideanDF)) continue;
+
+                    _accumData.push_back({ .TargetId = id });
+                }
+
+                int32_t numBricks = 0;
+                for (auto& sector : _map->Sectors) {
+                    numBricks += std::popcount(sector.second.GetAllocationMask());
+                }
+                _resultsMarkdown += "\n\n--------\n\n**Scene**: " + std::string(preset.Label) + " (";
+                _resultsMarkdown += std::to_string(numBricks / 1000) + "k * 8³ voxels)\n";
+
+                    _presetIdx++;
+                _targetIdx = 0;
+            } else {
+                ChangeState(RunnerState::Idle);
+            }
+        }
+        if (_state == RunnerState::SetupNext) {
+            ChangeState(RunnerState::Sync);
+            _currentRenderer = Renderer::Create(_ctx, _map, _accumData[_targetIdx].TargetId);
+        }
+
+        if (_currentRenderer != nullptr) {
+            TargetData& data = _accumData[_targetIdx];
+            auto renderer = dynamic_cast<GpuRenderer*>(_currentRenderer.get());
+
+            if (_state == RunnerState::Sync) {
+                auto syncStart = std::chrono::steady_clock::now();
+                renderer->TimeQueryPool->WriteTimestamp(cmds, 2, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+
+                if (!_currentRenderer->SyncMap(cam, cmds)) {
+                    ChangeState(RunnerState::Profile);
+                }
+                
+                renderer->TimeQueryPool->WriteTimestamp(cmds, 3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+                auto syncEnd = std::chrono::steady_clock::now();
+
+                data.CpuSyncMs += (syncEnd - syncStart).count() / 1000000.0;
+            }
+
+            _currentRenderer->RenderFrame(cam, gbuffer, cmds);
+
+            FramePerfStats& stats = renderer->LastFrameStats;
+            data.GpuSyncMs += (stats.Counters[FramePerfStats::Sync_EndTS] - stats.Counters[FramePerfStats::Sync_StartTS]) / 1000000.0;
+
+            if (_state == RunnerState::Profile) {
+                data.Samples.push_back(PerfSample(renderer->LastFrameStats));
+
+                if (_stateCounter++ > kNumSamplesPerTarget) {
+                    ChangeState(RunnerState::SetupNext);
+                    _targetIdx++;
+                }
+            }
+        }
+
+        ImGui::Text("State: %s", magic_enum::enum_name(_state).data());
+
+        if (_state != RunnerState::Idle) {
+            ImGui::Text("Current: %s (%d/%zu, scene %d/%zu, frame %d/%d)",
+                        _targetIdx < _accumData.size() ? magic_enum::enum_name(_accumData[_targetIdx].TargetId).data() : "none",
+                        _targetIdx, _accumData.size(),
+                        _presetIdx, std::size(kScenePresets),
+                        _stateCounter, kNumSamplesPerTarget);
+        }
+        ImGui::End();
+    }
+
+private:
+    uint32_t _presetIdx = 0, _targetIdx = 0, _stateCounter = 0;
+    RunnerState _state = RunnerState::Idle;
+
+    void ChangeState(RunnerState newState) {
+        if (_state == RunnerState::SetupNext || _state == RunnerState::Idle) {
+            _currentRenderer = nullptr;
+        }
+        _state = newState;
+        _stateCounter = 0;
+    }
+
+    struct TargetData {
+        RendererId TargetId;
+        std::vector<PerfSample> Samples;
+        double GpuSyncMs = 0;
+        double CpuSyncMs = 0;
+    };
+    std::vector<TargetData> _accumData;
+    std::unique_ptr<Renderer> _currentRenderer;
+    std::string _resultsMarkdown;
+
+    std::string GenerateResultsMarkdown() {
+        std::vector<PerfSample> cleanSamples;
+        for (auto& data : _accumData) {
+            // TODO: taking min instead of median by frame time might make more sense
+            auto& samples = data.Samples;
+
+            std::sort(samples.begin(), samples.end(), [](PerfSample& a, PerfSample& b) { return a.FrameTimeMs < b.FrameTimeMs; });
+            cleanSamples.push_back(samples[samples.size() / 2]);
+        }
+
+        std::string str = "|";
+
+        uint32_t columnSize = 12;
+        uint32_t numColumns = _accumData.size() + 1;
+
+        const auto PrintColumn = [&](const char* fmt, auto... args) {
+            size_t cursor = str.size();
+            str.resize(cursor + 1024);
+            uint32_t colSize = uint32_t(snprintf(&str[cursor], 1024, fmt, args...));
+            str.resize(cursor + colSize);
+
+            if (colSize < columnSize) {
+                str.append(columnSize - colSize, ' ');
+            }
+            str += "|";
+        };
+
+        for (uint32_t i = 0; i < numColumns; i++) {
+            PrintColumn("%s", i == 0 ? "" : magic_enum::enum_name(_accumData[i - 1].TargetId).data());
+        }
+
+        str += "\n|";
+        for (uint32_t i = 0; i < numColumns; i++) {
+            str.append(columnSize, '-').append(1, '|');
+        }
+
+        str += "\n|";
+        PrintColumn("%s", "Mrays/s");
+        for (uint32_t i = 1; i < numColumns; i++) {
+            PerfSample& s = cleanSamples[i - 1];
+            PrintColumn("%.1f", s.TotalRayCasts * (1000.0 / s.FrameTimeMs) / 1000000.0);
+        }
+
+        str += "\n|";
+        PrintColumn("%s", "Iters/ray");
+        for (uint32_t i = 1; i < numColumns; i++) {
+            PerfSample& s = cleanSamples[i - 1];
+            PrintColumn("%.1f", s.AvgItersPerRay);
+        }
+
+        str += "\n|";
+        PrintColumn("%s", "Clocks/iter");
+        for (uint32_t i = 1; i < numColumns; i++) {
+            PerfSample& s = cleanSamples[i - 1];
+            PrintColumn("%.1f", s.AvgClocksPerIter);
+        }
+
+        str += "\n|";
+        PrintColumn("%s", "GPU sync ms");
+        for (uint32_t i = 1; i < numColumns; i++) {
+            PrintColumn("%.1f", _accumData[i - 1].GpuSyncMs);
+        }
+
+        str += "\n|";
+        PrintColumn("%s", "CPU sync ms");
+        for (uint32_t i = 1; i < numColumns; i++) {
+            PrintColumn("%.1f", _accumData[i - 1].CpuSyncMs);
+        }
+
+        return str;
+    }
+};
+}
+;  // namespace
+
+template<>
+std::unique_ptr<Renderer> Renderer::Create<RendererId::Benchmark>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
+    return std::make_unique<RendererBenchmark>(ctx, map);
+}

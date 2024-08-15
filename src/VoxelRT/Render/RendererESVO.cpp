@@ -2,44 +2,6 @@
 
 namespace {
 
-struct GpuVoxelMap {
-    VkDeviceAddress RootNode;
-    uint32_t TreeScale;
-};
-
-struct RendererESVO : public GpuRenderer {
-    havk::BufferPtr StorageBuffer;
-    uint32_t TreeScale;
-    uint32_t RootIndex;
-
-    RendererESVO(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : GpuRenderer(ctx, map, RendererId::ESVO) {
-        _map->MarkAllDirty();
-    }
-
-    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
-        // Sync buffers
-        if (ImGui::IsKeyPressed(ImGuiKey_F9) || StorageBuffer == nullptr || _map->DirtyLocs.size()) {
-            SyncMap(cmds);
-            _map->DirtyLocs.clear();
-        }
-
-        GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
-            .RootNode = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead) + RootIndex * 4,
-            .TreeScale = TreeScale,
-        });
-    }
-
-    void SyncMap(havk::CommandList& cmds);
-
-    void DrawSettings(glim::SettingStore& settings) override {
-        GpuRenderer::DrawSettings(settings);
-
-        if (StorageBuffer != nullptr) {
-            ImGui::Text("Storage: %.1fMB", StorageBuffer->Size / 1048576.0);
-        }
-    }
-};
-
 // ESVO calls this "child descriptor"
 //
 // Some changes:
@@ -108,7 +70,7 @@ static RawNode GenerateTree(VoxelMap& map, std::vector<uint32_t>& data, uint32_t
     // Encode children
     std::vector<uint32_t> farOffsets;
 
-    for (uint32_t i = 0, j = 0; i < 8; i++) {
+    for (uint32_t i = 0; i < 8; i++) {
         if (!(node.ValidMask >> i & 1)) continue;
 
         uint8_t popMask = child[i].ValidMask & child[i].NonLeafMask;
@@ -128,8 +90,32 @@ static RawNode GenerateTree(VoxelMap& map, std::vector<uint32_t>& data, uint32_t
     return node;
 }
 
-void RendererESVO::SyncMap(havk::CommandList& cmds) {
-    TreeScale = 11;
+struct GpuVoxelMap {
+    VkDeviceAddress RootNode;
+    uint32_t TreeScale;
+};
+
+struct RendererESVO : public GpuRenderer {
+    havk::BufferPtr StorageBuffer;
+    uint32_t TreeScale;
+    uint32_t RootIndex;
+
+    RendererESVO(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : GpuRenderer(ctx, map, RendererId::ESVO) {
+        _map->MarkAllDirty();
+    }
+
+    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+        GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap{
+            .RootNode = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead) + RootIndex * 4,
+            .TreeScale = TreeScale,
+        });
+    }
+
+    bool SyncMap(glim::Camera& cam, havk::CommandList& cmds) override {
+        if (StorageBuffer != nullptr && _map->DirtyLocs.size() == 0) return false;
+        _map->DirtyLocs.clear();
+
+        TreeScale = 12;
 
     std::vector<uint32_t> data;
     RawNode root = GenerateTree(*_map, data, TreeScale, glm::uvec3(0));
@@ -143,10 +129,21 @@ void RendererESVO::SyncMap(havk::CommandList& cmds) {
         .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
         .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
     });
+
+        // TODO: make this copy staged to ensure device_local memory on non-UMA hardware
     StorageBuffer->Write(data.data(), 0, data.size() * sizeof(uint32_t));
 
-    // TODO: make this copy staged to ensure device_local memory on non-UMA hardware
-}
+        return true;
+    }
+
+    void DrawSettings(glim::SettingStore& settings) override {
+        GpuRenderer::DrawSettings(settings);
+
+        if (StorageBuffer != nullptr) {
+            ImGui::Text("Storage: %.1fMB", StorageBuffer->Size / 1048576.0);
+        }
+    }
+};
 
 };  // namespace
 

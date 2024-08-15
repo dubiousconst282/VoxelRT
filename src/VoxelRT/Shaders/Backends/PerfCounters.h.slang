@@ -16,7 +16,7 @@ import "./PerfCounters";
 
 #if PERF_TRACK_LEVEL >= PERF_LEVEL_NORMAL
     #define PERF_TIME_BEGIN(key) let key##__timeStart = clockARB()
-    #define PERF_TIME_END(key) PERF_STAT_INC(key, clockARB() - key##__timeStart)
+    #define PERF_TIME_END(key)  if (WaveIsFirstLane()) { PERF_STAT_INC(key, (clockARB() - key##__timeStart)); }
 #else
     #define PERF_TIME_BEGIN(key)
     #define PERF_TIME_END(key)

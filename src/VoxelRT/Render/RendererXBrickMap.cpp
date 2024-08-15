@@ -47,7 +47,7 @@ struct GpuStorageManager {
         UpdateShader = ctx->PipeBuilder->CreateCompute("Backends/XBrickMap/UpdateMap.slang");
     }
 
-    void SyncBuffers(VoxelMap& map, havk::CommandList& cmds) {
+    bool SyncBuffers(VoxelMap& map, havk::CommandList& cmds) {
         if (StorageBuffer == nullptr) {
             size_t storageSize = 1024 * 1024 * 1024 * 2.0;  // 2GB to start with...
 
@@ -102,7 +102,7 @@ struct GpuStorageManager {
         }
 
         SyncPalette(map, cmds);
-        if (batch.empty()) return;
+        if (batch.empty()) return false;
 
         assert(maxAddress < StorageBuffer->Size); // TODO
 
@@ -161,6 +161,7 @@ struct GpuStorageManager {
                 .VoxelOccupancy = cmds.GetDeviceAddress(*OccupancyStorage, havk::UseBarrier::ComputeReadWrite),
             },
         });
+        return true;
     }
 
     uint32_t GetSectorLOD(glm::ivec3 pos) {
@@ -206,18 +207,18 @@ struct RendererBrickMap : public GpuRenderer {
     }
 
     void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
-        // Sync buffers
-        if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
-            _map->MarkAllDirty();
-            Storage->SlotAllocator = BrickSlotAllocator(ViewSize);
-        }
-        Storage->SectorViewPos = glm::floor(cam.ViewPosition / glm::dvec3(SectorSize));
-        Storage->SyncBuffers(*_map, cmds);
-
         GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
             .Storage = cmds.GetDeviceAddress(*Storage->StorageBuffer, havk::UseBarrier::ComputeRead),
             .VoxelOccupancy = cmds.GetDeviceAddress(*Storage->OccupancyStorage, havk::UseBarrier::ComputeRead),
         });
+    }
+
+    bool SyncMap(glim::Camera& cam, havk::CommandList& cmds) override {
+        if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
+            Storage->SlotAllocator = BrickSlotAllocator(ViewSize);
+        }
+        Storage->SectorViewPos = glm::floor(cam.ViewPosition / glm::dvec3(SectorSize));
+        return Storage->SyncBuffers(*_map, cmds);
     }
     
     void DrawSettings(glim::SettingStore& settings) override {

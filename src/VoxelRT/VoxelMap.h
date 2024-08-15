@@ -140,7 +140,7 @@ struct Brick {
             VInt newIds = currIds;
             fn(pos, newIds);
             if (simd::any(currIds != newIds)) {
-                auto tmp = _mm_packus_epi32(_mm256_extracti128_si256(voxelIds, 0), _mm256_extracti128_si256(voxelIds, 1));
+                auto tmp = _mm_packus_epi32(_mm256_extracti128_si256(newIds, 0), _mm256_extracti128_si256(newIds, 1));
                 _mm_storeu_si64(&Data[i], _mm_packus_epi16(tmp, tmp));
                 result.Changed = true;
             }

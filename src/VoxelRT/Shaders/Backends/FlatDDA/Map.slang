@@ -8,7 +8,7 @@ import "../BackendCommon";
 namespace backend::flat_dda {
 
 public static const int 
-    GRID_SIZE_XZ = 2048, GRID_SIZE_Y = 1024,
+    GRID_SIZE_XZ = 4096, GRID_SIZE_Y = 1024,
     BRICK_SIZE = 8,
     BRICK_STRIDE = BRICK_SIZE*BRICK_SIZE*BRICK_SIZE;
     

@@ -3,7 +3,7 @@ public enum PerfKey {
     TraversalIters,
     ClocksPerRay,
 
-    ReservedStart_ = 12,
+    ReservedStart_ = 10,
     Count_ = 16,
 };
 public struct PerfStats {
@@ -11,5 +11,5 @@ public struct PerfStats {
     public uint32_t RayCastItersHistogram[32];
 };
 
-public static PerfStats* g_PerfTracker = (PerfStats*)0;
+public static PerfStats* g_PerfTracker = nullptr;
 

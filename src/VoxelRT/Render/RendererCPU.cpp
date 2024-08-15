@@ -391,9 +391,7 @@ static void RenderRow(const FrameConstants& fc, RenderedTile* dest, uint32_t y) 
 }
 
 struct RendererCPU : public Renderer {
-    RendererCPU(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
-        _ctx = ctx;
-        _map = std::move(map);
+    RendererCPU(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : Renderer(ctx, map) {
         _storage = std::make_unique<StorageManager>();
 
         _blitShader = ctx->PipeBuilder->CreateCompute("Backends/ResolveCpuFramebuffer.slang");
@@ -429,7 +427,7 @@ struct RendererCPU : public Renderer {
             .WorldOrigin = glm::floor(target->CurrentPos),
             .OriginFrac = glm::fract(target->CurrentPos),
             .FrameNo = target->FrameNo,
-            .NumLightBounces = _numLightBounces,
+            .NumLightBounces = target->NumLightBounces,
             .CurrentProj = target->CurrentProj,
             .InvProj = GBuffer::GetInverseProjScreenMat(target->CurrentProj, renderSize),
         };

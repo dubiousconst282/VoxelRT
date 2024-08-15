@@ -28,6 +28,7 @@ public:
     Application(havk::DeviceContext* ctx) {
         _ctx = ctx;
         _map = std::make_shared<VoxelMap>();
+        _gbuffer = std::make_unique<GBuffer>(ctx);
 
         try {
             _map->Deserialize("logs/voxels_2k_sponza.dat");
@@ -127,6 +128,7 @@ public:
             ImGui::EndCombo();
         }
 
+        _settings.Slider("Light Bounces", &_gbuffer->NumLightBounces, 1, 0u, 5u);
         _settings.Slider("Denoiser Passes", &_gbuffer->NumDenoiserPasses, 1, 0u, 5u);
         _settings.Checkbox("Temporal AA", &_gbuffer->EnableTAA);
 
@@ -136,16 +138,40 @@ public:
 
         if (auto gpur = dynamic_cast<GpuRenderer*>(_renderer.get())) {
             ImGui::SeparatorText("Stats");
-            gpur->DrawPerfCounters();
+
+            auto stats = gpur->LastFrameStats;
             
-            ImGui::Button("Benchmark");
+            double elapsedMs = (stats.Counters[FramePerfStats::Frame_EndTS] - stats.Counters[FramePerfStats::Frame_StartTS]) / 1000000.0;
+            double raysPerSec = stats.Counters[FramePerfStats::RayCasts] * (1000.0 / elapsedMs);
+            ImGui::Text("Render time: %.2fms (%.2fmrays/s)", elapsedMs, raysPerSec / 1000000.0);
+
+            double avgItersPerRay = stats.Counters[FramePerfStats::TraversalIters] / (double)stats.Counters[FramePerfStats::RayCasts];
+            double avgClocksPerIter = stats.Counters[FramePerfStats::ClocksPerRay] / (double)(stats.Counters[FramePerfStats::TraversalIters] + stats.Counters[FramePerfStats::RayCasts]);
+            ImGui::Text("Traversal: %.2f iters/ray, %.2f clocks/iter", avgItersPerRay, avgClocksPerIter);
+
+            std::vector<float> iterBins;
+            bool hasHistogramData = false;
+            for (uint32_t bin : stats.RayCastItersHistogram) {
+                iterBins.push_back(bin / 1000.0);
+                hasHistogramData |= bin > 0;
+            }
+
+            if (hasHistogramData) {
+                ImGui::PlotHistogram("##TraversalItersHistogram", iterBins.data(), iterBins.size(), 0, nullptr, FLT_MAX, FLT_MAX,
+                                     ImVec2(0, 80));
+            }
         }
 
         ImGui::PopItemWidth();
 
-        uint32_t numBricks = 0;
-        for (auto& [idx, sector] : _map->Sectors) {
-            numBricks += (uint32_t)std::popcount(sector.GetAllocationMask());
+        static uint32_t numBricks = 0;
+        
+        if (_map->DirtyLocs.size() > 0) {
+            numBricks = 0;
+
+            for (auto& [idx, sector] : _map->Sectors) {
+                numBricks += (uint32_t)std::popcount(sector.GetAllocationMask());
+            }
         }
         ImGui::Text("Bricks: %.1fK in %.1fK sectors (%d pending gen)", numBricks / 1000.0, _map->Sectors.size() / 1000.0, _terrainGen->GetNumPendingRequests());
 
@@ -157,6 +183,11 @@ public:
         ImGui::End();
 
         _gbuffer->SetCamera(cmds, _cam, renderSize, _map->DirtyLocs.size() > 0);
+
+        if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
+            _map->MarkAllDirty();
+        }
+        _renderer->SyncMap(_cam, cmds);
         _renderer->RenderFrame(_cam, _gbuffer.get(), cmds);
 
         _gbuffer->Resolve(target, cmds);
@@ -327,8 +358,12 @@ void InitImGui(havk::DeviceContext* ctx, GLFWwindow* window, VkDescriptorPool& d
 }
 
 int main(int argc, char** args) {
+    #if _WIN32
+    setvbuf(stdout, NULL, _IONBF, 0);
+    #else
     setlinebuf(stdout);
-
+    #endif
+    
     if (!glfwInit()) return -1;
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -388,11 +423,14 @@ int main(int argc, char** args) {
 
             ImGui::Render();
 
-            cmdList.BeginRendering({ .Attachments = { { .Target = image, .LoadOp = VK_ATTACHMENT_LOAD_OP_LOAD } } });
-            cmdList.SetViewport({ 0, 0, (float)image->Desc.Width, (float)image->Desc.Height, 0, +1 });
-            cmdList.SetScissor({ { 0, 0 }, { image->Desc.Width, image->Desc.Height } });
-            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmdList.Buffer);
-            cmdList.EndRendering();
+            static bool showUI = true;
+            showUI ^= ImGui::IsKeyPressed(ImGuiKey_F1);
+
+            if (showUI) {
+                cmdList.BeginRendering({ .Attachments = { { .Target = image, .LoadOp = VK_ATTACHMENT_LOAD_OP_LOAD } } }, true);
+                ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmdList.Buffer);
+                cmdList.EndRendering();
+            }
 
             // Present
             ctx->Swapchain->Present();

@@ -23,15 +23,15 @@ enum class RendererId {
     ESVO,           // 1:1 ESVO port
     // Tree64,      // 4³-tree
     // Tree512,     // 8³-tree
+    Benchmark
 };
 
 struct Renderer {
+    Renderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : _ctx(ctx), _map(map) { }
     virtual ~Renderer() {}
 
     virtual void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) = 0;
-    virtual void DrawSettings(glim::SettingStore& settings) {
-        settings.Slider("Light Bounces", &_numLightBounces, 1, 0u, 5u);
-    }
+    virtual void DrawSettings(glim::SettingStore& settings) { }
 
     static std::unique_ptr<Renderer> Create(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map, RendererId id) {
         switch (id) {
@@ -42,15 +42,18 @@ struct Renderer {
             case RendererId::ManhattanDF: return Create<RendererId::ManhattanDF>(ctx, map);
             case RendererId::EuclideanDF: return Create<RendererId::EuclideanDF>(ctx, map);
             case RendererId::ESVO: return Create<RendererId::ESVO>(ctx, map);
+            case RendererId::Benchmark: return Create<RendererId::Benchmark>(ctx, map);
             default: throw std::runtime_error("Unknown renderer ID");
         }
     }
 
+    // Emit CPU -> GPU world synchronization commands.
+    // *Must* be called at least once before RenderFrame().
+    virtual bool SyncMap(glim::Camera& cam, havk::CommandList& cmds) { return false; }
+
 protected:
     havk::DeviceContext* _ctx;
     std::shared_ptr<VoxelMap> _map;
-
-    uint32_t _numLightBounces = 1;
 
 private:
     template<RendererId>
@@ -63,56 +66,63 @@ private:
     template<> std::unique_ptr<Renderer> Create<RendererId::ManhattanDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::EuclideanDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::ESVO>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
+    template<> std::unique_ptr<Renderer> Create<RendererId::Benchmark>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
 };
 
-struct PerfStats {
+struct FramePerfStats {
     enum Key {
         RayCasts,
         TraversalIters,
         ClocksPerRay,
 
-        ReservedStart_ = 12,
-        Frame_StartQTS,
-        Frame_EndQTS
+        ReservedStart_ = 10,
+        Frame_StartTS, Frame_EndTS,
+        Sync_StartTS, Sync_EndTS,
+        Count_,
     };
+    static_assert(int(Key::Count_) <= 16); // keep in sync with PerfCounters.slang
     uint64_t Counters[16];
     uint32_t RayCastItersHistogram[32];
 };
 
 struct GpuRenderer : public Renderer {
-    GpuRenderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map, RendererId type) {
-        _ctx = ctx;
-        _map = std::move(map);
-
+    GpuRenderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map, RendererId type) : Renderer(ctx, map) {
         _renderShader = ctx->PipeBuilder->CreateCompute("Backends/Render.slang", { .PrepDefs = { { "BACKEND_ID", std::to_string((int)type) } } });
 
         _blueNoiseTex = havk::Image::LoadFile(ctx, "assets/bluenoise/stbn_vec2_2Dx1D_128x128x64_combined.png",
                                               VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8_UINT, 1);
         _skyboxTex = havk::Image::LoadFilePanoramaToCube(ctx, "assets/skyboxes/evening_road_01_puresky_4k.hdr");
 
-        _perfCounterBuffer = ctx->CreateTransientBuffer({
-            .Size = sizeof(PerfStats),
+        PerfCounterBuffer = ctx->CreateTransientBuffer({
+            .Size = sizeof(FramePerfStats),
             .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         });
-        _renderQueryTs = ctx->CreateQueryPool(VK_QUERY_TYPE_TIMESTAMP, 2);
+        TimeQueryPool = ctx->CreateQueryPool(VK_QUERY_TYPE_TIMESTAMP, 4);
     }
 
     void DrawPerfCounters();
+
+    FramePerfStats LastFrameStats;
+    havk::TransientBufferPtr PerfCounterBuffer;
+    havk::QueryPoolPtr TimeQueryPool;
 
 protected:
     havk::ImagePtr _blueNoiseTex;
     havk::ImagePtr _skyboxTex;
     havk::ComputePipelinePtr _renderShader;
 
-    havk::TransientBufferPtr _perfCounterBuffer;
-    havk::QueryPoolPtr _renderQueryTs;
-    PerfStats _stats;
-
     void DispatchRenderShader(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds, auto map) {
-        _renderQueryTs->CopyResults(cmds, *_perfCounterBuffer->DeviceBuffer, offsetof(PerfStats, Counters[PerfStats::Frame_StartQTS]));
+        TimeQueryPool->CopyResults(cmds, *PerfCounterBuffer->DeviceBuffer, offsetof(FramePerfStats, Counters[FramePerfStats::Frame_StartTS]));
 
-        memcpy(&_stats, _perfCounterBuffer->ReadBack(cmds), sizeof(PerfStats));
-        _perfCounterBuffer->Write(cmds, nullptr);  // reset counters
+        memcpy(&LastFrameStats, PerfCounterBuffer->ReadBack(cmds), sizeof(FramePerfStats));
+
+        // Rescale timestamps
+        for (uint32_t i = 0; i < TimeQueryPool->NumQueries; i++) {
+            uint32_t j = FramePerfStats::Frame_StartTS + i;
+            LastFrameStats.Counters[j] = TimeQueryPool->GetTimestampNanos(LastFrameStats.Counters[j]);
+        }
+        
+        PerfCounterBuffer->Write(cmds, nullptr);  // reset counters
 
         struct RenderParams {
             decltype(map) Map;
@@ -124,7 +134,7 @@ protected:
             VkDeviceAddress PerfCounters;
         };
 
-        _renderQueryTs->WriteTimestamp(cmds, 0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+        TimeQueryPool->WriteTimestamp(cmds, 0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
 
         uint32_t groupsX = (target->RenderSize.x + 7) / 8, groupsY = (target->RenderSize.y + 7) / 8;
 
@@ -132,12 +142,12 @@ protected:
         _renderShader->Dispatch(cmds, { groupsX, groupsY, 1 }, RenderParams {
             .Map = map,
             .GBuffer = cmds.GetDeviceAddress(*target->UniformBuffer, havk::UseBarrier::ComputeRead),
-            .MaxBounces = _numLightBounces,
+            .MaxBounces = target->NumLightBounces,
             .StbnTexture = cmds.GetDescriptorHandle(*_blueNoiseTex, havk::UseBarrier::ComputeRead, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
             .SkyTexture = cmds.GetDescriptorHandle(*_skyboxTex, havk::UseBarrier::ComputeRead, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-            .PerfCounters = cmds.GetDeviceAddress(*_perfCounterBuffer->DeviceBuffer, havk::UseBarrier::ComputeReadWrite),
+            .PerfCounters = cmds.GetDeviceAddress(*PerfCounterBuffer->DeviceBuffer, havk::UseBarrier::ComputeReadWrite),
         });
 
-        _renderQueryTs->WriteTimestamp(cmds, 1, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        TimeQueryPool->WriteTimestamp(cmds, 1, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     }
 };
