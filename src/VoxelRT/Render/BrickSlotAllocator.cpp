@@ -13,19 +13,11 @@ void BrickSlotAllocator::Reserve(SectorAllocInfo* sector, uint64_t newMask, uint
     uint32_t currSize = GetNumPages(sector->AllocMask, sector->LevelOfDetail);
     uint32_t newSize = GetNumPages(newMask, newLod);
 
-    if (newSize > currSize) {
-        sector->BasePage = Arena.Realloc(sector->BasePage, currSize, newSize);
+    sector->BasePage = Arena.Realloc(sector->BasePage, currSize, newSize);
 
-        if (sector->BasePage == 0) {
-            // TODO: defrag storage? and/or maybe add heuristics in FreeList::Realloc to minimize fragmentation
-            throw std::runtime_error("Could not allocate sector storage");
-        }
-    } else if (newSize < currSize) {
-        Arena.Free(sector->BasePage + newSize, currSize - newSize);
-
-        if (newSize == 0) {
-            sector->BasePage = 0;
-        }
+    if (sector->BasePage == 0 && newSize > 0) {
+        // TODO: defrag storage? and/or maybe add heuristics in FreeList::Realloc to minimize fragmentation
+        throw std::runtime_error("Could not allocate sector storage");
     }
 
     sector->AllocMask = newMask;
@@ -33,6 +25,12 @@ void BrickSlotAllocator::Reserve(SectorAllocInfo* sector, uint64_t newMask, uint
 }
 
 uint32_t FreeList::Realloc(uint32_t baseAddr, uint32_t currSize, uint32_t newSize) {
+    if (newSize <= currSize) {
+        if (newSize != currSize) {
+            Free(baseAddr + newSize, currSize - newSize);
+        }
+        return newSize == 0 ? 0 : baseAddr;
+    }
     assert(baseAddr == 0 ? currSize == 0 : true);
     assert(newSize >= currSize);
 
@@ -66,6 +64,8 @@ uint32_t FreeList::Realloc(uint32_t baseAddr, uint32_t currSize, uint32_t newSiz
 }
 
 void FreeList::Free(uint32_t baseAddr, uint32_t size) {
+    assert(size > 0);
+
     NumAllocated -= size;
     auto iter = FreeRanges.insert({ baseAddr, size }).first;
 

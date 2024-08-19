@@ -13,6 +13,7 @@ add_executable(
     Render/RendererFlatDDA.cpp
     Render/RendererDistField.cpp
     Render/RendererESVO.cpp
+    Render/RendererMesh.cpp
     Render/Benchmark.cpp
     
     Render/BrickSlotAllocator.cpp

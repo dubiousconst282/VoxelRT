@@ -266,6 +266,8 @@ DeviceContextPtr Create(DeviceCreateParams pars) {
     pars.RequiredFeatures.fragmentStoresAndAtomics = VK_TRUE;
     pars.RequiredFeatures.shaderInt16 = VK_TRUE;
     pars.RequiredFeatures.shaderInt64 = VK_TRUE;
+    pars.RequiredFeatures.multiDrawIndirect = VK_TRUE;
+    pars.RequiredFeatures.geometryShader = VK_TRUE;
 
     // Instantiation
     VkApplicationInfo appInfo = {
@@ -341,6 +343,13 @@ DeviceContextPtr Create(DeviceCreateParams pars) {
 DeviceContext::~DeviceContext() {
     vkDeviceWaitIdle(Device);
 
+    // Deletion timestamps are delayed by one because we assume
+    // resources will be used by the next Submit() call after Release().
+    // If the context is being deleted immediately after other resources,
+    // the queue will not be flushed by Tick().
+    for (auto& queue : _deletionQueues) {
+        queue.RetireTimestamp = 0;
+    }
     Tick();
 
     Swapchain.reset();
@@ -366,12 +375,12 @@ DeviceContext::~DeviceContext() {
 Future DeviceContext::Submit(VkCommandBuffer cmdBuffer, VkSemaphore waitSemaphore, VkPipelineStageFlags waitMask, VkSemaphore signalSemaphore, VkFence fence) {
     uint64_t finishTimestamp = NextQueueTimestamp++;
     VkSemaphore signals[2] = { QueueSemaphore, signalSemaphore };
-    uint64_t waitValues[2] = { finishTimestamp, 0 };
+    uint64_t signalValues[2] = { finishTimestamp, 0 };
 
     VkTimelineSemaphoreSubmitInfo timelineInfo = {
         .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
         .signalSemaphoreValueCount = signalSemaphore ? 2u : 1,
-        .pSignalSemaphoreValues = waitValues,
+        .pSignalSemaphoreValues = signalValues,
     };
     VkSubmitInfo submitInfo = {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -406,8 +415,6 @@ Future DeviceContext::Submit(std::function<void(CommandList)> cb) {
     cb(CommandList(this, cmdBuffer));
     vkEndCommandBuffer(cmdBuffer);
 
-    Future future = Submit(cmdBuffer, nullptr, 0, nullptr, nullptr);
-
     struct ManagedCmdList : Resource {
         VkCommandBuffer Handle;
 
@@ -417,10 +424,9 @@ Future DeviceContext::Submit(std::function<void(CommandList)> cb) {
     };
     auto res = Resource::make<ManagedCmdList>(this);
     res->Handle = cmdBuffer;
-    res->LastUseTimestamp = future.Timestamp;
     res.reset();
 
-    return std::move(future);
+    return Submit(cmdBuffer, nullptr, 0, nullptr, nullptr);
 }
 
 uint64_t DeviceContext::GetQueueTimestamp() const {
@@ -443,34 +449,31 @@ bool Future::Poll() const {
 }
 
 void DeviceContext::EnqueueDeletion(Resource* ptr) {
-    _deletionQueue.push_back(ptr);
+    // printf("EnqueueDelete: %p %s  %lu\n", ptr, typeid(*ptr).name(), NextQueueTimestamp);
+    assert(_deletionQueues.size() < 16 && "Deletion queue is growing too big, make sure to call `DeviceContext::Tick()` periodically.");
+    
+    if (_deletionQueues.size() == 0 || NextQueueTimestamp > _deletionQueues.back().RetireTimestamp) {
+        _deletionQueues.push_back({ .RetireTimestamp = NextQueueTimestamp });
+    }
+    _deletionQueues.back().Entries.push_back(ptr);
 }
 
 void DeviceContext::Tick() {
     PipeBuilder->Refresh();
 
-    // MarkUse() sets LastUseTS to NextQueueTimestamp, which is incremented in Submit().
-    // Flushing the deletion queue could lead to a delete-while-in-use situation:
-    //   MarkUse(cmd1, res1)  ts=3
-    //   Submit(cmd2)         ts=3
-    //   Submit(cmd3)         ts=4
-    //   Submit(cmd1)         ts=5
-    //   Tick()               gpu_ts=4  -->  delete(res1)
-    //
-    // To prevent this, Tick() will record the previous NextQueueTimestamp and delay deletions by one call.
-    // TODO
-    if (!_deletionQueue.empty()) {
-        uint64_t startTimestamp = GetQueueTimestamp();
+    if (_deletionQueues.empty()) return;
 
-        std::erase_if(_deletionQueue, [=](Resource* ptr) {
-            if (startTimestamp >= ptr->LastUseTimestamp) {
-                delete ptr;
-                return true;
-            }
-            return false;
-        });
-        _prevTickQueueTimestamp = NextQueueTimestamp;
-    }
+    uint64_t queueTimestamp = GetQueueTimestamp();
+
+    std::erase_if(_deletionQueues, [=](DeletionQueue& queue) {
+        if (queueTimestamp < queue.RetireTimestamp) return false;
+
+        for (Resource* res : queue.Entries) {
+            // printf("FlushDelete: %p %s  %lu\n", res, typeid(*res).name(), queueTimestamp);
+            delete res;
+        }
+        return true;
+    });
 }
 
 void DeviceContext::Log(LogLevel level, const char* message, ...) {

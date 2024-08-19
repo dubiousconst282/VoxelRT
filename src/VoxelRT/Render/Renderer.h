@@ -19,11 +19,11 @@ enum class RendererId {
     MultiDDA,       // Flat grid, space skipping through 8³ bricks using nested DDA loops
     ManhattanDF,    // Flat grid of 128³ tiled distance fields, sparse allocation
     EuclideanDF,
-    SVDDF,          // 8-directional distance fields at 1:4 scale
+    DSVDF,          // 8-directional distance fields at 1:4 scale
     ESVO,           // 1:1 ESVO port
     // Tree64,      // 4³-tree
-    // Tree512,     // 8³-tree
-    Benchmark
+    Mesh,           // Rasterized greedy mesh
+    Benchmark,
 };
 
 struct Renderer {
@@ -42,6 +42,7 @@ struct Renderer {
             case RendererId::ManhattanDF: return Create<RendererId::ManhattanDF>(ctx, map);
             case RendererId::EuclideanDF: return Create<RendererId::EuclideanDF>(ctx, map);
             case RendererId::ESVO: return Create<RendererId::ESVO>(ctx, map);
+            case RendererId::Mesh: return Create<RendererId::Mesh>(ctx, map);
             case RendererId::Benchmark: return Create<RendererId::Benchmark>(ctx, map);
             default: throw std::runtime_error("Unknown renderer ID");
         }
@@ -66,6 +67,7 @@ private:
     template<> std::unique_ptr<Renderer> Create<RendererId::ManhattanDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::EuclideanDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::ESVO>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
+    template<> std::unique_ptr<Renderer> Create<RendererId::Mesh>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::Benchmark>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
 };
 

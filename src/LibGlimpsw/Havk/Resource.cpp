@@ -72,7 +72,7 @@ static VkImageViewType GetViewType(VkImageType type, bool array) {
         default: throw std::logic_error("Image type not supported");
     }
 }
-static VkImageAspectFlags GetAspectMask(VkFormat format) {
+VkImageAspectFlags Image::GetAspectMask(VkFormat format) {
     switch (format) {
         case VK_FORMAT_D16_UNORM:
         case VK_FORMAT_X8_D24_UNORM_PACK32:
@@ -86,7 +86,7 @@ static VkImageAspectFlags GetAspectMask(VkFormat format) {
 
         default: return VK_IMAGE_ASPECT_COLOR_BIT;
     }
-};
+}
 ImagePtr DeviceContext::CreateImage(const ImageDesc& desc) {
     uint32_t maxLevels = (uint32_t)std::bit_width(std::min(std::min(desc.Width, desc.Height), desc.Depth));
 
@@ -126,7 +126,7 @@ ImagePtr DeviceContext::CreateImage(const ImageDesc& desc) {
         .viewType = viewType,
         .format = desc.Format,
         .subresourceRange = {
-            .aspectMask = GetAspectMask(desc.Format),
+            .aspectMask = Image::GetAspectMask(desc.Format),
             .levelCount = imageCI.mipLevels,
             .layerCount = imageCI.arrayLayers,
         },
@@ -164,7 +164,6 @@ Future Image::Upload(const void* data, size_t dataSize, VkRect2D destRect, VkIma
             .imageOffset = { destRect.offset.x, destRect.offset.y, 0 },
             .imageExtent = { destRect.extent.width, destRect.extent.height, 1 },
         };
-        cmd.MarkUse(*stageBuffer);
         vkCmdCopyBufferToImage(cmd.Buffer, stageBuffer->Handle, Handle, CurrentLayout_, 1, &copyRegion);
 
         auto naturalLayout = (Desc.Usage & VK_IMAGE_USAGE_STORAGE_BIT) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -218,8 +217,6 @@ QueryPoolPtr DeviceContext::CreateQueryPool(VkQueryType type, uint32_t numQuerie
 
 void QueryPool::WriteTimestamp(CommandList& cmds, uint32_t querySlot, VkPipelineStageFlagBits stage) {
     vkCmdWriteTimestamp(cmds.Buffer, stage, Handle, querySlot);
-
-    cmds.MarkUse(*this);
 }
 void QueryPool::CopyResults(CommandList& cmds, Buffer& dest, size_t destOffset, uint32_t firstSlot, uint32_t numSlots) {
     if (numSlots == UINT_MAX) numSlots = NumQueries;
@@ -228,8 +225,6 @@ void QueryPool::CopyResults(CommandList& cmds, Buffer& dest, size_t destOffset, 
     cmds.Barrier(dest, { VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
     vkCmdCopyQueryPoolResults(cmds.Buffer, Handle, firstSlot, numSlots, dest.Handle, destOffset, 8, VK_QUERY_RESULT_64_BIT);
     vkCmdResetQueryPool(cmds.Buffer, Handle, firstSlot, numSlots);
-
-    cmds.MarkUse(*this);
 }
 QueryPool::~QueryPool() {
     vkDestroyQueryPool(Context->Device, Handle, nullptr);

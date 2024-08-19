@@ -14,9 +14,9 @@ struct FreeList {
         Capacity = cap;
     }
 
-    // Allocates or grows a range.
+    // Allocates, frees, or attempts to resize an existing range.
+    // Returns the new base address, or zero on failure/freeing.
     uint32_t Realloc(uint32_t baseAddr, uint32_t currSize, uint32_t newSize);
-    void Free(uint32_t baseAddr, uint32_t size);
 
 private:
     void Split(auto& node, uint32_t count) {
@@ -26,6 +26,7 @@ private:
         FreeRanges.erase(node);
         NumAllocated += count;
     }
+    void Free(uint32_t baseAddr, uint32_t size);
 };
 
 

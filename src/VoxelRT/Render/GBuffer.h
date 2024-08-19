@@ -66,10 +66,10 @@ struct GBuffer {
         if (AlbedoTex == nullptr || RenderSize != renderSize) {
             RenderSize = renderSize;
 
-            const auto CreateImage = [&](VkFormat format) {
+            const auto CreateImage = [&](VkFormat format, VkImageUsageFlags usage = 0) {
                 havk::ImagePtr image = Context->CreateImage({
                     .Format = format,
-                    .Usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    .Usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | usage,
                     .Width = renderSize.x,
                     .Height = renderSize.y,
                     .NumLevels = 1,
@@ -78,8 +78,8 @@ struct GBuffer {
                 return image;
             };
 
-            AlbedoTex = CreateImage(VK_FORMAT_R8G8B8A8_UNORM);
-            PrevAlbedoTex = CreateImage(VK_FORMAT_R8G8B8A8_UNORM);
+            AlbedoTex = CreateImage(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+            PrevAlbedoTex = CreateImage(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 
             IrradianceTex = CreateImage(VK_FORMAT_R16G16B16A16_SFLOAT);
             PrevIrradianceTex = CreateImage(VK_FORMAT_R16G16B16A16_SFLOAT);
@@ -146,7 +146,7 @@ struct GBuffer {
         uint32_t groupsX = (RenderSize.x + 7) / 8;
         uint32_t groupsY = (RenderSize.y + 7) / 8;
 
-        if (DebugChannelView != DebugChannel::HeatMap) {
+        if (DebugChannelView != DebugChannel::HeatMap && DebugChannelView != DebugChannel::Albedo) {
             struct ReprojParams {
                 VkDeviceAddress GBuffer;
             };

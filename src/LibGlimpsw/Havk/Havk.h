@@ -62,7 +62,6 @@ struct Resource {
     HAVK_NON_COPYABLE(Resource);
 
     DeviceContext* Context;
-    uint64_t LastUseTimestamp;
 
     Resource() = default;
     virtual ~Resource() {}
@@ -161,8 +160,13 @@ struct DeviceContext {
 private:
     friend DeviceContextPtr Create(DeviceCreateParams pars);
 
+    struct DeletionQueue {
+        std::vector<Resource*> Entries;
+        uint64_t RetireTimestamp;
+    };
+
     VkDebugUtilsMessengerEXT _debugMessenger = nullptr;
-    std::vector<Resource*> _deletionQueue;  // Unused resources to be deleted
+    std::vector<DeletionQueue> _deletionQueues;  // Unused resources to be deleted
     uint64_t _prevTickQueueTimestamp = 0;
 };
 
@@ -191,7 +195,7 @@ struct Buffer final : Resource {
     VkDeviceAddress DeviceAddress;
 
     // Internal
-    VkPipelineStageFlags CurrentStage_ = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkPipelineStageFlags CurrentStage_ = 0;
 
     ~Buffer();
 
@@ -225,7 +229,7 @@ struct Image : Resource {
     ImageHandle DescriptorHandle = InvalidHandle;
 
     // Internal
-    VkPipelineStageFlags CurrentStage_ = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkPipelineStageFlags CurrentStage_ = 0;
     VkImageLayout CurrentLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
 
     ~Image() override;
@@ -243,6 +247,8 @@ struct Image : Resource {
                              Future* uploadSync = nullptr);
     static ImagePtr LoadFilePanoramaToCube(DeviceContext* ctx, std::string_view path, VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT,
                                            Future* uploadSync = nullptr);
+
+    static VkImageAspectFlags GetAspectMask(VkFormat format);
 };
 
 // Helper for a buffer that will be written/read by host and read/written by GPU every frame.
@@ -347,10 +353,10 @@ struct UseBarrier {
     VkAccessFlags Access = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     VkPipelineStageFlags Stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 
-    static const UseBarrier ReadOnly, All, ComputeRead, ComputeReadWrite, GraphicsRead, GraphicsReadWrite; 
+    static const UseBarrier AllRead, All, ComputeRead, ComputeReadWrite, GraphicsRead, GraphicsReadWrite; 
 };
 constexpr UseBarrier
-    UseBarrier::ReadOnly = { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT },
+    UseBarrier::AllRead = { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT },
     UseBarrier::All = { VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT },
     UseBarrier::ComputeRead = { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT },
     UseBarrier::ComputeReadWrite = { VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT },
@@ -376,6 +382,9 @@ struct CommandList {
 
     void SetViewport(VkViewport vp) { vkCmdSetViewport(Buffer, 0, 1, &vp); }
     void SetScissor(VkRect2D rect) { vkCmdSetScissor(Buffer, 0, 1, &rect); }
+    void BindIndexBuffer(havk::Buffer& buffer, VkIndexType indexType, size_t offset = 0) {
+        vkCmdBindIndexBuffer(Buffer, buffer.Handle, offset, indexType);
+    }
 
     void TransitionLayout(Image& image, VkImageLayout newLayout, VkPipelineStageFlags destStage,
                           VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, bool discardContents = false);
@@ -413,26 +422,26 @@ struct CommandList {
     }
     // Barrier helper
     VkDeviceAddress GetDeviceAddress(havk::Buffer& buffer, UseBarrier barrier) {
-        assert(buffer.DeviceAddress != InvalidHandle &&
+        assert(buffer.DeviceAddress != 0 &&
                "Buffer has no device address. Make sure you have set STORAGE|UNIFORM usage flags.");
         Barrier(buffer, barrier);
         return buffer.DeviceAddress;
     }
 
     // Copies host data to buffer. Limited to 64KB per call, see docs for `vkCmdUpdateBuffer`.
-    void UpdateBuffer(havk::Buffer& buffer, VkDeviceSize destOffset, uint32_t dataSize, const void* data) {
+    void UpdateBuffer(havk::Buffer& buffer, size_t destOffset, uint32_t dataSize, const void* data) {
         Barrier(buffer, { VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
         vkCmdUpdateBuffer(Buffer, buffer.Handle, destOffset, dataSize, data);
     }
-    void CopyBuffer(havk::Buffer& source, havk::Buffer& dest,
-                    VkDeviceSize srcOffset = 0, VkDeviceSize dstOffset = 0, VkDeviceSize size = VK_WHOLE_SIZE) {
+    void CopyBuffer(havk::Buffer& source, havk::Buffer& dest, size_t srcOffset = 0, size_t destOffset = 0, size_t size = VK_WHOLE_SIZE) {
+        if (size == VK_WHOLE_SIZE) size = std::min(source.Size - srcOffset, dest.Size - destOffset);
+        assert(srcOffset + size <= source.Size);
+        assert(destOffset + size <= dest.Size);
+
         Barrier(source, { VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
         Barrier(dest, { VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT });
-        VkBufferCopy region = { srcOffset, dstOffset, size };
+        VkBufferCopy region = { srcOffset, destOffset, size };
         vkCmdCopyBuffer(Buffer, source.Handle, dest.Handle, 1, &region);
-    }
-    void MarkUse(Resource& res) {
-        res.LastUseTimestamp = Context->NextQueueTimestamp;
     }
 };
 
@@ -482,16 +491,13 @@ struct DrawCommand {
     uint32_t InstanceOffset = 0;
 };
 
-// Blittable with VkDrawIndexedIndirectCommand, different strides.
+// Blittable with VkDrawIndexedIndirectCommand.
 struct DrawIndexedCommand {
     uint32_t NumIndices;
     uint32_t NumInstances = 1;
     uint32_t IndexOffset = 0;
     int32_t VertexOffset = 0;
     uint32_t InstanceOffset = 0;
-
-    VkBuffer IndexBuffer = nullptr;
-    VkIndexType IndexType = VK_INDEX_TYPE_UINT16;
 };
 
 struct GraphicsPipeline final : Pipeline {
@@ -500,12 +506,15 @@ struct GraphicsPipeline final : Pipeline {
         Push(cmdList, pc);
         vkCmdDraw(cmdList.Buffer, cmd.NumVertices, cmd.NumInstances, cmd.VertexOffset, cmd.NumInstances);
     }
-    void DrawIndexed(CommandList& cmdList, const DrawIndexedCommand& cmd, PushConstantsPtr pushConstants = {}) {
+    void DrawIndexed(CommandList& cmdList, const DrawIndexedCommand& cmd, PushConstantsPtr pc = {}) {
         Bind(cmdList);
-        Push(cmdList, pushConstants);
-
-        vkCmdBindIndexBuffer(cmdList.Buffer, cmd.IndexBuffer, 0, cmd.IndexType);
+        Push(cmdList, pc);
         vkCmdDrawIndexed(cmdList.Buffer, cmd.NumIndices, cmd.NumInstances, cmd.IndexOffset, cmd.VertexOffset, cmd.InstanceOffset);
+    }
+    void DrawIndexedIndirect(CommandList& cmdList, havk::Buffer& buffer, size_t offset, uint32_t count, PushConstantsPtr pc = {}, uint32_t stride = sizeof(DrawIndexedCommand)) {
+        Bind(cmdList);
+        Push(cmdList, pc);
+        vkCmdDrawIndexedIndirect(cmdList.Buffer, buffer.Handle, offset, count, stride);
     }
 };
 struct ComputePipeline final : Pipeline {
@@ -514,7 +523,7 @@ struct ComputePipeline final : Pipeline {
         Push(cmdList, pc);
         vkCmdDispatch(cmdList.Buffer, groupCount.width, groupCount.height, groupCount.depth);
     }
-    void DispatchIndirect(CommandList& cmdList, Buffer& buffer, VkDeviceSize offset, PushConstantsPtr pc = {}) {
+    void DispatchIndirect(CommandList& cmdList, Buffer& buffer, size_t offset, PushConstantsPtr pc = {}) {
         Bind(cmdList);
         Push(cmdList, pc);
         
@@ -612,7 +621,6 @@ namespace BlendingModes {
     };
 };  // namespace BlendingModes
 
-// TODO: Consider splitting this stuff, no idea how useable this is.
 struct GraphicsPipelineDesc {
     // Rasterizer
     VkPolygonMode PolygonMode = VK_POLYGON_MODE_FILL;
