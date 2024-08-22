@@ -13,7 +13,6 @@ static constexpr auto ViewSize = glm::uvec2(4096, 2048) / glm::uvec2(SectorSize)
 static constexpr uint32_t NumViewSectors = ViewSize.x * ViewSize.x * ViewSize.y;
 
 struct GpuVoxelStorage {
-    uint64_t Palette[256];
     uint32_t BaseSlots[NumViewSectors];
     uint64_t BrickMasks[NumViewSectors];
     uint64_t SectorMasks[NumViewSectors / 64];
@@ -101,7 +100,6 @@ struct GpuStorageManager {
             if (batch.size() >= MaxUpdateSectors || updateSize >= MaxUpdateDataSize) break;
         }
 
-        SyncPalette(map, cmds);
         if (batch.empty()) return false;
 
         assert(maxAddress < StorageBuffer->Size); // TODO
@@ -174,27 +172,6 @@ struct GpuStorageManager {
         // log2
         dist = int32_t(std::bit_width(uint32_t(dist))) - 3;
         return uint32_t(glm::clamp(dist, 0, 3));
-    }
-
-private:
-    uint64_t _palette[256] = {};
-
-    void SyncPalette(VoxelMap& map, havk::CommandList& cmds) {
-        uint32_t changedMin = UINT_MAX, changedMax = 0;
-
-        for (uint32_t i = 0; i < 256; i++) {
-            uint64_t encoded = map.Palette[i].GetEncoded();
-
-            if (_palette[i] != encoded) {
-                _palette[i] = encoded;
-                changedMin = std::min(changedMin, i);
-                changedMax = i;
-            }
-        }
-        if (changedMin == UINT_MAX) return;
-
-        uint32_t numChanges = changedMax - changedMin + 1;
-        cmds.UpdateBuffer(*StorageBuffer, offsetof(GpuVoxelStorage, Palette[changedMin]), sizeof(uint64_t) * numChanges, &_palette[changedMin]);
     }
 };
 

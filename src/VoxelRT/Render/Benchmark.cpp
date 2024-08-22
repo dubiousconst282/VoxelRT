@@ -1,4 +1,3 @@
-#include <thread>
 #include "Renderer.h"
 #include <magic_enum.hpp>
 
@@ -6,7 +5,7 @@ namespace {
 
 struct PerfSample {
     double FrameTimeMs;
-    uint64_t TotalRayCasts;
+    int64_t TotalRayCasts;
     double AvgItersPerRay;
     double AvgClocksPerIter;
 
@@ -34,17 +33,17 @@ enum class RunnerState {
 };
 
 struct RendererBenchmark : public Renderer {
-    static constexpr int kNumSamplesPerTarget = 256;
+    static constexpr int kNumSamplesPerTarget = 128;
     static constexpr RendererId kTargetIds[] = {
-        RendererId::PlainDDA,    RendererId::MultiDDA,    RendererId::XBrickMap,
-        RendererId::ESVO,
+        RendererId::PlainDDA, RendererId::MultiDDA,    RendererId::XBrickMap,   RendererId::ESVO,
+        RendererId::Tree64,   RendererId::ManhattanDF, RendererId::EuclideanDF,
     };
     static constexpr ScenePreset kScenePresets[] = {
         { {  170.5,  80.5, 512.5  }, {  1.57,  0.00 }, 1024, "logs/voxels_1k_sponza.dat", "Sponza 1k" },
         { {  800.5, 196.5, 768.5  }, { -1.10,  0.05 }, 1024, "logs/voxels_1k_ecohouse.dat", "Eco House 1k" },
-        //{ { 1165.5, 250.5, 2020.5 }, {  1.2,   0.05 }, 4096, "logs/voxels_4k_bistro.dat", "Bistro 4k" },
-        //{ { 1780.5, 450.5, 2020.5 }, {  1.85, -0.50 }, 4096, "logs/voxels_4k_san_miguel.dat", "San Miguel 4k" },
-        //{ { 1130.5, 450.5, 2080.5 }, { -0.85, -0.20 }, 4096, "logs/voxels_4k_forestlake.dat", "Forest Lake 2k" },
+        { { 1165.5, 250.5, 2020.5 }, {  1.2,   0.05 }, 4096, "logs/voxels_4k_bistro.dat", "Bistro 4k" },
+        { { 1780.5, 450.5, 2020.5 }, {  1.85, -0.50 }, 4096, "logs/voxels_4k_san_miguel.dat", "San Miguel 4k" },
+        { { 1130.5, 450.5, 2080.5 }, { -0.85, -0.20 }, 4096, "logs/voxels_4k_forestlake.dat", "Forest Lake 2k" },
     };
 
     RendererBenchmark(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : Renderer(ctx, map) { }
@@ -78,7 +77,7 @@ struct RendererBenchmark : public Renderer {
 
                 _accumData.clear();
                 for (RendererId id : kTargetIds) {
-                    if (preset.MapSize > 1024 && (id == RendererId::ManhattanDF || id == RendererId::EuclideanDF)) continue;
+                    if (preset.MapSize > 1024 && (id == RendererId::PlainDDA || id == RendererId::ManhattanDF || id == RendererId::EuclideanDF)) continue;
 
                     _accumData.push_back({ .TargetId = id });
                 }
@@ -90,7 +89,7 @@ struct RendererBenchmark : public Renderer {
                 _resultsMarkdown += "\n\n--------\n\n**Scene**: " + std::string(preset.Label) + " (";
                 _resultsMarkdown += std::to_string(numBricks / 1000) + "k * 8³ voxels)\n";
 
-                    _presetIdx++;
+                _presetIdx++;
                 _targetIdx = 0;
             } else {
                 ChangeState(RunnerState::Idle);
@@ -107,13 +106,13 @@ struct RendererBenchmark : public Renderer {
 
             if (_state == RunnerState::Sync) {
                 auto syncStart = std::chrono::steady_clock::now();
-                renderer->TimeQueryPool->WriteTimestamp(cmds, 2, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+                renderer->TimeQueryPool->WriteTimestamp(cmds, 2, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
                 if (!_currentRenderer->SyncMap(cam, cmds)) {
                     ChangeState(RunnerState::Profile);
                 }
-                
-                renderer->TimeQueryPool->WriteTimestamp(cmds, 3, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+
+                renderer->TimeQueryPool->WriteTimestamp(cmds, 3, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
                 auto syncEnd = std::chrono::steady_clock::now();
 
                 data.CpuSyncMs += (syncEnd - syncStart).count() / 1000000.0;
@@ -125,12 +124,19 @@ struct RendererBenchmark : public Renderer {
             data.GpuSyncMs += (stats.Counters[FramePerfStats::Sync_EndTS] - stats.Counters[FramePerfStats::Sync_StartTS]) / 1000000.0;
 
             if (_state == RunnerState::Profile) {
-                data.Samples.push_back(PerfSample(renderer->LastFrameStats));
+                if (gbuffer->NumLightBounces == 0) {
+                    data.Samples.push_back(PerfSample(renderer->LastFrameStats));
+                } else {
+                    data.SamplesSecBounce.push_back(PerfSample(renderer->LastFrameStats));
+                }
+ 
+                gbuffer->NumLightBounces = _stateCounter > kNumSamplesPerTarget ? 1 : 0;
 
-                if (_stateCounter++ > kNumSamplesPerTarget) {
+                if (_stateCounter > kNumSamplesPerTarget * 2) {
                     ChangeState(RunnerState::SetupNext);
                     _targetIdx++;
                 }
+                _stateCounter++;
             }
         }
 
@@ -161,6 +167,7 @@ private:
     struct TargetData {
         RendererId TargetId;
         std::vector<PerfSample> Samples;
+        std::vector<PerfSample> SamplesSecBounce;
         double GpuSyncMs = 0;
         double CpuSyncMs = 0;
     };
@@ -170,12 +177,16 @@ private:
 
     std::string GenerateResultsMarkdown() {
         std::vector<PerfSample> cleanSamples;
+        std::vector<PerfSample> cleanSamplesSecBounce;
         for (auto& data : _accumData) {
             // TODO: taking min instead of median by frame time might make more sense
             auto& samples = data.Samples;
-
             std::sort(samples.begin(), samples.end(), [](PerfSample& a, PerfSample& b) { return a.FrameTimeMs < b.FrameTimeMs; });
             cleanSamples.push_back(samples[samples.size() / 2]);
+
+            auto& pathSamples = data.SamplesSecBounce;
+            std::sort(pathSamples.begin(), pathSamples.end(), [](PerfSample& a, PerfSample& b) { return a.FrameTimeMs < b.FrameTimeMs; });
+            cleanSamplesSecBounce.push_back(pathSamples[pathSamples.size() / 2]);
         }
 
         std::string str = "|";
@@ -212,6 +223,16 @@ private:
         }
 
         str += "\n|";
+        PrintColumn("%s", "Mrays/s path");
+        for (uint32_t i = 1; i < numColumns; i++) {
+            PerfSample& s1 = cleanSamples[i - 1];
+            PerfSample& s2 = cleanSamplesSecBounce[i - 1];
+            double val1 = s1.TotalRayCasts * (1000.0 / s1.FrameTimeMs) / 1000000.0;
+            double val2 = s2.TotalRayCasts * (1000.0 / s2.FrameTimeMs) / 1000000.0;
+            PrintColumn("%.1f (%.2fx)", val2, val2 / val1);
+        }
+
+        str += "\n|";
         PrintColumn("%s", "Iters/ray");
         for (uint32_t i = 1; i < numColumns; i++) {
             PerfSample& s = cleanSamples[i - 1];
@@ -228,7 +249,7 @@ private:
         str += "\n|";
         PrintColumn("%s", "GPU sync ms");
         for (uint32_t i = 1; i < numColumns; i++) {
-            PrintColumn("%.1f", _accumData[i - 1].GpuSyncMs);
+            PrintColumn("%.1f", std::max(0.0, _accumData[i - 1].GpuSyncMs));
         }
 
         str += "\n|";

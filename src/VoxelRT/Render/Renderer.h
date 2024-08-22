@@ -14,14 +14,14 @@
 
 enum class RendererId {
     CPU,            // Minimal CPU-SIMD port of XBrickMap
-    XBrickMap,      // 3-level grid with 4³ sectors to 8³ bricks, plus 4³ masks for finer space skipping
+    XBrickMap,      // 2-level grid with 4³ sectors to 8³ bricks, plus 4³ masks for finer space skipping
     PlainDDA,       // Flat grid, unaccelerated DDA
     MultiDDA,       // Flat grid, space skipping through 8³ bricks using nested DDA loops
     ManhattanDF,    // Flat grid of 128³ tiled distance fields, sparse allocation
     EuclideanDF,
-    DSVDF,          // 8-directional distance fields at 1:4 scale
-    ESVO,           // 1:1 ESVO port
-    // Tree64,      // 4³-tree
+    // DSVDF,          // 8-directional distance fields at 1:4 scale
+    ESVO = 7,       // 1:1 ESVO port
+    Tree64,         // Generic 4³-tree
     Mesh,           // Rasterized greedy mesh
     Benchmark,
 };
@@ -42,6 +42,7 @@ struct Renderer {
             case RendererId::ManhattanDF: return Create<RendererId::ManhattanDF>(ctx, map);
             case RendererId::EuclideanDF: return Create<RendererId::EuclideanDF>(ctx, map);
             case RendererId::ESVO: return Create<RendererId::ESVO>(ctx, map);
+            case RendererId::Tree64: return Create<RendererId::Tree64>(ctx, map);
             case RendererId::Mesh: return Create<RendererId::Mesh>(ctx, map);
             case RendererId::Benchmark: return Create<RendererId::Benchmark>(ctx, map);
             default: throw std::runtime_error("Unknown renderer ID");
@@ -67,6 +68,7 @@ private:
     template<> std::unique_ptr<Renderer> Create<RendererId::ManhattanDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::EuclideanDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::ESVO>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
+    template<> std::unique_ptr<Renderer> Create<RendererId::Tree64>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::Mesh>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::Benchmark>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
 };
@@ -83,7 +85,7 @@ struct FramePerfStats {
         Count_,
     };
     static_assert(int(Key::Count_) <= 16); // keep in sync with PerfCounters.slang
-    uint64_t Counters[16];
+    int64_t Counters[16];
     uint32_t RayCastItersHistogram[32];
 };
 
@@ -100,6 +102,13 @@ struct GpuRenderer : public Renderer {
             .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         });
         TimeQueryPool = ctx->CreateQueryPool(VK_QUERY_TYPE_TIMESTAMP, 4);
+
+        _paletteBuffer = ctx->CreateBuffer({
+            .Size = sizeof(uint64_t) * 256,
+            .Usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+            .PreferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        });
     }
 
     void DrawPerfCounters();
@@ -112,10 +121,10 @@ protected:
     havk::ImagePtr _blueNoiseTex;
     havk::ImagePtr _skyboxTex;
     havk::ComputePipelinePtr _renderShader;
+    havk::BufferPtr _paletteBuffer;
 
     void DispatchRenderShader(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds, auto map) {
         TimeQueryPool->CopyResults(cmds, *PerfCounterBuffer->DeviceBuffer, offsetof(FramePerfStats, Counters[FramePerfStats::Frame_StartTS]));
-
         memcpy(&LastFrameStats, PerfCounterBuffer->ReadBack(cmds), sizeof(FramePerfStats));
 
         // Rescale timestamps
@@ -123,8 +132,10 @@ protected:
             uint32_t j = FramePerfStats::Frame_StartTS + i;
             LastFrameStats.Counters[j] = TimeQueryPool->GetTimestampNanos(LastFrameStats.Counters[j]);
         }
-        
+
         PerfCounterBuffer->Write(cmds, nullptr);  // reset counters
+        
+        SyncPalette(cmds);
 
         struct RenderParams {
             decltype(map) Map;
@@ -133,10 +144,12 @@ protected:
             uint32_t MaxBounces;
             havk::ImageHandle StbnTexture;
             havk::ImageHandle SkyTexture;
+
+            VkDeviceAddress Palette;
             VkDeviceAddress PerfCounters;
         };
 
-        TimeQueryPool->WriteTimestamp(cmds, 0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+        TimeQueryPool->WriteTimestamp(cmds, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
         uint32_t groupsX = (target->RenderSize.x + 7) / 8, groupsY = (target->RenderSize.y + 7) / 8;
 
@@ -147,9 +160,27 @@ protected:
             .MaxBounces = target->NumLightBounces,
             .StbnTexture = cmds.GetDescriptorHandle(*_blueNoiseTex, havk::UseBarrier::ComputeRead, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
             .SkyTexture = cmds.GetDescriptorHandle(*_skyboxTex, havk::UseBarrier::ComputeRead, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+            .Palette = cmds.GetDeviceAddress(*_paletteBuffer, havk::UseBarrier::ComputeRead),
             .PerfCounters = cmds.GetDeviceAddress(*PerfCounterBuffer->DeviceBuffer, havk::UseBarrier::ComputeReadWrite),
         });
 
-        TimeQueryPool->WriteTimestamp(cmds, 1, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+        TimeQueryPool->WriteTimestamp(cmds, 1, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    }
+
+    void SyncPalette(havk::CommandList& cmds) {
+        auto data = (uint64_t*)_paletteBuffer->MappedData;
+        bool changed = false;
+
+        for (uint32_t i = 0; i < 256; i++) {
+            uint64_t encoded = _map->Palette[i].GetEncoded();
+
+            if (data[i] != encoded) {
+                data[i] = encoded;
+                changed = true;
+            }
+        }
+        if (changed) {
+            _paletteBuffer->Flush();
+        }
     }
 };

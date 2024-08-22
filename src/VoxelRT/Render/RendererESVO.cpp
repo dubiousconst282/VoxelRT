@@ -14,21 +14,20 @@ struct RawNode {
     uint32_t ChildIdx = 0;  // 16-bit when encoded + 32-bit when too far
 };
 
-static RawNode GenerateTree(VoxelMap& map, std::vector<uint32_t>& data, uint32_t scale, glm::uvec3 pos = {}) {
+RawNode GenerateTree(VoxelMap& map, std::vector<uint32_t>& data, uint32_t scale, glm::uvec3 pos = {}) {
     RawNode node;
 
     // Don't bother descending into empty sectors or bricks
-    if (scale == BrickIndexer::ShiftXZ + MaskIndexer::ShiftXZ &&
-        map.GetSector(pos / glm::uvec3(Brick::Size * MaskIndexer::Size)) == nullptr) {
-        return RawNode();
+    if (scale == BrickIndexer::ShiftXZ + MaskIndexer::ShiftXZ && map.GetSector(pos >> scale) == nullptr) {
+        return node;
     }
-    if (scale == BrickIndexer::ShiftXZ && map.GetBrick(pos / glm::uvec3(Brick::Size)) == nullptr) {
-        return RawNode();
+    if (scale == BrickIndexer::ShiftXZ && map.GetBrick(pos >> scale) == nullptr) {
+        return node;
     }
 
     // Create leaf
     if (scale == 1) {
-        Brick* brick = map.GetBrick(pos / glm::uvec3(Brick::Size));
+        Brick* brick = map.GetBrick(pos >> glm::uvec3(BrickIndexer::Shift));
 
         uint8_t temp[8];
         memcpy(&temp[0], &brick->Data[BrickIndexer::GetIndex(pos.x, pos.y + 0, pos.z + 0)], 2);
@@ -117,21 +116,21 @@ struct RendererESVO : public GpuRenderer {
 
         TreeScale = 12;
 
-    std::vector<uint32_t> data;
-    RawNode root = GenerateTree(*_map, data, TreeScale, glm::uvec3(0));
+        std::vector<uint32_t> data;
+        RawNode root = GenerateTree(*_map, data, TreeScale, glm::uvec3(0));
 
-    RootIndex = data.size();
-    data.push_back(uint16_t(root.NonLeafMask | root.ValidMask << 8) | (data.size() - root.ChildIdx) << 16);
+        RootIndex = data.size();
+        data.push_back(uint16_t(root.NonLeafMask | root.ValidMask << 8) | (data.size() - root.ChildIdx) << 16);
 
-    StorageBuffer = _ctx->CreateBuffer({
-        .Size = data.size() * sizeof(uint32_t),
-        .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-        .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-    });
+        StorageBuffer = _ctx->CreateBuffer({
+            .Size = data.size() * sizeof(uint32_t),
+            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        });
 
         // TODO: make this copy staged to ensure device_local memory on non-UMA hardware
-    StorageBuffer->Write(data.data(), 0, data.size() * sizeof(uint32_t));
+        StorageBuffer->Write(data.data(), 0, data.size() * sizeof(uint32_t));
 
         return true;
     }

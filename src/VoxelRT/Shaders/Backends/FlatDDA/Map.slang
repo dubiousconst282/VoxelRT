@@ -23,12 +23,8 @@ public struct MapStorage {
     public uint64_t VoxelMasks[NUM_VOXELS / 64];
 }
 
-public struct VoxelMap : IVoxelMap {
+public struct VoxelMap : IRayCastable {
     public MapStorage* Storage;
-
-    public Material GetMaterialFromId(uint materialId) {
-        return materialId != 0 ? Material.DefaultOpaque : Material.DefaultEmpty;
-    }
 
     public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {
         HitInfo hit;
@@ -55,7 +51,7 @@ public struct VoxelMap : IVoxelMap {
             uint occMask = ((uint*)&Storage->VoxelMasks[0])[maskIdx];
 
             if ((occMask >> (voxelIdx & 31) & 1) != 0) {
-                hit.MaterialId = 1;
+                hit.MaterialId = kDefaultOpaqueMaterialId;
                 break;
             }
             stepMask = GetStepMask(sideDist);
@@ -119,7 +115,7 @@ public struct VoxelMap_MultiDDA : VoxelMap {
                 int3 subp = TraceBrick(uv3d*8.0, rayDir, stepMask, brickData);
 
                 if (subp.x >= 0) {
-                    hit.MaterialId = 1;
+                    hit.MaterialId = kDefaultOpaqueMaterialId;
 
                     // TODO: this would ideally be outside the loop to avoid divergence, Mesa/NIR doesn't optimize but other compilers might
                     float3 finalPos = mapPos*8+subp;
@@ -207,7 +203,7 @@ public struct VoxelMap_ParamBrickStepping : VoxelMap, ITraversalStepper {
         return true;
     }
     public uint GetVoxelId(int3 pos) {
-        return 1;
+        return kDefaultOpaqueMaterialId;
     }
 }
 

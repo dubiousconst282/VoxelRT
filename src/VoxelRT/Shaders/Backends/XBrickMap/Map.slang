@@ -5,7 +5,6 @@ import RayMaskOptimizationLUT;
 namespace backend::xbrickmap {
 
 public struct VoxelStorage {
-    public Material Palette[256];
     public SectorInfo Sectors[VoxelMap.NUM_SECTORS];
     public uint64_t AllocMasks[VoxelMap.NUM_SECTORS];
     public uint64_t SectorMasks[VoxelMap.NUM_SECTORS / 64];
@@ -39,7 +38,7 @@ public struct SectorInfo {
     }
 }
 
-public struct VoxelMap : IVoxelMap, ITraversalStepper {
+public struct VoxelMap : IRayCastable, ITraversalStepper {
     // NOTE: keep in sync with GpuRenderer.cpp
     public static const uint
         BRICK_SIZE = 8,
@@ -99,10 +98,6 @@ public struct VoxelMap : IVoxelMap, ITraversalStepper {
             return 0;
         }
         return GetBrickVoxelId(address, pos);
-    }
-
-    public Material GetMaterialFromId(uint id) {
-        return Storage->Palette[id];
     }
 
     public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {

@@ -3,7 +3,7 @@ import Raycast;
 
 namespace backend::esvo {
 
-public struct VoxelMap : IVoxelMap {
+public struct VoxelMap : IRayCastable {
     public uint* RootNode;
     public uint TreeScale;
 
@@ -28,13 +28,9 @@ public struct VoxelMap : IVoxelMap {
         if (result.t <= 1.0) {
             hit.Pos = (result.pos - 1.0 - worldOrigin * scale) * (1 << TreeScale);
             hit.Normal = result.normal;
-            hit.MaterialId = 1;
+            hit.MaterialId = kDefaultOpaqueMaterialId;
         }
         return hit;
-    }
-
-    public Material GetMaterialFromId(uint materialId) {
-        return materialId != 0 ? Material.DefaultOpaque : Material.DefaultEmpty;
     }
 }
 

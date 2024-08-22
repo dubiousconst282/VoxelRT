@@ -27,6 +27,9 @@ import Utilities;
 #elif BACKEND_ID == 7
     import ESVO.Map;
     typealias TVoxelMap = backend::esvo::VoxelMap;
+#elif BACKEND_ID == 8
+    import Tree64.Map;
+    typealias TVoxelMap = backend::tree64::VoxelMap;
 #else
     static_assert(false, "Unknown renderer backend ID");
 #endif
@@ -34,10 +37,12 @@ import Utilities;
 struct DispatchParams {
     TVoxelMap Map;
     GBufferUniforms* GBuffer;
-
+    
     uint MaxBounces;
     TextureHandle2D<uint2> StbnTexture;
     TextureHandleCube<float3> SkyTexture;
+
+    Material* Palette;
     PerfStats* PerfCounters;
 };
 
@@ -72,7 +77,7 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
         float emission;
 
         if (!hit.Miss) {
-            let material = pc.Map.GetMaterialFromId(hit.MaterialId);
+            let material = pc.Palette[hit.MaterialId];
             albedo = material.Color;
             emission = material.Emission;
         }
@@ -115,7 +120,7 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
     }
 
     uint64_t clockEnd = clockARB();
-    float clockDiff = (clockEnd - clockStart) / (1000.0 * (pc.MaxBounces + 1));
+    float clockDiff = (clockEnd - clockStart) / (3000.0 * (pc.MaxBounces + 1));
 
     pc.GBuffer->IrradianceTex.Instance[pos] = float4(irradiance, clockDiff);
 }

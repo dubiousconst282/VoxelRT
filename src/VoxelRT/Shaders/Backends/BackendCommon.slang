@@ -1,6 +1,5 @@
-public interface IVoxelMap {
+public interface IRayCastable {
     public HitInfo RayCast(int3 worldOrigin, float3 origin, float3 dir, bool coarse);
-    public Material GetMaterialFromId(uint materialId);
 }
 
 public struct HitInfo {
@@ -15,10 +14,9 @@ public struct HitInfo {
     }
 }
 
-public struct Material {
-    public static const Material DefaultEmpty = { uint2(0) };
-    public static const Material DefaultOpaque = { uint2((31 << 11) | (63 << 5) | 31) };
+public static const int kDefaultOpaqueMaterialId = 254;
 
+public struct Material {
     public uint2 Data;
 
     public property float3 Color {
