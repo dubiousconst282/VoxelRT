@@ -130,6 +130,10 @@ public:
         _settings.Slider("Denoiser Passes", &_gbuffer->NumDenoiserPasses, 1, 0u, 5u);
         _settings.Checkbox("Temporal AA", &_gbuffer->EnableTAA);
 
+        if (_gbuffer->DebugChannelView == GBuffer::DebugChannel::HeatMap) {
+            _settings.Drag("Heatmap Range", &_gbuffer->HeatmapRange.x, 2, 0.0f, 8192.0f);
+        }
+
         ImGui::PushID(typeid(_renderer).hash_code());
         _renderer->DrawSettings(_settings);
         ImGui::PopID();

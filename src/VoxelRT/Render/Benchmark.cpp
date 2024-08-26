@@ -35,8 +35,9 @@ enum class RunnerState {
 struct RendererBenchmark : public Renderer {
     static constexpr int kNumSamplesPerTarget = 128;
     static constexpr RendererId kTargetIds[] = {
-        RendererId::PlainDDA, RendererId::MultiDDA,    RendererId::XBrickMap,   RendererId::ESVO,
-        RendererId::Tree64,   RendererId::ManhattanDF, RendererId::EuclideanDF,
+        RendererId::PlainDDA,  RendererId::ManhattanDF,  RendererId::EuclideanDF,
+        RendererId::MultiDDA,  RendererId::XBrickMap,    RendererId::ESVO,
+        RendererId::Tree64,    RendererId::BrickBVH,
     };
     static constexpr ScenePreset kScenePresets[] = {
         { {  170.5,  80.5, 512.5  }, {  1.57,  0.00 }, 1024, "logs/voxels_1k_sponza.dat", "Sponza 1k" },
@@ -176,19 +177,6 @@ private:
     std::string _resultsMarkdown;
 
     std::string GenerateResultsMarkdown() {
-        std::vector<PerfSample> cleanSamples;
-        std::vector<PerfSample> cleanSamplesSecBounce;
-        for (auto& data : _accumData) {
-            // TODO: taking min instead of median by frame time might make more sense
-            auto& samples = data.Samples;
-            std::sort(samples.begin(), samples.end(), [](PerfSample& a, PerfSample& b) { return a.FrameTimeMs < b.FrameTimeMs; });
-            cleanSamples.push_back(samples[samples.size() / 2]);
-
-            auto& pathSamples = data.SamplesSecBounce;
-            std::sort(pathSamples.begin(), pathSamples.end(), [](PerfSample& a, PerfSample& b) { return a.FrameTimeMs < b.FrameTimeMs; });
-            cleanSamplesSecBounce.push_back(pathSamples[pathSamples.size() / 2]);
-        }
-
         std::string str = "|";
 
         uint32_t columnSize = 12;
@@ -206,63 +194,48 @@ private:
             str += "|";
         };
 
-        for (uint32_t i = 0; i < numColumns; i++) {
-            PrintColumn("%s", i == 0 ? "" : magic_enum::enum_name(_accumData[i - 1].TargetId).data());
-        }
 
-        str += "\n|";
-        for (uint32_t i = 0; i < numColumns; i++) {
-            str.append(columnSize, '-').append(1, '|');
-        }
-
-        str += "\n|";
+        PrintColumn("%s", "Method");
         PrintColumn("%s", "Mrays/s");
-        for (uint32_t i = 1; i < numColumns; i++) {
-            PerfSample& s = cleanSamples[i - 1];
-            PrintColumn("%.1f", s.TotalRayCasts * (1000.0 / s.FrameTimeMs) / 1000000.0);
-        }
-
-        str += "\n|";
-        PrintColumn("%s", "Mrays/s path");
-        for (uint32_t i = 1; i < numColumns; i++) {
-            PerfSample& s1 = cleanSamples[i - 1];
-            PerfSample& s2 = cleanSamplesSecBounce[i - 1];
-            double val1 = s1.TotalRayCasts * (1000.0 / s1.FrameTimeMs) / 1000000.0;
-            double val2 = s2.TotalRayCasts * (1000.0 / s2.FrameTimeMs) / 1000000.0;
-            PrintColumn("%.1f (%.2fx)", val2, val2 / val1);
-        }
-
-        str += "\n|";
+        PrintColumn("%s", "Mrays/s PT1");
         PrintColumn("%s", "Iters/ray");
-        for (uint32_t i = 1; i < numColumns; i++) {
-            PerfSample& s = cleanSamples[i - 1];
-            PrintColumn("%.1f", s.AvgItersPerRay);
-        }
-
-        str += "\n|";
         PrintColumn("%s", "Clocks/iter");
-        for (uint32_t i = 1; i < numColumns; i++) {
-            PerfSample& s = cleanSamples[i - 1];
+        PrintColumn("%s", "GPU sync");
+        PrintColumn("%s", "CPU sync");
+        str += "\n|------------|------------|------------|------------|------------|------------|------------";
+
+        for (auto& data : _accumData) {
+            str += "\n|";
+            // TODO: taking min instead of median by frame time might make more sense
+            auto& samples = data.Samples;
+            std::sort(samples.begin(), samples.end(), [](PerfSample& a, PerfSample& b) { return a.FrameTimeMs < b.FrameTimeMs; });
+            auto& s = samples[samples.size() / 2];
+
+            auto& pathSamples = data.SamplesSecBounce;
+            std::sort(pathSamples.begin(), pathSamples.end(), [](PerfSample& a, PerfSample& b) { return a.FrameTimeMs < b.FrameTimeMs; });
+            auto& spath = pathSamples[pathSamples.size() / 2];
+
+            PrintColumn("%s", magic_enum::enum_name(data.TargetId).data());
+            PrintColumn("%.1f", s.TotalRayCasts * (1000.0 / s.FrameTimeMs) / 1000000.0);
+
+            double val1 = s.TotalRayCasts * (1000.0 / s.FrameTimeMs) / 1000000.0;
+            double val2 = spath.TotalRayCasts * (1000.0 / spath.FrameTimeMs) / 1000000.0;
+
+            if (data.TargetId == RendererId::BrickBVH) PrintColumn("%s", "TBD");
+            else
+            PrintColumn("%.1f (%.2fx)", val2, val2 / val1);
+
+            PrintColumn("%.1f", s.AvgItersPerRay);
             PrintColumn("%.1f", s.AvgClocksPerIter);
-        }
-
-        str += "\n|";
-        PrintColumn("%s", "GPU sync ms");
-        for (uint32_t i = 1; i < numColumns; i++) {
-            PrintColumn("%.1f", std::max(0.0, _accumData[i - 1].GpuSyncMs));
-        }
-
-        str += "\n|";
-        PrintColumn("%s", "CPU sync ms");
-        for (uint32_t i = 1; i < numColumns; i++) {
-            PrintColumn("%.1f", _accumData[i - 1].CpuSyncMs);
+            PrintColumn("%.1f ms", std::max(0.0, data.GpuSyncMs));
+            PrintColumn("%.1f ms", data.CpuSyncMs);
         }
 
         return str;
     }
 };
-}
-;  // namespace
+
+};  // namespace
 
 template<>
 std::unique_ptr<Renderer> Renderer::Create<RendererId::Benchmark>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {

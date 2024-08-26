@@ -85,17 +85,29 @@ struct LinearIndexer3D {
     }
     template<typename Vec = glm::ivec3, typename T>
     static Vec GetPos(T index) {
+        T x = index & MaskXZ;
+        T z = index >> ShiftXZ & MaskXZ;
+        T y = index >> (ShiftXZ * 2) & MaskY;
+
         if constexpr (Signed_) {
-            T x = T(index << (32 - ShiftXZ)) >> (32 - ShiftXZ);
-            T z = T(index << (32 - ShiftXZ * 2)) >> (32 - ShiftXZ);
-            T y = T(index << (32 - ShiftXZ * 2 - ShiftY)) >> (32 - ShiftY);
-            return { x, y, z };
-        } else {
-            T x = index & MaskXZ;
-            T z = index >> ShiftXZ & MaskXZ;
-            T y = index >> (ShiftXZ * 2) & MaskY;
-            return { x, y, z };
+            x = signext<ShiftXZ>(x);
+            z = signext<ShiftXZ>(z);
+            y = signext<ShiftY>(y);
         }
+        return { x, y, z };
+    }
+
+private:
+    template<int bits, typename T>
+    static T signext(T value) {
+        // The classic way to sign extend is `sint(value << (32 - bits)) >> (32 - bits)`,
+        // but that is not trivial to do in a generic context because we can't easily do
+        // arithmetic bit shifts.
+        //
+        // The following is comparatively as cheap, but in the case of SIMD will require
+        // loading a constant from memory.
+        constexpr T sign_mask = T(1) << (bits - 1);
+        return (value ^ sign_mask) - sign_mask;
     }
 };
 

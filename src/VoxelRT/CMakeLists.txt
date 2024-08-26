@@ -14,6 +14,7 @@ add_executable(
     Render/RendererDistField.cpp
     Render/RendererESVO.cpp
     Render/RendererTree64.cpp
+    Render/RendererBVH.cpp
     Render/RendererMesh.cpp
     Render/Benchmark.cpp
     
@@ -27,12 +28,12 @@ add_subdirectory(../../deps/FastNoise2 ${CMAKE_BINARY_DIR}/deps/FastNoise2 EXCLU
 # Don't care enough to find out why so as a workaround, just strip them all here. (Also silences annoying warnings)
 set_target_properties(FastNoise PROPERTIES COMPILE_OPTIONS "")
 
-add_subdirectory(../../deps/tracy ${CMAKE_BINARY_DIR}/deps/tracy EXCLUDE_FROM_ALL)
 add_subdirectory(../../deps/fastgltf ${CMAKE_BINARY_DIR}/deps/fastgltf EXCLUDE_FROM_ALL)
+add_subdirectory(../../deps/bvh ${CMAKE_BINARY_DIR}/deps/bvh EXCLUDE_FROM_ALL)
 
 target_link_libraries(VoxelRT PRIVATE
     glimpsw
     FastNoise
     fastgltf::fastgltf
-    Tracy::TracyClient
+    bvh
 )

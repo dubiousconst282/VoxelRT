@@ -13,3 +13,4 @@ public struct PerfStats {
 
 public static PerfStats* g_PerfTracker = nullptr;
 
+public static int g_CurrTraversalIters = 0;

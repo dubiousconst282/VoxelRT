@@ -7,3 +7,8 @@
 	path = deps/fastgltf
 	url = https://github.com/spnda/fastgltf
 	shallow = true
+
+[submodule "deps/bvh"]
+	path = deps/bvh
+	url = https://github.com/madmann91/bvh/
+	shallow = true

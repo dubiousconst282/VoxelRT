@@ -281,11 +281,11 @@ struct QueryPool : Resource {
     // Copy 64-bit results to given buffer and reset queries.
     void CopyResults(CommandList& cmds, Buffer& dest, size_t destOffset = 0, uint32_t firstSlot = 0, uint32_t numSlots = UINT_MAX);
 
-    uint64_t GetTimestampNanos(uint64_t ts) const {
+    int64_t GetTimestampNanos(int64_t ts) const {
         double period = Context->PhysicalDeviceInfo.Props.limits.timestampPeriod;
-        return uint64_t(ts * period + 0.5);
+        return int64_t(ts * period + 0.5);
     }
-    double GetElapsedMillis(uint64_t ts1, uint64_t ts2) const {
+    double GetElapsedMillis(int64_t ts1, int64_t ts2) const {
         double period = Context->PhysicalDeviceInfo.Props.limits.timestampPeriod;
         return (ts2 - ts1) * period / 1000000.0;
     }

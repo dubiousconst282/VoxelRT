@@ -30,6 +30,9 @@ import Utilities;
 #elif BACKEND_ID == 8
     import Tree64.Map;
     typealias TVoxelMap = backend::tree64::VoxelMap;
+#elif BACKEND_ID == 9
+    import BVH.Map;
+    typealias TVoxelMap = backend::bvh::VoxelMap;
 #else
     static_assert(false, "Unknown renderer backend ID");
 #endif
@@ -120,8 +123,12 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
     }
 
     uint64_t clockEnd = clockARB();
-    float clockDiff = (clockEnd - clockStart) / (3000.0 * (pc.MaxBounces + 1));
+    float clockDiff = (clockEnd - clockStart) / 1000.0;
 
+    #if PERF_PRECISE_ITER_HEATMAP
+    clockDiff = g_CurrTraversalIters;
+    #endif
+    
     pc.GBuffer->IrradianceTex.Instance[pos] = float4(irradiance, clockDiff);
 }
 

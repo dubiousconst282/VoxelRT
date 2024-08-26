@@ -102,7 +102,12 @@ public struct VoxelMap_MultiDDA : VoxelMap {
             uint brickIdx = GetBrickIndex(mapPos);
             uint occMask = ((uint*)&Storage->BrickMasks[0])[brickIdx / 32];
 
+            //int loopActiveLanes = WaveActiveCountBits(true);
+
             if ((occMask >> (brickIdx & 31) & 1) != 0) {
+                // Wait until we have enough lanes to traverse brick
+                //if (WaveActiveCountBits(true) < loopActiveLanes * 6/8) continue;
+
                 float3 mini = ((mapPos-rayPos) + 0.5 - 0.5*float3(raySign)) * invDir;
                 float d = max(mini.x, max(mini.y, mini.z));
                 float3 intersect = rayPos + rayDir*d;

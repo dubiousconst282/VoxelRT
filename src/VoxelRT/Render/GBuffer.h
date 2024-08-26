@@ -43,6 +43,7 @@ struct GBuffer {
     uint32_t NumDenoiserPasses = 5;
     uint32_t NumLightBounces = 1;
     bool EnableTAA = true;
+    glm::vec2 HeatmapRange = { 0, 256 };
 
     glm::uvec2 RenderSize = {};
 
@@ -188,10 +189,12 @@ struct GBuffer {
         struct PresentParams {
             VkDeviceAddress GBuffer;
             DebugChannel Channel;
+            glm::vec2 HeatmapRange;
         };
         PresentParams pc = {
             .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::GraphicsRead),
             .Channel = DebugChannelView,
+            .HeatmapRange = HeatmapRange,
         };
         cmds.Barrier(*AlbedoTex, havk::UseBarrier::GraphicsRead, VK_IMAGE_LAYOUT_GENERAL);
 
