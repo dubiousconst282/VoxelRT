@@ -68,6 +68,10 @@ public struct VoxelMap : IRayCastable {
                 nodeIdx = node.ChildPtr + popcnt_var64(node.PopMask, childIdx);
                 node = TreeNodes[nodeIdx];
                 
+                if (node.PopMask == 0) { // instancing marker
+                    nodeIdx = node.ChildPtr;
+                    node = TreeNodes[nodeIdx];
+                }
                 scaleExp -= 2;
                 childIdx = GetNodeCellIndex(pos, scaleExp);
             }

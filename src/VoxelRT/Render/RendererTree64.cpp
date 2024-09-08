@@ -58,6 +58,82 @@ RawNode GenerateTree(VoxelMap& map, std::vector<RawNode>& data, std::vector<uint
         node.PopMask = Brick::PackBits64(temp);
         node.IsLeaf = 1;
 
+        if (node.PopMask != 0) {
+            LeftPack(temp, node.PopMask);
+
+            node.ChildPtr = leafData.size();
+            leafData.insert(leafData.end(), temp, temp + std::popcount(node.PopMask));
+
+            bool shouldTile = false;
+            for (int i = 0; i < 64; i++) shouldTile |= temp[i] == 253;
+            if (shouldTile) {
+                node.ChildPtr = 1;
+                node.PopMask = 0;  // instancing marker
+                node.IsLeaf = 0;
+            }
+        }
+
+        return node;
+    }
+
+    // Descend
+    scale -= 2;
+
+    std::vector<RawNode> children;
+
+    for (int32_t i = 0; i < 64; i++) {
+        glm::ivec3 childPos = i >> glm::ivec3(0, 4, 2) & 3;
+        RawNode child = GenerateTree(map, data, leafData, scale, pos + (childPos << scale));
+
+        if (child.ChildPtr != 0) {
+            node.PopMask |= 1ull << i;
+            children.push_back(child);
+        }
+    }
+
+    if (node.PopMask != 0) {
+        node.ChildPtr = data.size();
+        data.insert(data.end(), children.begin(), children.end());
+    }
+    return node;
+}
+
+VFloat sdTorus(VFloat3 p, glm::vec2 t) {
+    // vec2 q = vec2(length(p.xz) - t.x, p.y);
+    // return length(q) - t.y;
+    VFloat qx = simd::approx_sqrt(p.x * p.x + p.z * p.z) - t.x;
+    return simd::approx_sqrt(qx * qx + p.y * p.y) - t.y;
+}
+
+glm::mat4 g_rot;
+VInt EvaluateTile(VInt x, VInt y, VInt z) {
+    VFloat3 pos = VFloat3(simd::conv2f(x), simd::conv2f(y), simd::conv2f(z)) + 0.5f;
+    VFloat3 center = 128;
+
+    VFloat3 torusPos = simd::TransformNormal(g_rot, pos - center);
+
+    VFloat d = sdTorus(torusPos, glm::vec2(112, 20));
+    return simd::csel(d < 0, simd::csel(torusPos.z < 0, 245, 253), 0);
+}
+
+RawNode GenerateSubTree(std::vector<RawNode>& data, std::vector<uint8_t>& leafData, int32_t scale, glm::ivec3 pos = {}) {
+    RawNode node;
+
+    // Create leaf
+    if (scale == 2) {
+        assert((pos.x | pos.y | pos.z) % 4 == 0);
+
+        alignas(64) uint8_t temp[64];
+
+        for (int32_t i = 0; i < 64; i += simd::VectorWidth) {
+           VInt idx = i + simd::LaneIdx;
+           VInt voxelIds = EvaluateTile(pos.x + (idx >> 0 & 3), pos.y + (idx >> 4 & 3), pos.z + (idx >> 2 & 3));
+
+           _mm_store_epi32(&temp[i], _mm512_cvtepi32_epi8(voxelIds.reg));
+        }
+        node.PopMask = Brick::PackBits64(temp);
+        node.IsLeaf = 1;
+
         LeftPack(temp, node.PopMask);
 
         node.ChildPtr = leafData.size();
@@ -73,7 +149,7 @@ RawNode GenerateTree(VoxelMap& map, std::vector<RawNode>& data, std::vector<uint
 
     for (int32_t i = 0; i < 64; i++) {
         glm::ivec3 childPos = i >> glm::ivec3(0, 4, 2) & 3;
-        RawNode child = GenerateTree(map, data, leafData, scale, pos + (childPos << scale));
+        RawNode child = GenerateSubTree(data, leafData, scale, pos + (childPos << scale));
 
         if (child.PopMask != 0) {
             node.PopMask |= 1ull << i;
@@ -103,6 +179,21 @@ struct RendererTree64 : public GpuRenderer {
     }
 
     void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+        std::vector<RawNode> data;
+        std::vector<uint8_t> leafData;
+        data.resize(2);
+
+        g_rot = glm::identity<glm::mat4>();
+        g_rot = glm::rotate(g_rot, float(ImGui::GetTime() * 0.7 + 3), glm::vec3(1, 0, 0));
+        g_rot = glm::rotate(g_rot, float(ImGui::GetTime() * 0.9 + 5), glm::vec3(0, 1, 0));
+
+        data[1] = GenerateSubTree(data, leafData, 8, glm::ivec3(0));
+
+        printf("SubTree: %zu nodes, %zu bytes\n", data.size(), leafData.size());
+
+        StorageBuffer->Write(data.data()+1, 1 * sizeof(RawNode),(data.size()-1) * sizeof(RawNode));
+        StorageBuffer->Write(leafData.data(), LeafDataOffset, leafData.size());
+
         GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
             .TreeScale = TreeScale,
             .TreeNodes = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
@@ -114,7 +205,7 @@ struct RendererTree64 : public GpuRenderer {
         if (StorageBuffer != nullptr && _map->DirtyLocs.size() == 0) return false;
         _map->DirtyLocs.clear();
 
-        TreeScale = 14;
+        TreeScale = 10;
 
         std::vector<RawNode> nodes;
         std::vector<uint8_t> leafData;
