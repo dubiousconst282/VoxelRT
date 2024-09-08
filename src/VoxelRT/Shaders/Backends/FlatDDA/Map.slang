@@ -16,7 +16,7 @@ public static const uint64_t
     NUM_VOXELS = uint64_t(GRID_SIZE_XZ) * GRID_SIZE_Y * GRID_SIZE_XZ,
     NUM_BRICKS = NUM_VOXELS / BRICK_STRIDE;
 
-static const int MAX_RAY_STEPS = 384;
+static const int MAX_RAY_STEPS = 512;
 
 public struct MapStorage {
     public uint64_t BrickMasks[NUM_BRICKS / 64];
@@ -74,6 +74,11 @@ public struct VoxelMap : IRayCastable {
     }
 
     public static uint GetBrickIndex(uint3 brickPos) {
+        #if 0
+        uint sectorIdx = GetLinearIndex(brickPos / 4, GRID_SIZE_XZ / (BRICK_SIZE * 4), GRID_SIZE_Y / (BRICK_SIZE * 4));
+        uint tileIdx = GetLinearIndex(brickPos, 4, 4);
+        return sectorIdx * 64 + tileIdx;
+        #endif
         return GetLinearIndex(brickPos, GRID_SIZE_XZ / BRICK_SIZE, GRID_SIZE_Y / BRICK_SIZE);
     }
 }
@@ -88,7 +93,7 @@ public struct VoxelMap_MultiDDA : VoxelMap {
 
         float3 invDir = 1.0 / rayDir;
 
-        float3 startPos = floor(ClipRayToAABB(rayPos, rayDir, 0.001, float3(GRID_SIZE_XZ, GRID_SIZE_Y, GRID_SIZE_XZ) + 0.001));
+        float3 startPos = floor(ClipRayToAABB(rayPos, rayDir, 0.001, float3(GRID_SIZE_XZ, GRID_SIZE_Y, GRID_SIZE_XZ)/BRICK_SIZE - 0.001));
         float3 sideDist = ((startPos - rayPos) + step(0.0, rayDir)) * invDir;
         int3 mapPos = int3(startPos);
         int3 raySign = sign(rayDir);
@@ -161,6 +166,9 @@ public struct VoxelMap_MultiDDA : VoxelMap {
         int3 raySign = sign(rayDir);
         
         do {
+            #if PERF_PRECISE_ITER_HEATMAP
+            g_CurrTraversalIters++;
+            #endif
             uint index = (mapPos.x + mapPos.z * 8 + mapPos.y * 64);
 
             if ((brickData[index / 32u] >> (index & 31) & 1) != 0) {

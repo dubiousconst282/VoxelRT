@@ -1,7 +1,7 @@
 #include "Renderer.h"
 #include "BrickSlotAllocator.h"
 
-// Annoynmous namespace needed to avoid struct naming collisions with other CUs.
+// Anonymous namespace needed to avoid struct naming collisions with other CUs.
 // These *do not* manifest at compile time but templates will only be instantiated
 // once and lead to very confusing behavior like push constant sizes being wrong.
 namespace {

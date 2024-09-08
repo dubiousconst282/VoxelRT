@@ -126,7 +126,12 @@ public struct VoxelMap : IRayCastable {
         if (node.IsLeaf) {
             hit.MaterialId = kDefaultOpaqueMaterialId;
             hit.Dist = tmin;
-            hit.Pos = origin + dir * tmin;
+            hit.Pos = origin + dir * (tmin + 0.001);
+            
+            //float3 sideDist = (step(0.0f, dir) + floor(hit.Pos)) * invDir + invOriginT;
+            //float tmin = min(min(sideDist.x,sideDist.y),sideDist.z);
+            //bool3 sideMask = tmin == sideDist;
+            hit.Normal = fract(hit.Pos/8); //select(sideMask, -sign(dir), 0.0);
         }
         return hit;
     }
