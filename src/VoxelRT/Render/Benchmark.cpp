@@ -35,16 +35,16 @@ enum class RunnerState {
 struct RendererBenchmark : public Renderer {
     static constexpr int kNumSamplesPerTarget = 128;
     static constexpr RendererId kTargetIds[] = {
-        RendererId::PlainDDA,  RendererId::ManhattanDF,  RendererId::EuclideanDF,
-        RendererId::MultiDDA,  RendererId::XBrickMap,    RendererId::ESVO,
-        RendererId::Tree64,    RendererId::BrickBVH,
+        RendererId::PlainDDA, RendererId::MultiDDA, RendererId::XBrickMap,   RendererId::ESVO,
+        RendererId::Tree64,   RendererId::BrickBVH, RendererId::ManhattanDF, RendererId::EuclideanDF,
     };
     static constexpr ScenePreset kScenePresets[] = {
-        { {  170.5,  80.5, 512.5  }, {  1.57,  0.00 }, 1024, "logs/voxels_1k_sponza.dat", "Sponza 1k" },
-        { {  800.5, 196.5, 768.5  }, { -1.10,  0.05 }, 1024, "logs/voxels_1k_ecohouse.dat", "Eco House 1k" },
-        { { 1165.5, 250.5, 2020.5 }, {  1.2,   0.05 }, 4096, "logs/voxels_4k_bistro.dat", "Bistro 4k" },
-        { { 1780.5, 450.5, 2020.5 }, {  1.85, -0.50 }, 4096, "logs/voxels_4k_san_miguel.dat", "San Miguel 4k" },
-        { { 1130.5, 450.5, 2080.5 }, { -0.85, -0.20 }, 4096, "logs/voxels_4k_forestlake.dat", "Forest Lake 2k" },
+        { {  170,  80, 512  }, {  1.57,  0.00 }, 1024, "logs/voxels_1k_sponza.dat", "Sponza 1k" },
+        { {  800, 196, 768  }, { -1.10,  0.05 }, 1024, "logs/voxels_1k_ecohouse.dat", "Eco House 1k" },
+        { { 1165, 250, 2020 }, {  1.2,   0.05 }, 4096, "logs/voxels_4k_bistro.dat", "Bistro 4k" },
+        { { 1780, 450, 2020 }, {  1.85, -0.50 }, 4096, "logs/voxels_4k_san_miguel.dat", "San Miguel 4k" },
+        { { 1130, 450, 2080 }, { -0.85, -0.20 }, 4096, "logs/voxels_4k_forestlake.dat", "Forest Lake 2k" },
+        { { 4000, 700, 1000 }, { -2.00, -0.5  }, 4096, "logs/voxels_4k_highway_i95.dat", "NY Highway I95 4k" },
     };
 
     RendererBenchmark(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : Renderer(ctx, map) { }
@@ -53,7 +53,7 @@ struct RendererBenchmark : public Renderer {
         ImGui::Begin("Benchmark Runner", nullptr, ImGuiWindowFlags_NoCollapse);
 
         if (ImGui::Button(_state == RunnerState::Idle ? "Run" : "Cancel")) {
-            ChangeState(RunnerState::SetupNext);
+            ChangeState(_state == RunnerState::Idle ? RunnerState::SetupNext : RunnerState::Idle);
             _presetIdx = 0;
             _targetIdx = 0;
         }
@@ -78,7 +78,7 @@ struct RendererBenchmark : public Renderer {
 
                 _accumData.clear();
                 for (RendererId id : kTargetIds) {
-                    if (preset.MapSize > 1024 && (id == RendererId::PlainDDA || id == RendererId::ManhattanDF || id == RendererId::EuclideanDF)) continue;
+                    if (preset.MapSize > 1024 && (id == RendererId::ManhattanDF || id == RendererId::EuclideanDF)) continue;
 
                     _accumData.push_back({ .TargetId = id });
                 }
@@ -221,8 +221,6 @@ private:
             double val1 = s.TotalRayCasts * (1000.0 / s.FrameTimeMs) / 1000000.0;
             double val2 = spath.TotalRayCasts * (1000.0 / spath.FrameTimeMs) / 1000000.0;
 
-            if (data.TargetId == RendererId::BrickBVH) PrintColumn("%s", "TBD");
-            else
             PrintColumn("%.1f (%.2fx)", val2, val2 / val1);
 
             PrintColumn("%.1f", s.AvgItersPerRay);

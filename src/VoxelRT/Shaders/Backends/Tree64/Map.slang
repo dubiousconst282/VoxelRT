@@ -20,8 +20,7 @@ public struct Node {
 
 public struct VoxelMap : IRayCastable {
     public uint TreeScale;
-    public uint RootIdx;
-    public Node* TreeBase;
+    public Node* TreeNodes;
     public uint8_t* LeafData;
 
     public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {
@@ -40,10 +39,102 @@ public struct VoxelMap : IRayCastable {
 
     private HitInfo Traversal(float3 origin, float3 dir, bool coarse) {
         uint stack[11];
+        int scaleExp = 21;  // 0.25
+
+        uint nodeIdx = 0; // root
+        Node node = TreeNodes[nodeIdx];
+
+        if (abs(dir.x) < 0.0001) dir.x = 0.0001;
+        if (abs(dir.y) < 0.0001) dir.y = 0.0001;
+        if (abs(dir.z) < 0.0001) dir.z = 0.0001;
+
+        float3 invDir = 1.0f / dir;
+        float3 pos = clamp(origin, 1.0f, 1.9999999f);
+        
+        float3 sideDist;
+        int i;
+
+        for (i = 0; i < 256; i++) {
+            if (coarse && i > 20 && node.IsLeaf) break;
+            // Early out for too few lanes active doesn't help much and causes light
+            // leaking or darkening, depending on whether we tell it's a hit or miss.
+            //if (coarse && i > 30 && WaveActiveCountBits(true) < WaveGetLaneCount()*1/4) break;
+            
+            int childIdx = GetNodeCellIndex(pos, scaleExp);
+
+            // Descend
+            while ((node.PopMask >> childIdx & 1) != 0 && !node.IsLeaf && scaleExp >= 2) {
+                stack[scaleExp >> 1] = nodeIdx;
+                nodeIdx = node.ChildPtr + popcnt_var64(node.PopMask, childIdx);
+                node = TreeNodes[nodeIdx];
+                
+                scaleExp -= 2;
+                childIdx = GetNodeCellIndex(pos, scaleExp);
+            }
+            if ((node.PopMask >> childIdx & 1) != 0 && node.IsLeaf) break;
+
+            int advScaleExp = scaleExp;
+
+            // 2³ steps
+            if ((node.PopMask >> (childIdx & 0b101010) & 0x00330033) == 0) advScaleExp++;
+
+            // Compute next pos by intersecting with max cube edges
+            pos = FloorScale(pos, advScaleExp);
+            float3 prevPos = pos;
+            
+            float scale = bit_cast<float>((advScaleExp - 23 + 127) << 23);  // 2 ^ -(23 - advScaleExp)
+            sideDist = (step(0.0f, dir) * scale + (pos - origin)) * invDir;
+
+            // Distance biasing: corner misses
+            //   tmax = max(tmax, min(min(sideDist.x, sideDist.y), sideDist.z)) + 0.000004;
+            //   pos = origin + dir * tmax;
+            
+            // Nudging: grid-like artifacts
+            //   pos += select(tmax == sideDist, copysign(scale * 0.01, dir), 0);
+
+            // Bounds clamping: robust but slightly more expansive
+            float tmax = min(min(sideDist.x, sideDist.y), sideDist.z);
+
+            float3 siblPos0 = select(tmax == sideDist, pos + copysign(scale, dir), pos);
+            float3 siblPos1 = bit_cast<float3>(bit_cast<int3>(siblPos0) + ((1 << advScaleExp) - 1));
+            pos = clamp(origin + dir * tmax, siblPos0, siblPos1); // clamp to sibling bounds [0, 1)
+
+            // Find carry bit to tell which node we should ascend to
+            uint3 diffPos = bit_cast<uint3>(pos) ^ bit_cast<uint3>(prevPos);
+            int diffExp = firstbithigh(diffPos.x | diffPos.y | diffPos.z); // 31 - lzcnt
+            if (diffExp % 2 == 0) diffExp--;
+
+            if (diffExp > scaleExp) {
+                if (diffExp > 21) break;  // going out of root?
+
+                scaleExp = diffExp;
+                nodeIdx = stack[scaleExp >> 1];
+                node = TreeNodes[nodeIdx];
+            }
+        }
+        PERF_STAT_INC(TraversalIters, i);
+        
+        HitInfo hit;
+        hit.MaterialId = 0;
+        
+        if (node.IsLeaf) {
+            int childIdx = GetNodeCellIndex(pos, scaleExp);
+            hit.MaterialId = LeafData[node.ChildPtr + popcnt_var64(node.PopMask, childIdx)];
+            hit.Pos = pos;
+
+            float tmax = min(min(sideDist.x, sideDist.y), sideDist.z);
+            bool3 sideMask = tmax >= sideDist;
+            hit.Normal = select(sideMask, -sign(dir), 0.0);
+        }
+        return hit;
+    }
+
+    private HitInfo Traversal_HDDA(float3 origin, float3 dir, bool coarse) {
+        uint stack[11];
         int scale_exp = 21;  // 0.25
 
-        Node* node = &TreeBase[RootIdx];
-        stack[scale_exp >> 1] = RootIdx * sizeof(Node);
+        Node* node = &TreeNodes[0];
+        stack[scale_exp >> 1] = 0;
 
         if (abs(dir.x) < 0.0001) dir.x = 0.0001;
         if (abs(dir.y) < 0.0001) dir.y = 0.0001;
@@ -122,10 +213,10 @@ public struct VoxelMap : IRayCastable {
                 
                 pos = bit_cast<float3>(subPos);
                 
-                stack[scale_exp >> 1] = uint(uint64_t(node) - uint64_t(TreeBase)); // push
+                stack[scale_exp >> 1] = uint(uint64_t(node) - uint64_t(TreeNodes)); // push
                 scale_exp = child_scale_exp;
                 
-                node = &TreeBase[node->ChildPtr + popcnt_var64(node->PopMask, currIdx)];
+                node = &TreeNodes[node->ChildPtr + popcnt_var64(node->PopMask, currIdx)];
             } else {
                 uint3 parentPos = bit_cast<uint3>(pos);
                 
@@ -153,7 +244,7 @@ public struct VoxelMap : IRayCastable {
 
                 pos = bit_cast<float3>(parentPos);
 
-                node = (Node*)(uint64_t(TreeBase) + stack[scale_exp >> 1]); // pop
+                node = (Node*)(uint64_t(TreeNodes) + stack[scale_exp >> 1]); // pop
             }
 
         }

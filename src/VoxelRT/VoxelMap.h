@@ -274,7 +274,7 @@ struct VoxelMap {
     void Deserialize(std::string_view filename);
     void Serialize(std::string_view filename);
 
-    void VoxelizeModel(std::string_view modelPath, glm::uvec3 pos, glm::uvec3 size);
+    void VoxelizeModel(std::string_view modelPath, glm::ivec3 pos, glm::ivec3 size);
 
     // Iterates over voxels within the specified region (in voxel coords).
     template<typename VisitFn, typename FilterFn>

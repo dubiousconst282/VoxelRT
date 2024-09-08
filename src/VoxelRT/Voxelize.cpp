@@ -178,7 +178,7 @@ static void AddColorsToPalette(glim::PaletteBuilder& palette, swr::RgbaTexture2D
     swr::texutil::IterateTiles(tex.Width / 4, tex.Height / 4, processTile);
 }
 
-void VoxelMap::VoxelizeModel(std::string_view modelPath, glm::uvec3 startPos, glm::uvec3 size) {
+void VoxelMap::VoxelizeModel(std::string_view modelPath, glm::ivec3 startPos, glm::ivec3 size) {
     auto asset = LoadAsset(modelPath);
 
     // Load textures and build palette

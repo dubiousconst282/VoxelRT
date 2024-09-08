@@ -39,7 +39,7 @@ public:
             // auto model = "../GraphicsAssets/Bistro.glb";
             // auto model = "logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf";
 
-            _map->VoxelizeModel(model, glm::uvec3(0), glm::uvec3(4096));
+            _map->VoxelizeModel(model, glm::ivec3(0), glm::ivec3(2048));
             _map->Serialize("logs/voxels_2k_sponza.dat");
         }
 

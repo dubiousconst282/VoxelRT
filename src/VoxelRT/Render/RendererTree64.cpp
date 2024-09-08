@@ -89,15 +89,14 @@ RawNode GenerateTree(VoxelMap& map, std::vector<RawNode>& data, std::vector<uint
 
 struct GpuVoxelMap {
     uint32_t TreeScale;
-    uint32_t RootIdx;
-    VkDeviceAddress TreeBase;
+    VkDeviceAddress TreeNodes;
     VkDeviceAddress LeafData;
 };
 
 struct RendererTree64 : public GpuRenderer {
     havk::BufferPtr StorageBuffer;
     uint32_t TreeScale;
-    uint32_t RootIndex;
+    size_t LeafDataOffset;
 
     RendererTree64(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : GpuRenderer(ctx, map, RendererId::Tree64) {
         _map->MarkAllDirty();
@@ -106,9 +105,8 @@ struct RendererTree64 : public GpuRenderer {
     void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
         GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
             .TreeScale = TreeScale,
-            .RootIdx = RootIndex,
-            .TreeBase = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
-            .LeafData = StorageBuffer->DeviceAddress + sizeof(RawNode) * (RootIndex+1),
+            .TreeNodes = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
+            .LeafData = StorageBuffer->DeviceAddress + LeafDataOffset,
         });
     }
 
@@ -118,23 +116,24 @@ struct RendererTree64 : public GpuRenderer {
 
         TreeScale = 14;
 
-        std::vector<RawNode> data;
+        std::vector<RawNode> nodes;
         std::vector<uint8_t> leafData;
-        RawNode root = GenerateTree(*_map, data, leafData, int32_t(TreeScale), glm::ivec3(0));
 
-        RootIndex = data.size();
-        data.push_back(root);
+        nodes.resize(1);
+
+        nodes[0] = GenerateTree(*_map, nodes, leafData, int32_t(TreeScale), glm::ivec3(0));
+        LeafDataOffset = nodes.size() * sizeof(RawNode);
 
         StorageBuffer = _ctx->CreateBuffer({
-            .Size = data.size() * sizeof(RawNode) + leafData.size(),
+            .Size = nodes.size() * sizeof(RawNode) + leafData.size(),
             .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
             .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
         });
 
         // TODO: make this copy staged to ensure device_local memory on non-UMA hardware
-        StorageBuffer->Write(data.data(), 0, data.size() * sizeof(RawNode));
-        StorageBuffer->Write(leafData.data(), data.size() * sizeof(RawNode), leafData.size());
+        StorageBuffer->Write(nodes.data(), 0, nodes.size() * sizeof(RawNode));
+        StorageBuffer->Write(leafData.data(), LeafDataOffset, leafData.size());
         
         return true;
     }

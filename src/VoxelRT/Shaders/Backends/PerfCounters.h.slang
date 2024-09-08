@@ -7,7 +7,7 @@ import "./PerfCounters";
 
 #define PERF_TRACK_LEVEL  PERF_LEVEL_NORMAL
 
-#define PERF_PRECISE_ITER_HEATMAP  0
+#define PERF_PRECISE_ITER_HEATMAP  1
 
 #if PERF_TRACK_LEVEL > PERF_LEVEL_OFF
     #define PERF_STAT_INC(key, amount) \
