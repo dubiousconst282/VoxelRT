@@ -45,7 +45,7 @@ float4 FragmentMain(float2 uv: TEXCOORD0) {
             return float4(aces_approx(irradiance), 1.0);
         }
         case DebugChannel.Normals: {
-            float3 normal = UnpackGNormal(pc.GBuffer.AlbedoTex.Instance[pos].w);
+            float3 normal = UnpackAlbedo(pc.GBuffer.AlbedoTex.Instance[pos]).Normal;
             return float4(normal * 0.5 + 0.5, 1.0);
         }
         case DebugChannel.HeatMap: {

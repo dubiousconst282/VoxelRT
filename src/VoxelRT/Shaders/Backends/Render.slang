@@ -98,7 +98,7 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
                               hit.Normal.z != 0 ? 0.5 : 
                               hit.Normal.y  < 0 ? 0.3 : 1.0;
             }
-            pc.GBuffer->AlbedoTex.Instance[pos] = float4(albedo, PackGNormal(hit.Normal));
+            pc.GBuffer->AlbedoTex.Instance[pos] = PackAlbedo(albedo, hit.Normal, emission > 0.5);
 
             float4 projPos = mul(pc.GBuffer->ProjMat, float4(hit.Pos / 16.0, 1.0)); // scale down by 1/16 to minimize precision loss
             float depth = projPos.z / projPos.w;

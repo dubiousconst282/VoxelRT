@@ -32,10 +32,22 @@ public struct GBufferUniforms {
     }
 };
 
-public static float3 UnpackGNormal(float value) {
-    return float3(uint3(value * 255 + 0.5) >> uint3(0, 2, 4) & 3u) - 1;
+public struct AlbedoData {
+    public float3 Color;
+    public float3 Normal;
+    public bool Emissive;
+};
+public static AlbedoData UnpackAlbedo(float4 value) {
+    AlbedoData data;
+    data.Color = value.rgb;
+    
+    uint wbits = uint(value.w * 255 + 0.5);
+    data.Normal = float3(wbits >> uint3(0, 2, 4) & 3u) - 1;
+    data.Emissive = (wbits >> 6 & 1) != 0;
+    return data;
 }
-public static float PackGNormal(float3 normal) {
+public static float4 PackAlbedo(float3 color, float3 normal, bool emiss) {
     uint3 inorm = uint3(clamp(normal + 1, 0, 3));
-    return float(inorm.x << 0 | inorm.y << 2 | inorm.z << 4) / 255.0;
+    float w = float(inorm.x << 0 | inorm.y << 2 | inorm.z << 4 | (emiss ? 1 << 6 : 0)) / 255.0;
+    return float4(color, w);
 }
