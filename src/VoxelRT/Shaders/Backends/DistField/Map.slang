@@ -4,13 +4,13 @@ import Havk.Core;
 
 namespace backend::distfield {
 
-public static const int 
-    GRID_SIZE_XZ = 1024, GRID_SIZE_Y = 1024,
-    TILE_SIZE = 128,
-    TILE_STRIDE = TILE_SIZE*TILE_SIZE*TILE_SIZE;
+public static const int
+    GRID_SIZE_XZ = 4096, GRID_SIZE_Y = 1024,
+    TILE_SIZE = 256;
 
 public struct VoxelMap<let Metric = 1> : IRayCastable, ITraversalStepper {
     public ImageHandle3D<uint> DistField;
+    public uint64_t* OccupancyMap;
     
     public static const uint2 GridSize = uint2(GRID_SIZE_XZ, GRID_SIZE_Y);
 
@@ -22,10 +22,16 @@ public struct VoxelMap<let Metric = 1> : IRayCastable, ITraversalStepper {
     }
 
     public bool GetStepPos(inout int3 pos, float3 dir, bool coarse) {
-        uint distToNearest = DistField.Instance[pos];
+        int distToNearest = DistField.Instance[uint3(pos) / 4] * 4 - 3;
 
         if (distToNearest <= 0) {
-            return false;
+            uint64_t mask = OccupancyMap[GetLinearIndex(uint3(pos) / 4, GRID_SIZE_XZ / 4, GRID_SIZE_Y / 4)];
+            int maskIdx = GetLinearIndex(pos, 4, 4);
+            
+            if ((mask >> (maskIdx & 0b101010) & 0x00330033) == 0) {
+                //pos = AlignToCellBoundaries(pos, dir, 2);
+            }
+            return (mask >> maskIdx & 1) == 0;
         }
 
         int3 stepSize;

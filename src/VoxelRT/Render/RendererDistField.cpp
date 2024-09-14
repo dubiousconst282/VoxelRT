@@ -8,20 +8,22 @@
 namespace {
 
 // NOTE: keep in sync with shaders
-static constexpr auto kGridSize = glm::uvec2(1024, 1024);
+static constexpr auto kGridSize = glm::uvec2(4096, 1024);
 static constexpr auto kNumVoxels = uint64_t(kGridSize.x) * kGridSize.y * kGridSize.x;
-static constexpr auto kTileSize = 128, kTileStride = kTileSize * kTileSize * kTileSize;
+static constexpr auto kTileSize = 256;
 
 struct GpuVoxelMap {
     havk::ImageHandle DistField;
+    VkDeviceAddress OccupancyMap;
 };
 struct GpuTileUpdateRecord {
-    glm::uvec3 WorldPos;
-    uint64_t OccMask[kTileStride / Brick::NumVoxels][Brick::NumVoxels / 64];
+    glm::uvec3 MaskPos;
+    uint64_t OccMask[(kTileSize * kTileSize * kTileSize) / 64];
 };
 
 struct RendererDistField : public GpuRenderer {
     havk::ImagePtr StorageImage;
+    havk::BufferPtr OcmStorageBuffer;
 
     havk::ComputePipelinePtr UpdateShader;
     RendererId _type;
@@ -36,6 +38,7 @@ struct RendererDistField : public GpuRenderer {
     void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
         GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
             .DistField = cmds.GetDescriptorHandle(*StorageImage, havk::UseBarrier::ComputeRead, VK_IMAGE_LAYOUT_GENERAL),
+            .OccupancyMap = cmds.GetDeviceAddress(*OcmStorageBuffer, havk::UseBarrier::ComputeRead),
         });
     }
 
@@ -49,13 +52,19 @@ struct RendererDistField : public GpuRenderer {
                 .Type = VK_IMAGE_TYPE_3D,
                 .Format = _type == RendererId::ManhattanDF ? VK_FORMAT_R8_UINT : VK_FORMAT_R16_UINT,
                 .Usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                .Width = kGridSize.x,
-                .Height = kGridSize.y,
-                .Depth = kGridSize.x,
+                .Width = kGridSize.x / 4,
+                .Height = kGridSize.y / 4,
+                .Depth = kGridSize.x / 4,
                 .NumLevels = 1,
             });
             cmds.TransitionLayout(*StorageImage, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
             cmds.Clear(*StorageImage, { ~0u });
+
+            OcmStorageBuffer = _ctx->CreateBuffer({
+                .Size = kNumVoxels / 64 * sizeof(uint64_t),
+                .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            });
         }
         const size_t MaxTileUpdates = 16;
 
@@ -95,37 +104,53 @@ struct RendererDistField : public GpuRenderer {
         });
         auto record = (GpuTileUpdateRecord*)stagingBuffer->MappedData;
 
-        for (auto pos : batchLocs) {
-            record->WorldPos = pos;
+        for (glm::uvec3 pos : batchLocs) {
+            record->MaskPos = pos / 4u;
 
-            auto startPos = glm::ivec3(pos) / Brick::Size;
-            auto endPos = (glm::ivec3(pos) + kTileSize - 1) / Brick::Size;
+            auto startPos = glm::ivec3(pos) / 4;
+            auto endPos = (glm::ivec3(pos) + kTileSize - 1) / 4;
             uint64_t* occupancyData = (uint64_t*)record->OccMask;
 
-            for_yzx_inclusive(glm::ivec3, brickPos, startPos, endPos) {
-                Brick::GetOccupancyMask(_map->GetBrick(brickPos), occupancyData);
-                occupancyData += Brick::NumVoxels / 64;
+            for_yzx_inclusive(glm::ivec3, maskPos, startPos, endPos) {
+                auto pos = maskPos * 4;
+                Brick* brick = _map->GetBrick(pos / Brick::Size);
+
+                if (brick == nullptr) {
+                    *occupancyData++ = 0;
+                    continue;
+                }
+
+                alignas(64) uint8_t temp[64];
+
+                for (int32_t i = 0; i < 64; i += 4) {
+                    int32_t offset = BrickIndexer::GetIndex(pos.x, pos.y + (i >> 4 & 3), pos.z + (i >> 2 & 3));
+                    memcpy(&temp[i], &brick->Data[offset], 4);
+                }
+                *occupancyData++ = Brick::PackBits64(temp);
             }
             record++;
         }
         stagingBuffer->Flush();
 
         struct UpdateParams {
-            havk::ImageHandle DistField;
+            GpuVoxelMap Map;
             uint16_t NumTiles;
             uint16_t Axis;
             VkDeviceAddress Tiles;
         };
         UpdateParams pc = {
+            .Map = {
+                .DistField = cmds.GetDescriptorHandle(*StorageImage, havk::UseBarrier::ComputeRead, VK_IMAGE_LAYOUT_GENERAL),
+                .OccupancyMap = cmds.GetDeviceAddress(*OcmStorageBuffer, havk::UseBarrier::ComputeRead),
+            },
             .NumTiles = uint16_t(batchLocs.size()),
             .Tiles = cmds.GetDeviceAddress(*stagingBuffer, havk::UseBarrier::ComputeRead),
         };
 
         for (uint32_t i = 0; i < 3; i++) {
-            pc.DistField = cmds.GetDescriptorHandle(*StorageImage, havk::UseBarrier::ComputeReadWrite, VK_IMAGE_LAYOUT_GENERAL);
             pc.Axis = i;
-
-            UpdateShader->Dispatch(cmds, { kTileSize / 8, kTileSize / 8, pc.NumTiles }, pc);
+            UpdateShader->Dispatch(cmds, { kTileSize / 8 / 4, kTileSize / 8 / 4, pc.NumTiles }, pc);
+            cmds.Barrier(*StorageImage, havk::UseBarrier::All, VK_IMAGE_LAYOUT_GENERAL);
         }
         return true;
     }

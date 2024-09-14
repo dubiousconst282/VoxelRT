@@ -4,14 +4,14 @@ import "../BackendCommon";
 
 using namespace backend::distfield;
 
-static const int BRICK_SIZE = 8, BRICK_STRIDE = BRICK_SIZE*BRICK_SIZE*BRICK_SIZE;
+static const int FIELD_SIZE = TILE_SIZE / 4;
 
 struct TileUpdateRecord {
-    uint3 WorldPos;
-    uint64_t OccMask[TILE_STRIDE / BRICK_STRIDE][BRICK_STRIDE / 64];
+    uint3 MaskPos;
+    uint64_t OccMask[(TILE_SIZE * TILE_SIZE * TILE_SIZE) / 64];
 };
 struct DispatchParams {
-    ImageHandle3D<uint> DistField;
+    VoxelMap Map;
     uint16_t NumTiles;
     uint16_t Axis;
     TileUpdateRecord* Tiles;
@@ -39,21 +39,21 @@ void ComputeMain(uint3 tid: SV_DispatchThreadID) {
 
     if (pc.Axis == 0) InitRow(record, tid.xy);
 
-    if (pc.Axis == 0) PropagateAxis(record->WorldPos + int3(0, tid.xy).xyz, int3(1, 0, 0));
-    if (pc.Axis == 1) PropagateAxis(record->WorldPos + int3(0, tid.xy).yxz, int3(0, 1, 0));
-    if (pc.Axis == 2) PropagateAxis(record->WorldPos + int3(0, tid.xy).zyx, int3(0, 0, 1));
+    if (pc.Axis == 0) PropagateAxis(record->MaskPos + int3(0, tid.xy).xyz, int3(1, 0, 0));
+    if (pc.Axis == 1) PropagateAxis(record->MaskPos + int3(0, tid.xy).yxz, int3(0, 1, 0));
+    if (pc.Axis == 2) PropagateAxis(record->MaskPos + int3(0, tid.xy).zyx, int3(0, 0, 1));
 }
 
 void PropagateAxis_Manhattan(int3 offset, int3 axisDelta) {
-    let field = pc.DistField.Instance;
+    let field = pc.Map.DistField.Instance;
 
-    for (int i = 1; i < TILE_SIZE; i++) {
+    for (int i = 1; i < FIELD_SIZE; i++) {
         int3 pos = offset + i * axisDelta;
         uint d1 = field[pos];
         uint d2 = field[pos - axisDelta];
         field[pos] = min(min(d1, d2 + 1), 255);
     }
-    for (int i = TILE_SIZE - 2; i >= 0; i--) {
+    for (int i = FIELD_SIZE - 2; i >= 0; i--) {
         int3 pos = offset + i * axisDelta;
         uint d1 = field[pos];
         uint d2 = field[pos + axisDelta];
@@ -65,11 +65,11 @@ void PropagateAxis_Manhattan(int3 offset, int3 axisDelta) {
 // https://acko.net/blog/subpixel-distance-transform/
 // https://cs.brown.edu/people/pfelzens/papers/dt-final.pdf
 void PropagateAxis_EDT(int3 offset, int3 axisDelta) {
-    const int N = TILE_SIZE;
+    const int N = FIELD_SIZE;
     // This should not be too big otherwise intermediate values will overflow
     const int INF = N * N * 3;
 
-    let field = pc.DistField.Instance;
+    let field = pc.Map.DistField.Instance;
 
     int v[N + 1], z[N + 1], f[N + 1];
     v[0] = 0;
@@ -103,19 +103,14 @@ void PropagateAxis_EDT(int3 offset, int3 axisDelta) {
 }
 
 void InitRow(TileUpdateRecord* tile, uint2 column) {
-    static_assert(TILE_SIZE % 8 == 0, "Tile size must be a multiple of 8");
-    
-    let field = pc.DistField.Instance;
+    let field = pc.Map.DistField.Instance;
+    let ocm = &pc.Map.OccupancyMap[0];
 
-    for (int i = 0; i < TILE_SIZE; i += 8) {
-        int3 pos = tile->WorldPos + int3(i, column);
-        uint brickIdx = GetLinearIndex(pos / BRICK_SIZE, TILE_SIZE/BRICK_SIZE, TILE_SIZE/BRICK_SIZE);
-        uint cellIdx = GetLinearIndex(pos, BRICK_SIZE, BRICK_SIZE);
-        uint mask = uint(tile->OccMask[brickIdx][cellIdx / 64] >> (cellIdx & 63));
-        
-        for (int j = 0; j < 8; j++, pos.x++) {
-            bool occupied = (mask >> j & 1) != 0;
-            field[pos] = occupied ? 0 : MAX_DIST;
-        }
+    for (int i = 0; i < FIELD_SIZE; i++) {
+        uint3 pos = tile->MaskPos + int3(i, column);
+        uint64_t mask = tile->OccMask[GetLinearIndex(pos, TILE_SIZE / 4, TILE_SIZE / 4)];
+
+        field[pos] = mask != 0 ? 0 : MAX_DIST;
+        ocm[GetLinearIndex(pos, GRID_SIZE_XZ / 4, GRID_SIZE_Y / 4)] = mask;
     }
 }

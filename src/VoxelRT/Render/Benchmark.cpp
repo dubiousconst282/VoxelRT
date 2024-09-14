@@ -39,8 +39,8 @@ struct RendererBenchmark : public Renderer {
         RendererId::Tree64,   RendererId::BrickBVH, RendererId::ManhattanDF, RendererId::EuclideanDF,
     };
     static constexpr ScenePreset kScenePresets[] = {
-        { {  170,  80, 512  }, {  1.57,  0.00 }, 1024, "logs/voxels_1k_sponza.dat", "Sponza 1k" },
-        { {  800, 196, 768  }, { -1.10,  0.05 }, 1024, "logs/voxels_1k_ecohouse.dat", "Eco House 1k" },
+        { { 340,  160, 1024 }, {  1.57,  0.00 }, 2048, "logs/voxels_2k_sponza.dat", "Sponza 2k" },
+        { { 1600, 400, 1500 }, { -1.10,  0.05 }, 2048, "logs/voxels_2k_ecohouse.dat", "Eco House 2k" },
         { { 1165, 250, 2020 }, {  1.2,   0.05 }, 4096, "logs/voxels_4k_bistro.dat", "Bistro 4k" },
         { { 1780, 450, 2020 }, {  1.85, -0.50 }, 4096, "logs/voxels_4k_san_miguel.dat", "San Miguel 4k" },
         { { 1130, 450, 2080 }, { -0.85, -0.20 }, 4096, "logs/voxels_4k_forestlake.dat", "Forest Lake 2k" },
@@ -78,7 +78,7 @@ struct RendererBenchmark : public Renderer {
 
                 _accumData.clear();
                 for (RendererId id : kTargetIds) {
-                    if (preset.MapSize > 1024 && (id == RendererId::ManhattanDF || id == RendererId::EuclideanDF)) continue;
+                    //if (preset.MapSize > 2048 && (id == RendererId::ManhattanDF || id == RendererId::EuclideanDF)) continue;
 
                     _accumData.push_back({ .TargetId = id });
                 }

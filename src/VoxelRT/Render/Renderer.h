@@ -13,17 +13,17 @@
 #include "GBuffer.h"
 
 enum class RendererId {
-    CPU,            // Minimal CPU-SIMD port of XBrickMap
-    XBrickMap,      // 2-level grid with 4³ sectors to 8³ bricks, plus 4³ masks for finer space skipping
-    PlainDDA,       // Flat grid, unaccelerated DDA
-    MultiDDA,       // Flat grid, space skipping through 8³ bricks using nested DDA loops
-    ManhattanDF,    // Flat grid of 128³ tiled distance fields, sparse allocation
+    CPU,
+    XBrickMap,
+    PlainDDA,
+    MultiDDA,
+    ManhattanDF,
     EuclideanDF,
-    // DSVDF,          // 8-directional distance fields at 1:4 scale
-    ESVO = 7,       // 1:1 ESVO port
-    Tree64,         // Generic 4³-tree
-    BrickBVH,       // Binary BVH + 8³ leafs
-    Mesh,           // Rasterized greedy mesh
+    // DSVDF,
+    ESVO = 7,
+    Tree64,
+    BrickBVH,
+    Mesh,
     Benchmark,
 };
 
