@@ -47,7 +47,8 @@ public struct VoxelMap : IRayCastable {
         HitInfo hit = Traversal(origin, rayDir, coarse);
         
         if (hit.MaterialId != 0) {
-            hit.Pos = 1;
+            hit.Pos -= worldOrigin;
+            hit.Dist = length(hit.Pos);
         }
         return hit;
     }
@@ -67,6 +68,7 @@ public struct VoxelMap : IRayCastable {
         BvhNode node = Nodes[currIdx];
         
         float tmin;
+        bool3 sideMask = false;
         int i = 0;
         const int maxIters = 128;
         
@@ -101,15 +103,21 @@ public struct VoxelMap : IRayCastable {
             if (node.IsLeaf) {
                 node._bounds = Nodes[currIdx]._bounds; // fetch bounds only when needed
 
-                var dist = node.Intersect(invDir, invOriginT);
-                tmin = dist.hasValue ? dist.value : 0;
+                // TODO: rewrite this to work properly and look less awful somehow
+                // - https://github.com/jan-van-bergen/GPU-Raytracer/blob/master/Src/CUDA/Raytracing/BVH4.h
+                float3 t0 = fma(node._bounds[0], invDir, invOriginT);
+                float3 t1 = fma(node._bounds[1], invDir, invOriginT);
+                t0 = min(t0, t1);
+
+                tmin = max(0, max(max(t0.x, t0.y), t0.z));
+                sideMask = t0 == tmin;
 
                 int3 pos = int3(floor(origin + tmin * dir));
                 pos = clamp(pos, node._bounds[0], node._bounds[1] - 1);
         
                 float3 sideDist = (step(0.0f, dir) + pos) * invDir + invOriginT;
 
-                if (TraverseBrick(node, pos & 7, invDir, sideDist, tmin))
+                if (TraverseBrick(node, pos & 7, invDir, sideDist, tmin, sideMask))
                     break;
 
                 if (stackPtr == 0) break;
@@ -126,43 +134,35 @@ public struct VoxelMap : IRayCastable {
         if (node.IsLeaf) {
             hit.MaterialId = kDefaultOpaqueMaterialId;
             hit.Dist = tmin;
-            hit.Pos = origin + dir * (tmin + 0.001);
+            hit.Pos = origin + dir * tmin;
             
-            //float3 sideDist = (step(0.0f, dir) + floor(hit.Pos)) * invDir + invOriginT;
-            //float tmin = min(min(sideDist.x,sideDist.y),sideDist.z);
-            //bool3 sideMask = tmin == sideDist;
-            hit.Normal = fract(hit.Pos/8); //select(sideMask, -sign(dir), 0.0);
+            hit.Normal = select(sideMask, -sign(dir), 0.0);
         }
         return hit;
     }
 
 
-    private bool TraverseBrick(BvhNode node, int3 pos, float3 invDir, float3 sideDist, inout float tmin) {
+    private bool TraverseBrick(BvhNode node, int3 pos, float3 invDir, float3 sideDist, inout float tmin, inout bool3 sideMask) {
         uint64_t* bitmap = &Bricks[node.ChildPtr].PopMask[0];
         uint64_t mask = bitmap[pos.y];
+
+        int3 stepDelta = (bit_cast<int3>(invDir) >> 31) | 1;
 
         while (uint(pos.x | pos.y | pos.z) < 8u) {
             #if PERF_PRECISE_ITER_HEATMAP
             g_CurrTraversalIters++;
             #endif
 
-            tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
-
             if ((mask >> (pos.x + pos.z * 8) & 1) != 0) {
                 return true;
             }
+            tmin = min(min(sideDist.x, sideDist.y), sideDist.z);
+            sideMask = sideDist == tmin;
 
-            if (tmin == sideDist.x) {
-                sideDist.x += abs(invDir.x);
-                pos.x += (invDir.x < 0 ? -1 : +1);
-            } else if (tmin == sideDist.y) {
-                sideDist.y += abs(invDir.y);
-                pos.y += (invDir.y < 0 ? -1 : +1);
-                mask = bitmap[pos.y];
-            } else {
-                sideDist.z += abs(invDir.z);
-                pos.z += (invDir.z < 0 ? -1 : +1);
-            }
+            sideDist += select(sideMask, abs(invDir), 0);
+            pos += select(sideMask, stepDelta, 0);
+
+            if (sideMask.y) mask = bitmap[pos.y];
         }
         return false;
     }
