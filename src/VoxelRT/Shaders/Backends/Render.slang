@@ -24,6 +24,9 @@ import Utilities;
 #elif BACKEND_ID == 5
     import DistField.Map;
     typealias TVoxelMap = backend::distfield::VoxelMap<2>;
+#elif BACKEND_ID == 6
+    import OctantDF.Map;
+    typealias TVoxelMap = backend::octdf::VoxelMap;
 #elif BACKEND_ID == 7
     import ESVO.Map;
     typealias TVoxelMap = backend::esvo::VoxelMap;

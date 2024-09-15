@@ -14,15 +14,16 @@
 
 enum class RendererId {
     CPU,
-    XBrickMap,
-    PlainDDA,
-    MultiDDA,
-    ManhattanDF,
-    EuclideanDF,
-    // DSVDF,
+    // NOTE: these values are hardcoded in Render.slang due to technical debt, do not change
+    XBrickMap = 1,
+    PlainDDA = 2,
+    MultiDDA = 3,
+    ManhattanDF = 4,
+    EuclideanDF = 5,
+    OctantDF = 6,
     ESVO = 7,
-    Tree64,
-    BrickBVH,
+    Tree64 = 8,
+    BrickBVH = 9,
     Mesh,
     Benchmark,
 };
@@ -42,6 +43,7 @@ struct Renderer {
             case RendererId::MultiDDA: return Create<RendererId::MultiDDA>(ctx, map);
             case RendererId::ManhattanDF: return Create<RendererId::ManhattanDF>(ctx, map);
             case RendererId::EuclideanDF: return Create<RendererId::EuclideanDF>(ctx, map);
+            case RendererId::OctantDF: return Create<RendererId::OctantDF>(ctx, map);
             case RendererId::ESVO: return Create<RendererId::ESVO>(ctx, map);
             case RendererId::Tree64: return Create<RendererId::Tree64>(ctx, map);
             case RendererId::BrickBVH: return Create<RendererId::BrickBVH>(ctx, map);
@@ -69,6 +71,7 @@ private:
     template<> std::unique_ptr<Renderer> Create<RendererId::MultiDDA>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::ManhattanDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::EuclideanDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
+    template<> std::unique_ptr<Renderer> Create<RendererId::OctantDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::ESVO>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::Tree64>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::BrickBVH>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);

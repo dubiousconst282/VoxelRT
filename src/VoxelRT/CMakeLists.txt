@@ -12,6 +12,7 @@ add_executable(
     Render/RendererCPU.cpp
     Render/RendererFlatDDA.cpp
     Render/RendererDistField.cpp
+    Render/RendererOctantDF.cpp
     Render/RendererESVO.cpp
     Render/RendererTree64.cpp
     Render/RendererBVH.cpp

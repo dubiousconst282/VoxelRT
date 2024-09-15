@@ -37,6 +37,7 @@ struct RendererBenchmark : public Renderer {
     static constexpr RendererId kTargetIds[] = {
         RendererId::PlainDDA, RendererId::MultiDDA, RendererId::XBrickMap,   RendererId::ESVO,
         RendererId::Tree64,   RendererId::BrickBVH, RendererId::ManhattanDF, RendererId::EuclideanDF,
+        // RendererId::OctantDF,
     };
     static constexpr ScenePreset kScenePresets[] = {
         { { 340,  160, 1024 }, {  1.57,  0.00 }, 2048, "logs/voxels_2k_sponza.dat", "Sponza 2k" },
