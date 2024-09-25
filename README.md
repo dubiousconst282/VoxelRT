@@ -9,13 +9,13 @@ Voxel rendering experiments
 - eXtendedBrickMap: Space skipping over 3-level grid + 4³ occupancy bitmasks (4³ sectors -> 8³ bricks)
 - ManhattanDF/EuclideanDF: Space skipping over tiled 256³ distance fields at 1:4 resolution + 4³ occupancy bitmasks
 - OctantDF: Space skipping over tiled 256³ 8-directional distance fields at 1:4 resolution + 4³ occupancy bitmasks
-- ESVO: Port of "Efficient Sparse Voxel Octrees", no contours
+- ESVO: Port of "Efficient Sparse Voxel Octrees", no contours, no beam optimization
 - Tree64: Sparse voxel 4³-tree
-- BrickBVH: Binary BVH with 8³ brick leafs + DDA (software impl)
+- BrickBVH: Binary BVH as TLAS + DDA over 8³ brick leafs (software impl)
 - GreedyMesh: Rasterized greedy mesh
 
 Maybe TODO:
-- HybridBVH: BVH2 _or_ CWBVH with leafs made of XBrickMap(32³ sectors) _or_ Tree64 + partial splits
+- HybridBVH: BVH2 _or_ CWBVH as TLAS + XBrickMap(32³ sectors) _or_ Tree64 leafs + partial splits
 
 ### Characteristics
 
@@ -24,9 +24,11 @@ Maybe TODO:
 | PlainDDA  | none          | 1 bit per 1³  | O(1)          | good start point      |not fast enough    |
 | MultiDDA  | space part    | 1 bit per 1³ +<br>1 bit per 8³  | O(1)          | ?                     |simd divergence    |
 | XBrickMap | space part    | 8³ bits per brick +<br> 12 bytes per sector | ~O(1), *1| ? | ?   |
-| FlatDF    | ray march     | 1 byte per 4³ +<br> 1 bit per 1³ | O(m)       | ?                     | ? |
+| ManhattanDF| ray march     | 1 byte per 4³ +<br> 1 bit per 1³ | O(m)       | ?                     | ? |
+| EuclideanDF| ray march     | 2 bytes per 4³ +<br> 1 bit per 1³ | O(m)       | ?                     | ? |
+| OctantDF   | ray march     | 8 bytes per 4³ +<br> 1 bit per 1³ | O(m)       | ?                     | ? |
 | ESVO      | space part    | ~4 bytes per node | ~O(log m), *2  | contours?        | hard to edit      |
-| Tree64    | space part    | 12 bytes per node | ~O(log m), *2  | less overhead<br> than octrees | (similar to ESVO) |
+| Tree64    | space part    | 12 bytes per node | ~O(log m), *2  | lower overhead<br>vs octrees | hard to edit |
 | BrickBVH  | geom part     | 16 bytes per node +<br> 8³ bits per brick | varies    | flexible, hw accel,<br>well researched | ?       |
 | Meshing   | raster        | 8 bytes per quad | O(m)     | flexible               | hard to scale,<br>only primary rendering,<br>indirect |
 
@@ -61,90 +63,90 @@ All tests were run on an integrated GPU. I guesstimate at least 5-10x throughput
 **Scene**: Sponza 2k (499k * 8³ voxels)
 |Method      |Mrays/s     |Mrays/s PT1 |Iters/ray   |Clocks/iter |GPU sync    |CPU sync    |
 |------------|------------|------------|------------|------------|------------|------------
-|PlainDDA    |31.3        |18.8 (0.60x)|391.7       |67.7        |125.6 ms    |53.8 ms     |
-|MultiDDA    |146.3       |64.7 (0.44x)|58.1        |79.3        |148.0 ms    |68.2 ms     |
-|XBrickMap   |167.8       |123.9 (0.74x)|19.2        |186.1       |114.2 ms    |145.6 ms    |
-|ESVO        |94.3        |66.9 (0.71x)|46.9        |147.9       |0.0 ms      |614.2 ms    |
-|Tree64      |156.7       |105.8 (0.68x)|19.4        |200.6       |0.0 ms      |1284.2 ms   |
-|BrickBVH    |176.6       |104.5 (0.59x)|27.3        |123.0       |0.0 ms      |478.7 ms    |
-|ManhattanDF |180.9       |89.2 (0.49x)|34.3        |106.2       |1157.8 ms   |570.2 ms    |
-|EuclideanDF |178.0       |28.2 (0.16x)|39.7        |97.2        |1495.4 ms   |864.0 ms    |
-|OctantDF    |122.7       |86.9 (0.71x)|31.1        |168.1       |455.2 ms    |634.4 ms    |
+|PlainDDA    |31.4        |3.2 (0.10x) |391.7       |67.8        |133.2 ms    |44.3 ms     |
+|MultiDDA    |147.7       |64.6 (0.44x)|58.1        |79.1        |148.1 ms    |37.4 ms     |
+|XBrickMap   |165.6       |125.1 (0.76x)|19.2        |186.9       |171.8 ms    |150.5 ms    |
+|ESVO        |95.0        |66.2 (0.70x)|46.9        |148.3       |0.0 ms      |652.7 ms    |
+|Tree64      |182.6       |124.2 (0.68x)|19.9        |170.7       |0.0 ms      |1318.2 ms   |
+|BrickBVH    |175.0       |102.5 (0.59x)|27.3        |123.6       |0.0 ms      |490.3 ms    |
+|ManhattanDF |166.3       |93.2 (0.56x)|34.3        |106.7       |1003.1 ms   |608.3 ms    |
+|EuclideanDF |174.3       |30.0 (0.17x)|39.7        |97.2        |1476.6 ms   |755.0 ms    |
+|OctantDF    |129.0       |84.9 (0.66x)|31.1        |168.5       |475.9 ms    |656.5 ms    |
 
 --------
 
 **Scene**: Eco House 2k (448k * 8³ voxels)
 |Method      |Mrays/s     |Mrays/s PT1 |Iters/ray   |Clocks/iter |GPU sync    |CPU sync    |
 |------------|------------|------------|------------|------------|------------|------------
-|PlainDDA    |27.2        |3.1 (0.11x) |434.7       |69.7        |132.8 ms    |33.6 ms     |
-|MultiDDA    |72.4        |34.8 (0.48x)|112.6       |88.5        |145.2 ms    |34.3 ms     |
-|XBrickMap   |99.0        |77.8 (0.79x)|27.8        |235.6       |157.3 ms    |110.0 ms    |
-|ESVO        |68.8        |54.8 (0.80x)|59.9        |169.6       |0.0 ms      |632.8 ms    |
-|Tree64      |89.9        |79.7 (0.89x)|26.8        |274.6       |0.0 ms      |1246.3 ms   |
-|BrickBVH    |93.7        |65.2 (0.70x)|33.2        |210.6       |0.0 ms      |468.5 ms    |
-|ManhattanDF |131.8       |55.5 (0.42x)|34.3        |149.8       |753.8 ms    |354.0 ms    |
-|EuclideanDF |77.7        |10.7 (0.14x)|45.2        |196.1       |1061.8 ms   |390.6 ms    |
-|OctantDF    |103.5       |72.6 (0.70x)|28.4        |225.2       |320.6 ms    |399.2 ms    |
+|PlainDDA    |26.4        |3.8 (0.14x) |434.7       |69.7        |128.5 ms    |35.6 ms     |
+|MultiDDA    |71.4        |34.6 (0.48x)|112.6       |89.0        |148.6 ms    |33.2 ms     |
+|XBrickMap   |96.3        |76.5 (0.79x)|27.8        |239.1       |117.7 ms    |129.6 ms    |
+|ESVO        |67.1        |52.7 (0.79x)|59.9        |170.8       |0.0 ms      |651.2 ms    |
+|Tree64      |107.5       |93.9 (0.87x)|26.8        |231.1       |0.0 ms      |1371.3 ms   |
+|BrickBVH    |91.5        |63.4 (0.69x)|33.2        |212.6       |0.0 ms      |510.4 ms    |
+|ManhattanDF |132.0       |55.8 (0.42x)|34.3        |149.5       |638.3 ms    |379.0 ms    |
+|EuclideanDF |84.5        |12.5 (0.15x)|45.2        |196.0       |1041.3 ms   |446.6 ms    |
+|OctantDF    |99.3        |69.0 (0.69x)|28.4        |225.2       |316.0 ms    |423.8 ms    |
 
 --------
 
 **Scene**: Bistro 4k (975k * 8³ voxels)
 |Method      |Mrays/s     |Mrays/s PT1 |Iters/ray   |Clocks/iter |GPU sync    |CPU sync    |
 |------------|------------|------------|------------|------------|------------|------------
-|PlainDDA    |28.5        |1.5 (0.05x) |436.4       |67.9        |158.2 ms    |102.7 ms    |
-|MultiDDA    |80.7        |41.5 (0.51x)|107.4       |81.7        |154.4 ms    |99.2 ms     |
-|XBrickMap   |112.0       |88.4 (0.79x)|27.9        |202.2       |254.3 ms    |196.9 ms    |
-|ESVO        |69.7        |55.9 (0.80x)|71.1        |140.3       |0.0 ms      |1163.1 ms   |
-|Tree64      |91.5        |79.8 (0.87x)|30.9        |230.4       |0.0 ms      |1859.8 ms   |
-|BrickBVH    |90.4        |66.4 (0.73x)|50.4        |144.2       |0.0 ms      |1038.5 ms   |
-|ManhattanDF |110.8       |42.7 (0.39x)|53.8        |115.2       |2879.0 ms   |1284.0 ms   |
-|EuclideanDF |102.1       |19.2 (0.19x)|66.6        |103.9       |2923.7 ms   |1311.5 ms   |
-|OctantDF    |88.0        |25.7 (0.29x)|41.4        |190.4       |1101.2 ms   |1421.8 ms   |
+|PlainDDA    |27.7        |4.4 (0.16x) |436.4       |67.9        |164.2 ms    |122.1 ms    |
+|MultiDDA    |79.3        |41.3 (0.52x)|107.4       |82.3        |151.3 ms    |87.0 ms     |
+|XBrickMap   |109.6       |87.0 (0.79x)|27.9        |205.6       |216.9 ms    |191.9 ms    |
+|ESVO        |67.9        |52.5 (0.77x)|71.1        |141.3       |0.0 ms      |1308.4 ms   |
+|Tree64      |109.7       |92.6 (0.84x)|30.9        |193.3       |0.0 ms      |2011.6 ms   |
+|BrickBVH    |88.3        |63.0 (0.71x)|50.4        |146.0       |0.0 ms      |1109.2 ms   |
+|ManhattanDF |109.8       |47.4 (0.43x)|53.8        |115.2       |2119.2 ms   |1331.7 ms   |
+|EuclideanDF |101.1       |28.5 (0.28x)|66.6        |105.4       |2897.5 ms   |1235.0 ms   |
+|OctantDF    |87.8        |53.0 (0.60x)|41.4        |192.0       |1101.6 ms   |1486.3 ms   |
 
 --------
 
 **Scene**: San Miguel 4k (681k * 8³ voxels)
 |Method      |Mrays/s     |Mrays/s PT1 |Iters/ray   |Clocks/iter |GPU sync    |CPU sync    |
 |------------|------------|------------|------------|------------|------------|------------
-|PlainDDA    |33.8        |2.5 (0.07x) |354.3       |68.9        |168.4 ms    |69.4 ms     |
-|MultiDDA    |98.2        |48.3 (0.49x)|66.2        |105.4       |137.3 ms    |55.7 ms     |
-|XBrickMap   |111.3       |97.4 (0.88x)|25.2        |224.6       |179.3 ms    |177.1 ms    |
-|ESVO        |69.4        |57.7 (0.83x)|68.4        |146.2       |0.0 ms      |752.9 ms    |
-|Tree64      |91.9        |85.4 (0.93x)|28.8        |245.2       |0.7 ms      |1389.5 ms   |
-|BrickBVH    |90.3        |67.1 (0.74x)|42.7        |170.9       |0.0 ms      |631.7 ms    |
-|ManhattanDF |106.9       |52.8 (0.49x)|48.3        |131.7       |1183.3 ms   |696.3 ms    |
-|EuclideanDF |100.9       |15.3 (0.15x)|60.9        |114.8       |1839.4 ms   |831.2 ms    |
-|OctantDF    |84.2        |66.1 (0.79x)|37.7        |216.4       |595.1 ms    |709.3 ms    |
+|PlainDDA    |33.1        |2.6 (0.08x) |354.3       |69.0        |141.9 ms    |59.9 ms     |
+|MultiDDA    |97.2        |48.0 (0.49x)|66.2        |106.3       |158.3 ms    |53.7 ms     |
+|XBrickMap   |109.8       |95.7 (0.87x)|25.2        |226.0       |168.6 ms    |152.4 ms    |
+|ESVO        |67.9        |54.5 (0.80x)|68.4        |147.1       |0.0 ms      |818.1 ms    |
+|Tree64      |112.1       |99.5 (0.89x)|28.8        |205.7       |0.7 ms      |1453.9 ms   |
+|BrickBVH    |88.0        |62.9 (0.71x)|42.7        |171.3       |0.0 ms      |717.8 ms    |
+|ManhattanDF |105.0       |60.1 (0.57x)|48.3        |132.3       |819.2 ms    |774.2 ms    |
+|EuclideanDF |99.0        |16.9 (0.17x)|60.9        |115.6       |1905.2 ms   |661.4 ms    |
+|OctantDF    |82.2        |65.8 (0.80x)|37.7        |217.4       |593.9 ms    |753.2 ms    |
 
 --------
 
 **Scene**: Forest Lake 2k (807k * 8³ voxels)
 |Method      |Mrays/s     |Mrays/s PT1 |Iters/ray   |Clocks/iter |GPU sync    |CPU sync    |
 |------------|------------|------------|------------|------------|------------|------------
-|PlainDDA    |24.8        |24.1 (0.97x)|510.4       |67.4        |157.2 ms    |77.7 ms     |
-|MultiDDA    |61.0        |31.7 (0.52x)|119.7       |100.3       |144.5 ms    |93.5 ms     |
-|XBrickMap   |91.6        |74.6 (0.81x)|26.2        |275.3       |239.0 ms    |213.9 ms    |
-|ESVO        |58.8        |45.0 (0.76x)|63.3        |188.5       |0.0 ms      |1120.5 ms   |
-|Tree64      |78.3        |70.2 (0.90x)|27.4        |313.3       |0.0 ms      |1587.7 ms   |
-|BrickBVH    |69.4        |47.8 (0.69x)|41.5        |237.9       |0.0 ms      |892.5 ms    |
-|ManhattanDF |90.4        |46.4 (0.51x)|43.3        |178.7       |1497.6 ms   |750.3 ms    |
-|EuclideanDF |79.4        |9.3 (0.12x) |56.7        |160.1       |1823.8 ms   |773.6 ms    |
-|OctantDF    |72.1        |50.2 (0.70x)|35.0        |281.1       |607.3 ms    |793.6 ms    |
+|PlainDDA    |23.6        |23.2 (0.99x)|510.4       |67.5        |154.7 ms    |74.4 ms     |
+|MultiDDA    |60.6        |31.4 (0.52x)|119.7       |101.1       |134.8 ms    |110.5 ms    |
+|XBrickMap   |88.8        |71.6 (0.81x)|26.2        |278.1       |170.4 ms    |218.7 ms    |
+|ESVO        |57.4        |43.5 (0.76x)|63.3        |189.3       |0.0 ms      |1202.1 ms   |
+|Tree64      |93.1        |83.3 (0.89x)|27.4        |262.6       |0.0 ms      |1692.5 ms   |
+|BrickBVH    |68.7        |46.6 (0.68x)|41.5        |238.9       |0.0 ms      |957.4 ms    |
+|ManhattanDF |88.4        |50.7 (0.57x)|43.3        |179.4       |1131.9 ms   |767.6 ms    |
+|EuclideanDF |80.2        |10.1 (0.13x)|56.7        |158.4       |1997.2 ms   |692.3 ms    |
+|OctantDF    |71.0        |48.6 (0.69x)|35.0        |282.8       |605.5 ms    |786.3 ms    |
 
 --------
 
 **Scene**: NY Highway I95 4k (574k * 8³ voxels)
 |Method      |Mrays/s     |Mrays/s PT1 |Iters/ray   |Clocks/iter |GPU sync    |CPU sync    |
 |------------|------------|------------|------------|------------|------------|------------
-|PlainDDA    |24.4        |24.2 (0.99x)|512.0       |67.4        |137.6 ms    |44.6 ms     |
-|MultiDDA    |43.2        |35.5 (0.82x)|312.1       |58.9        |134.0 ms    |43.3 ms     |
-|XBrickMap   |115.2       |88.5 (0.77x)|31.3        |181.4       |185.9 ms    |123.0 ms    |
-|ESVO        |140.2       |88.9 (0.63x)|33.2        |139.7       |0.0 ms      |660.1 ms    |
-|Tree64      |170.0       |114.2 (0.67x)|16.0        |220.3       |0.0 ms      |1327.2 ms   |
-|BrickBVH    |216.2       |157.4 (0.73x)|14.2        |177.8       |0.0 ms      |543.7 ms    |
-|ManhattanDF |98.0        |52.7 (0.54x)|26.2        |248.9       |1022.1 ms   |828.5 ms    |
-|EuclideanDF |25.1        |10.2 (0.41x)|29.0        |971.2       |2366.9 ms   |928.4 ms    |
-|OctantDF    |130.5       |87.5 (0.67x)|24.9        |200.7       |729.2 ms    |882.3 ms    |
+|PlainDDA    |24.0        |23.8 (0.99x)|512.0       |67.4        |141.2 ms    |43.0 ms     |
+|MultiDDA    |42.5        |34.1 (0.80x)|312.1       |59.3        |124.1 ms    |50.0 ms     |
+|XBrickMap   |115.2       |88.5 (0.77x)|31.3        |181.9       |136.1 ms    |144.7 ms    |
+|ESVO        |136.9       |86.4 (0.63x)|33.2        |139.0       |0.0 ms      |719.0 ms    |
+|Tree64      |208.9       |137.4 (0.66x)|16.0        |186.8       |0.0 ms      |1433.0 ms   |
+|BrickBVH    |215.9       |154.0 (0.71x)|14.2        |174.1       |0.0 ms      |571.7 ms    |
+|ManhattanDF |100.3       |53.0 (0.53x)|26.2        |250.2       |916.4 ms    |943.8 ms    |
+|EuclideanDF |27.4        |11.1 (0.41x)|29.0        |870.8       |2477.6 ms   |814.6 ms    |
+|OctantDF    |131.2       |87.8 (0.67x)|24.9        |198.1       |723.5 ms    |915.5 ms    |
 
 ---
 
@@ -160,10 +162,10 @@ Scene refs:
     <img src="./docs/img/bench_highwayi95_4k.jpg" width="250">
 </p>
 
-### Cursory overview and discussion
+### Cursory overview and observations
 MultiDDA is a simple brickmap implementation that uses two nested DDA traversal loops to perform space skipping, one at 8³ scale and the other at voxel scale. Despite its simplicity, it performs surprisingly well relative to other techniques when considering only primary rays, and even though skips are limited to only one scale.
 
-The poor performance with incoherent rays happens due to control-flow divergence when entering the inner traversal loop, since not all SIMD lanes will hit a brick at the same time as the others and thus become "stalled" for the duration of the inner loop. Other methods are not immune to incoherent rays due to poor memory access patterns, but divergence in this particular case makes a considerable difference.
+The poor performance with incoherent rays happens due to control-flow divergence when entering the inner traversal loop, since not all SIMD lanes will hit a brick at the same time as the others and thus become "stalled" for the duration of the inner loop. Other methods are not immune to incoherent rays due to poor memory access patterns, but divergence in this particular case has a significant impact.
 
 I tried to mitigate divergence in two ways by following ideas from BVH traversal literature, without much success. The first attempt was to use wave intrinsics to postpone the inner traversal until enough lanes were active; the second, was to un-nest and pair the DDA loops, such that the inner DDA runs only after the brick DDA finds a hit, following control flow re-convergence.
 
@@ -175,11 +177,11 @@ Traversal was implemented using an algorithm similar to ray marching. At each it
 
 ---
 
-Ray marching through distance fields is a very simple and intuitive traversal method, but naively storing one distance value per voxel makes it impractical for bigger grids due to the associated memory and especially bandwidth costs, the latter which becomes problematic even for primary rays as they lose coherence the furthest they get from origin. Moreover, traversal is not considerably shorter than that of methods relying on space partitioning (~8%), and pre-processing is significantly more expansive than XBrickMap (~10x).
+Ray marching through distance fields is another very simple and intuitive traversal method, but the naive approach of storing one distance value per voxel is impractical for bigger grids due to the associated memory and especially bandwidth costs, the latter which becomes problematic even for primary rays as they lose coherence the furthest they get from origin. Moreover, traversal is not considerably shorter than that of methods relying on space partitioning (~8%), and pre-processing has a significant cost (10x more GPU time than XBrickMap).
 
 Memory costs can be reduced by lowering the field resolution, without much detriment to traversal efficiency. Following the theme of 64-bit masks, I picked 1:4 scale (one distance value per 64 voxels) combined with occupancy masks for the final implementation. The masks are queried whenever sampled distance values are zero.
 
-Creating separate fields for each ray octant (known as "directional" or "anisotropic" distance fields) reduces the overall number of iterations by ~20-25%, and increases throughput for incoherent rays by ~30-50%. However, it still performs considerably worse than space-partitioning methods.
+Dense areas with fine geometry (like foliage) are worst cases for ray traversal because they cause grazing rays to advance slowly, motivating the idea of "directional" or "anisotropic" distance fields. OctantDF implements this idea by creating 8 separate manhattan fields that each consider only voxels ahead of the associated ray octant direction (in other words, distances are only propagated across rows of opposing axis directions in respect to the octant). Compared to traditional distance fields, it lowers the overall number of iterations by ~20-25%, and increases throughput for incoherent rays by ~30-50% (why though?) - but ultimately it is still much worse than space-partitioning methods.
 
 ---
 
@@ -193,13 +195,19 @@ The traversal is a near 1:1 port of the original ESVO implementation, and only n
 
 The two main advantages wide 4³ trees have over standard octrees are the overall shallower trees and lower overhead per voxel. Based on rudimentary tests, I found that most scenes consume about half as much memory as ESVO.
 
-Traversal was initially implemented using top-down recursive DDA over bitmasks of each node, which performed around 11-15% faster than ESVO for primary rays. Like in XBrickMap, I found that a ray marching algorithm was both simpler and faster, as it allows for coarse space skipping over bitmasks and is less prone to divergence. The complete implementation takes less than 100 LOC, but sadly still underperforms XBrickMap except for open and distant scenes.
+Traversal was at first implemented using top-down recursive DDA over bitmasks of each node, which performed around 11-15% faster than ESVO for primary rays.
 
-All considered, trees have one interesting advantage over grids that is supporting arbitrary voxel scales and sub-divisions, as in dynamic details. Apart from LOD streaming, this could be useful for things like instancing and animations, which can be implemented by simply indirecting leafs to different subtrees.
+Like in XBrickMap, I found that a ray marching algorithm was both simpler and faster, as it benefits from bitmasks for longer ray steps and is less prone to divergence. Initially, this performed very close to XBrickMap but did not surpass it until the two following optimizations (which combined, summed up to an 18% improvement).
+
+Further using group-shared memory for the ancestor node stack resulted in ~9% speedup compared to a "local" array variable (this trick had a surprisingly negative impact when applied to ESVO which was 120% slower, presumably due to its 4x bigger stack).
+
+Mirroring the coordinate system to the negative ray octant resulted in another 11% bump due to simplified intersection calculations (no need to offset face planes, simplified node bounds clamping).
+
+Apart from increased memory efficiency due to sparseness, the most interesting advantage trees have over grids might be support for arbitrary voxel scales and sub-divisions, as in dynamic details. Apart from LOD streaming, this could also be useful for things like instancing and animations, which can be implemented by simply indirecting leafs to different subtrees.
 
 ---
 
-BVHs have several advantages over all other methods. First, they are industry standard and have extensive research, and are quickly gaining hardware acceleration support. They are not limited to voxels and support traditional triangle-based geometry, transformations, and reasonably efficient updates.
+BVHs have several advantages over all other methods. First, they are industry standard and have been extensively researched, and are quickly gaining hardware acceleration support. They are not limited to voxels and support traditional triangle-based geometry, transformations, and reasonably efficient updates.
 
 TODO: expand
 

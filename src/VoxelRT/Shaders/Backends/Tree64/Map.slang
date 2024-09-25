@@ -29,7 +29,7 @@ public struct VoxelMap : IRayCastable {
         float scale = 1.0 / (1 << TreeScale);
         float3 origin = worldOrigin * scale + rayPos * scale + 1.0;
 
-        HitInfo hit = Traversal(origin, rayDir, coarse);
+        HitInfo hit = Traversal_OctMirror(origin, rayDir, coarse);
         
         if (hit.MaterialId != 0) {
             hit.Pos = (hit.Pos - 1.0 - worldOrigin * scale) * (1 << TreeScale);
@@ -96,11 +96,11 @@ public struct VoxelMap : IRayCastable {
             float tmax = min(min(sideDist.x, sideDist.y), sideDist.z);
 
             float3 siblPos0 = select(tmax == sideDist, pos + copysign(scale, dir), pos);
-            float3 siblPos1 = bit_cast<float3>(bit_cast<int3>(siblPos0) + ((1 << advScaleExp) - 1));
+            float3 siblPos1 = asfloat(bit_cast<int3>(siblPos0) + ((1 << advScaleExp) - 1));
             pos = clamp(origin + dir * tmax, siblPos0, siblPos1); // clamp to sibling bounds [0, 1)
 
             // Find carry bit to tell which node we should ascend to
-            uint3 diffPos = bit_cast<uint3>(pos) ^ bit_cast<uint3>(prevPos);
+            uint3 diffPos = asuint(pos) ^ asuint(prevPos);
             int diffExp = firstbithigh(diffPos.x | diffPos.y | diffPos.z); // 31 - lzcnt
             if (diffExp % 2 == 0) diffExp--;
 
@@ -127,6 +127,104 @@ public struct VoxelMap : IRayCastable {
             hit.Normal = select(sideMask, -sign(dir), 0.0);
         }
         return hit;
+    }
+
+    private HitInfo Traversal_OctMirror(float3 origin, float3 dir, bool coarse) {
+        uint groupId = spirv_asm {
+            result:$$uint = OpLoad builtin(LocalInvocationIndex:uint);
+        };
+        static groupshared uint gs_stack[64][11];
+        //uint stack[11];
+        uint* stack = &gs_stack[groupId][0];
+        int scaleExp = 21;  // 0.25
+
+        uint nodeIdx = 0; // root
+        Node node = TreeNodes[nodeIdx];
+
+        float3 invDir = 1.0f / -abs(dir);
+        uint mirrorMask = 0;
+
+        // Mirror coordinates to negative ray octant
+        if (dir.x > 0) mirrorMask |= 3 << 0;
+        if (dir.y > 0) mirrorMask |= 3 << 4;
+        if (dir.z > 0) mirrorMask |= 3 << 2;
+
+        origin = GetMirroredPos(origin, dir, true);
+        float3 pos = clamp(origin, 1.0f, 1.9999999f);
+        
+        float3 sideDist;
+        int childIdx;
+        int i;
+
+        for (i = 0; i < 256; i++) {
+            if (coarse && i > 20 && node.IsLeaf) break;
+
+            childIdx = GetNodeCellIndex(pos, scaleExp) ^ mirrorMask;
+
+            // Descend
+            while ((node.PopMask >> childIdx & 1) != 0 && !node.IsLeaf) {
+                stack[scaleExp >> 1] = nodeIdx;
+                nodeIdx = node.ChildPtr + popcnt_var64(node.PopMask, childIdx);
+                node = TreeNodes[nodeIdx];
+                
+                scaleExp -= 2;
+                childIdx = GetNodeCellIndex(pos, scaleExp) ^ mirrorMask;
+            }
+            if ((node.PopMask >> childIdx & 1) != 0 && node.IsLeaf) break;
+
+            int advScaleExp = scaleExp;
+
+            // 2³ steps
+            if ((node.PopMask >> (childIdx & 0b101010) & 0x00330033) == 0) advScaleExp++;
+
+            // Compute next pos by intersecting with max cube edges
+            float3 edgePos = FloorScale(pos, advScaleExp);
+            
+            sideDist = (edgePos - origin) * invDir;
+            float tmax = min(min(sideDist.x, sideDist.y), sideDist.z);
+            
+            int3 maxSiblBounds = bit_cast<int3>(edgePos) + select(sideDist == tmax, -1, (1 << advScaleExp) - 1);
+            pos = min(origin - abs(dir) * tmax, asfloat(maxSiblBounds));
+
+            // Find carry bit to tell which node we should ascend to
+            uint3 diffPos = asuint(pos) ^ asuint(edgePos);
+            int diffExp = firstbithigh(diffPos.x | diffPos.y | diffPos.z); // 31 - lzcnt
+            if (diffExp % 2 == 0) diffExp--;
+
+            if (diffExp > scaleExp) {
+                scaleExp = diffExp;
+                if (diffExp > 21) break;  // going out of root?
+
+                nodeIdx = stack[scaleExp >> 1];
+                node = TreeNodes[nodeIdx];
+            }
+        }
+        PERF_STAT_INC(TraversalIters, i);
+        
+        HitInfo hit;
+        hit.MaterialId = 0;
+        
+        if (node.IsLeaf && scaleExp <= 21) {
+            pos = GetMirroredPos(pos, dir, false);
+
+            hit.MaterialId = LeafData[node.ChildPtr + popcnt_var64(node.PopMask, childIdx)];
+            hit.Pos = pos;
+
+            float tmax = min(min(sideDist.x, sideDist.y), sideDist.z);
+            bool3 sideMask = tmax >= sideDist;
+            hit.Normal = select(sideMask, -sign(dir), 0.0);
+        }
+        return hit;
+    }
+
+    // Computes `dir > 0 ? 3.0 - pos : pos`
+    // with special case to avoid rounding.
+    static float3 GetMirroredPos(float3 pos, float3 dir, bool rangeCheck) {
+        float3 mirrored = asfloat(asuint(pos) ^ 0x7FFFFF);
+        // XOR'ing will only work if the coords are in range [1.0, 2.0),
+        // so just fallback to the original subtraction if that's not the case.
+        if (rangeCheck && any(pos < 1.0 || pos >= 2.0)) mirrored = 3.0 - pos;
+        return select(dir > 0, mirrored, pos);
     }
 
     private HitInfo Traversal_HDDA(float3 origin, float3 dir, bool coarse) {
@@ -205,20 +303,20 @@ public struct VoxelMap : IRayCastable {
                 
                 // Clamp hit pos to be inside child bounding box to workaround float precision errors
                 uint3 childPos = currIdx >> uint3(0, 4, 2) & 3u;
-                childPos = (bit_cast<uint3>(pos) & (~3u << scale_exp)) | childPos << scale_exp;
+                childPos = (asuint(pos) & (~3u << scale_exp)) | childPos << scale_exp;
                 
                 int child_scale_exp = scale_exp - 2;
-                uint3 subPos = clamp(bit_cast<uint3>(hitPos), childPos, childPos | (3u << child_scale_exp));
+                uint3 subPos = clamp(asuint(hitPos), childPos, childPos | (3u << child_scale_exp));
                 subPos &= ~0u << child_scale_exp; // floor
                 
-                pos = bit_cast<float3>(subPos);
+                pos = asfloat(subPos);
                 
                 stack[scale_exp >> 1] = uint(uint64_t(node) - uint64_t(TreeNodes)); // push
                 scale_exp = child_scale_exp;
                 
                 node = &TreeNodes[node->ChildPtr + popcnt_var64(node->PopMask, currIdx)];
             } else {
-                uint3 parentPos = bit_cast<uint3>(pos);
+                uint3 parentPos = asuint(pos);
                 
                 // Compute step position to figure out the parent scale. For example,
                 // if we are at scale 1/64 and step crosses boundary of node 1/4, climb directly to it.
@@ -242,7 +340,7 @@ public struct VoxelMap : IRayCastable {
                 if (stepIdx == 4) parentPos.z += stepDelta;
                 if (stepIdx == 16) parentPos.y += stepDelta;
 
-                pos = bit_cast<float3>(parentPos);
+                pos = asfloat(parentPos);
 
                 node = (Node*)(uint64_t(TreeNodes) + stack[scale_exp >> 1]); // pop
             }
@@ -265,13 +363,13 @@ public struct VoxelMap : IRayCastable {
     }
 
     static int GetNodeCellIndex(float3 pos, int scale_exp) {
-        uint3 cellPos = bit_cast<uint3>(pos) >> scale_exp & 3;
+        uint3 cellPos = asuint(pos) >> scale_exp & 3;
         return cellPos.x + cellPos.z * 4 + cellPos.y * 16;
     }
     // floor(pos / scale) * scale
     static float3 FloorScale(float3 pos, int scale_exp) {
         uint mask = ~0u << scale_exp;
-        return bit_cast<float3>(bit_cast<uint3>(pos) & mask);
+        return asfloat(asuint(pos) & mask);
     }
 }
 

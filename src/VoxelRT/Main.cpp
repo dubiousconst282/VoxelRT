@@ -142,14 +142,28 @@ public:
             ImGui::SeparatorText("Stats");
 
             auto stats = gpur->LastFrameStats;
-            
+
             double elapsedMs = (stats.Counters[FramePerfStats::Frame_EndTS] - stats.Counters[FramePerfStats::Frame_StartTS]) / 1000000.0;
+
+            static glim::TimeStat renderTimeHist;
+            double elapsedDevMs;
+            renderTimeHist.AddSample(elapsedMs);
+            renderTimeHist.GetElapsedMs(elapsedMs, elapsedDevMs);
+
             double raysPerSec = stats.Counters[FramePerfStats::RayCasts] * (1000.0 / elapsedMs);
             ImGui::Text("Render time: %.2fms (%.2fmrays/s)", elapsedMs, raysPerSec / 1000000.0);
 
             double avgItersPerRay = stats.Counters[FramePerfStats::TraversalIters] / (double)stats.Counters[FramePerfStats::RayCasts];
             double avgClocksPerIter = stats.Counters[FramePerfStats::ClocksPerRay] / (double)(stats.Counters[FramePerfStats::TraversalIters] + stats.Counters[FramePerfStats::RayCasts]);
             ImGui::Text("Traversal: %.2f iters/ray, %.2f clocks/iter", avgItersPerRay, avgClocksPerIter);
+
+            static double savedRefElapsedMs = 0;
+            ImGui::Text("Diff: %.1f%% (%.2fms)", (elapsedMs - savedRefElapsedMs) / savedRefElapsedMs * 100, elapsedMs - savedRefElapsedMs);
+
+            ImGui::SameLine();
+            if (ImGui::Button("Save Ref", ImVec2(0, ImGui::GetTextLineHeight()))) {
+                savedRefElapsedMs = elapsedMs;
+            }
 
             std::vector<float> iterBins;
             bool hasHistogramData = false;
