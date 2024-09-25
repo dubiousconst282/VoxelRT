@@ -8,7 +8,6 @@ elseif(VCPKG_TARGET_IS_OSX)
 elseif(VCPKG_TARGET_IS_LINUX)
 	set(key "linux-${VCPKG_TARGET_ARCHITECTURE}")
 endif()
-string(REPLACE "arm64" "aarch64" key "${key}")
 
 set(ARCHIVE NOTFOUND)
 # For convenient updates, use 
@@ -18,31 +17,7 @@ if(key STREQUAL "windows-x64" OR VCPKG_SHADER_SLANG_UPDATE)
 		ARCHIVE
 		URLS "https://github.com/shader-slang/slang/releases/download/v${VERSION}/slang-${VERSION}-windows-x86_64.zip"
 		FILENAME "slang-${VERSION}-windows-x86_64.zip"
-		SHA512 6f19e8a59462a70d6615bb27768090df4da837c79e67ed130d15fb684ceb4341e3fe31411b814acc1b1540305fdfad22004ad4c3b697e8236e77cacba27816f5
-	)
-endif()
-if(key STREQUAL "windows-aarch64" OR VCPKG_SHADER_SLANG_UPDATE)
-	vcpkg_download_distfile(
-		ARCHIVE
-		URLS "https://github.com/shader-slang/slang/releases/download/v${VERSION}/slang-${VERSION}-windows-aarch64.zip"
-		FILENAME "slang-${VERSION}-windows-aarch64.zip"
-		SHA512 07f48beb5ec676de71bb0d8774fae6984e720ce4fcc47cbb684c87bc9763a8e4a6440175e801425a1a17aa2fd9292aa6dc18da6a085b0524cfe2e80d701389df
-	)
-endif()
-# if(key STREQUAL "macosx-x64" OR VCPKG_SHADER_SLANG_UPDATE)
-# 	vcpkg_download_distfile(
-# 		ARCHIVE
-# 		URLS "https://github.com/shader-slang/slang/releases/download/v${VERSION}/slang-${VERSION}-macos-x86_64.zip"
-# 		FILENAME "slang-${VERSION}-macos-x86_64.zip"
-# 		SHA512 9acda6c43c5b56d8cc33be7f150c7b25e00373d036f0629eae28fa134621a4c0db1be4bd319d243723308e1455456268b037b9fb4d661ef53213ce0ef1ec326d
-# 	)
-# endif()
-if(key STREQUAL "macosx-aarch64" OR VCPKG_SHADER_SLANG_UPDATE)
-	vcpkg_download_distfile(
-		ARCHIVE
-		URLS "https://github.com/shader-slang/slang/releases/download/v${VERSION}/slang-${VERSION}-macos-aarch64.zip"
-		FILENAME "slang-${VERSION}-macos-aarch64.zip"
-		SHA512 166950d26df51818eb2206a1d3659d7061b1853b562dce43fa436971ff8fe946cd4d7a96afa7aa20016b3ae2a2617759220eb424b7caa2494d10ff53222da057
+		SHA512 7106f8bd79c8ecb21ced497465fc231aad6564c8a0d4baa719188f830cfa91347c0e3cce997eeb53035412ef3675e35c75b5f029e64fc6de8077898233484d2a
 	)
 endif()
 if(key STREQUAL "linux-x64" OR VCPKG_SHADER_SLANG_UPDATE)
@@ -50,15 +25,7 @@ if(key STREQUAL "linux-x64" OR VCPKG_SHADER_SLANG_UPDATE)
 		ARCHIVE
 		URLS "https://github.com/shader-slang/slang/releases/download/v${VERSION}/slang-${VERSION}-linux-x86_64.zip"
 		FILENAME "slang-${VERSION}-linux-x86_64.zip"
-		SHA512 2679732c9b27b97e347f6609414ad6953ffe1e165544d16aca48cffaaee6bfb63a2e4726fbe5ef533716788e98a1d47b0e20ecdd23158f9311f92161fcc25631
-	)
-endif()
-if(key STREQUAL "linux-aarch64" OR VCPKG_SHADER_SLANG_UPDATE)
-	vcpkg_download_distfile(
-		ARCHIVE
-		URLS "https://github.com/shader-slang/slang/releases/download/v${VERSION}/slang-${VERSION}-linux-aarch64.zip"
-		FILENAME "slang-${VERSION}-linux-aarch64.zip"
-		SHA512 3ce15de5a7a770460108bee42706a3fa83ed2cfce24297b65cfd7e61b3568e37aaf4f38b8e4b2ea7352abfb932bdc43065b361858900fc02aca136730f22d4bb
+		SHA512 04ec5d1b0d918a164c0e37c7ec47b15f91afe41c814f72886e1c6f6b48a5e7776988712d2175460e525b38f821bc6181865f5993a0b2c1234ae341cd5a961229
 	)
 endif()
 if(NOT ARCHIVE)
@@ -83,8 +50,14 @@ file(GLOB libs
 )
 file(INSTALL ${libs} DESTINATION "${CURRENT_PACKAGES_DIR}/lib")
 
+file(GLOB dyn_libs
+	"${BINDIST_PATH}/lib/*.dylib"
+	"${BINDIST_PATH}/lib/*.so"
+)
+
 if(VCPKG_TARGET_IS_WINDOWS)
 	file(GLOB dlls "${BINDIST_PATH}/bin/*.dll")
+	list(APPEND dyn_libs ${dlls})
 	file(INSTALL ${dlls} DESTINATION "${CURRENT_PACKAGES_DIR}/bin")
 endif()
 
@@ -95,6 +68,8 @@ if(NOT VCPKG_BUILD_TYPE)
 	endif()
 endif()
 
+# Must manually copy some tool dependencies since vcpkg can't copy them automagically for us
+file(INSTALL ${dyn_libs} DESTINATION "${CURRENT_PACKAGES_DIR}/tools/shader-slang/")
 vcpkg_copy_tools(TOOL_NAMES slangc slangd SEARCH_DIR "${BINDIST_PATH}/bin")
 
 file(GLOB headers "${BINDIST_PATH}/include/*.h")
