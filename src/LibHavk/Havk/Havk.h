@@ -590,7 +590,7 @@ private:
     struct HotReloadTracker;
     struct PipelineSourceInfo;
 
-    std::unique_ptr<HotReloadTracker> _reloadTracker = nullptr;
+    std::unique_ptr<HotReloadTracker> _reloadTracker;
     void* _slangSession = nullptr;  // IGlobalSession* - this is void* to avoid leaking slang.h
 
     // Check compile result and move handles to pipeline.

@@ -30,13 +30,13 @@ struct RendererFlatDDA : public GpuRenderer {
         _map->MarkAllDirty();
     }
 
-    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+    void RenderFrame(havx::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
         GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
             .Storage = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
         });
     }
 
-    bool SyncMap(glim::Camera& cam, havk::CommandList& cmds) override {
+    bool SyncMap(havx::Camera& cam, havk::CommandList& cmds) override {
         if (StorageBuffer == nullptr) {
             StorageBuffer = _ctx->CreateBuffer({
                 .Size = sizeof(GpuMapStorage),

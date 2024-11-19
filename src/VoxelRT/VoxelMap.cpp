@@ -1,6 +1,6 @@
 #include "VoxelMap.h"
 
-#include <Common/BinaryIO.h>
+#include <Havx/BinaryIO.h>
 #include <sstream>
 
 Brick* Sector::GetBrick(uint32_t index, bool create) {
@@ -189,7 +189,7 @@ bool Brick::IsEmpty() const {
     return true;
 }
 
-namespace gio = glim::io;
+namespace gio = havx::io;
 
 // TODO: This serialization format is as horrible as iostreams. switch to/design something better
 static const uint64_t SerMagic = 0x00'00'00'04'78'6f'76'63ul;  // "cvox 0004"

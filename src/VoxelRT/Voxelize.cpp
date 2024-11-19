@@ -1,7 +1,7 @@
 #include "VoxelMap.h"
 
 #include <SwRast/Texture.h>
-#include <Common/PaletteBuilder.h>
+#include "PaletteBuilder.h"
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>
@@ -163,7 +163,7 @@ static void IterateAssetPrimitives(fastgltf::Asset& asset, uint32_t sceneIndex, 
     });
 }
 
-static void AddColorsToPalette(glim::PaletteBuilder& palette, swr::RgbaTexture2D& tex) {
+static void AddColorsToPalette(PaletteBuilder& palette, swr::RgbaTexture2D& tex) {
     if (tex.Width <= 4 || tex.Height <= 4) return;
 
     const auto processTile = [&](uint32_t x, uint32_t y, VFloat u, VFloat v) {
@@ -185,7 +185,7 @@ void VoxelMap::VoxelizeModel(std::string_view modelPath, glm::ivec3 startPos, gl
     std::unordered_map<size_t, swr::RgbaTexture2D> textures;
     swr::RgbaTexture2D emptyTex(4, 4, 1, 1);
     std::vector<swr::RgbaTexture2D*> materialTextures;
-    glim::PaletteBuilder palette;
+    PaletteBuilder palette;
 
     for (auto& mat : asset.materials) {
         if (mat.pbrData.baseColorTexture.has_value()) {

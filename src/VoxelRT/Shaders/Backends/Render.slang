@@ -103,7 +103,7 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
             }
             pc.GBuffer->AlbedoTex.Instance[pos] = PackAlbedo(albedo, hit.Normal, emission > 0.5);
 
-            float4 projPos = mul(pc.GBuffer->ProjMat, float4(hit.Pos / 16.0, 1.0)); // scale down by 1/16 to minimize precision loss
+            float4 projPos = mul(pc.GBuffer->ProjMat, float4(hit.Pos, 1.0));
             float depth = projPos.z / projPos.w;
             pc.GBuffer->DepthTex.Instance[pos] = depth;
         } else {
@@ -138,8 +138,8 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
 void GetPrimaryRay(int2 screenPos, out float3 rayPos, out float3 rayDir) {
     float2 pos = float2(screenPos) + 0.5;
     if (pc.GBuffer->NumSteadyFrames > 0) {
-        float easeWeight = max(1, 10 - pc.GBuffer->NumSteadyFrames);
-        pos += (MartinR2(pc.GBuffer->NumSteadyFrames)  - 0.5)/ easeWeight;
+        float easeWeight = max(1, 10.0 - pc.GBuffer->NumSteadyFrames);
+        pos += (MartinR2(pc.GBuffer->NumSteadyFrames) - 0.5) / easeWeight;
     }
     float4 far = mul(pc.GBuffer->InvProjMat, float4(pos, 1, 1));
     rayPos = pc.GBuffer->OriginFrac;

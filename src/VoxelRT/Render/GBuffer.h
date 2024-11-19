@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Havk/Havk.h>
-#include <Common/Camera.h>
+#include <Havx/Camera.h>
 #include <vulkan/vulkan_core.h>
 
 struct GBufferUniforms {
@@ -63,7 +63,7 @@ struct GBuffer {
         });
     }
 
-    void SetCamera(havk::CommandList& cmds, glim::Camera& cam, glm::uvec2 renderSize, bool resetHistory) {
+    void SetCamera(havk::CommandList& cmds, havx::Camera& cam, glm::uvec2 renderSize, bool resetHistory) {
         if (AlbedoTex == nullptr || RenderSize != renderSize) {
             RenderSize = renderSize;
 

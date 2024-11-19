@@ -1,31 +1,41 @@
-cmake_minimum_required(VERSION 3.25)
-
-set(VCPKG_MANIFEST_MODE ON)
-set(CMAKE_BINARY_DIR "${CMAKE_CURRENT_LIST_DIR}/../build")
-set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
-
-if(CMAKE_HOST_LINUX)
-    set(VCPKG_TARGET_TRIPLET "x64-linux-dynamic-release") # static link takes way too long
-elseif(CMAKE_HOST_WIN32)
-    set(VCPKG_TARGET_TRIPLET "x64-windows-release")
-endif()
+cmake_minimum_required(VERSION 3.30)
 
 project("VoxelRT")
-
-set(CPACK_PROJECT_NAME ${PROJECT_NAME})
-set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     message(FATAL_ERROR "Build requires Clang or GCC")
 endif()
 
-if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC") # clang-cl
-    add_compile_options("/clang:-march=native" "/clang:-ffast-math" "-Wno-unused" "-Wsign-conversion")
+# Compile options: AVX2+, fast math
+add_library(common_compile_opts INTERFACE)
+target_compile_options(common_compile_opts INTERFACE "-Wno-unused" "-Wsign-conversion" "-ffast-math")
+
+if("$ENV{TARGET_CPU}" STREQUAL "AVX2")
+    target_compile_options(common_compile_opts INTERFACE "-march=x86-64-v3")
+elseif("$ENV{TARGET_CPU}" STREQUAL "AVX512")
+    target_compile_options(common_compile_opts INTERFACE "-march=x86-64-v4")
 else()
-    # add_compile_options("-mavx2" "-mfma" "-mf16c" "-ffast-math" "-Wno-unused" "-Wsign-conversion")
-    add_compile_options("-march=native" "-ffast-math" "-Wno-unused" "-Wsign-conversion")
+    message("Compiling for march=native, set env TARGET_CPU=AVX2|AVX512 to override.")
+    target_compile_options(common_compile_opts INTERFACE "-march=native")
 endif()
 
-add_subdirectory("LibGlimpsw/")
+# Fixup options for clang-cl (prepend "/clang:")
+if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC")
+    get_target_property(fixed_opts common_compile_opts INTERFACE_COMPILE_OPTIONS)
+    list(TRANSFORM fixed_opts REPLACE "^-[^W].+" "\/clang:\\0")
+    set_target_properties(common_compile_opts PROPERTIES INTERFACE_COMPILE_OPTIONS "${fixed_opts}")
+endif()
+
+# Setup CPM
+include("CPM.cmake")
+
+if(NOT DEFINED ENV{CPM_SOURCE_CACHE})
+    set(CPM_SOURCE_CACHE "${CMAKE_BINARY_DIR}/deps/")  # speeds up cmake configures
+endif()
+
+CPMUsePackageLock("package-lock.cmake")
+
+# Sub projects
+add_subdirectory("LibHavk/")
 add_subdirectory("VoxelRT/")

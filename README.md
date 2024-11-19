@@ -239,7 +239,12 @@ TODO: provide actual numbers, adhoc impl does not integrate with benchmark runne
 _Early screenshots of the CPU(bottom) and GPU(top) renderers, with 2-bounce diffuse lighting._
 
 ## Building
-Build requirements: CMake, vcpkg (set `VCPKG_ROOT` envvar), and Clang. (clang-cl shipped with Visual Studio should also work.)  
-Run requirements: Vulkan 1.3 and AVX2. Probably also luck for my dicey Vulkan and Slang code.
+Build requirements: CMake, Clang, Vulkan SDK. (clang-cl shipped with Visual Studio might also work.)  
+Run requirements: Vulkan 1.3 and AVX2.
 
-TODO
+```
+cmake -S ./src -B ./build -DCMAKE_CXX_COMPILER=clang-18 -DCMAKE_C_COMPILER=clang-18 -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build ./build
+
+./build/VoxelRT/VoxelRT.exe
+```

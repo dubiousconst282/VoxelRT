@@ -22,19 +22,17 @@ add_executable(
     Render/BrickSlotAllocator.cpp
 )
 
-set(FASTNOISE2_NOISETOOL OFF CACHE BOOL "Build Noise Tool" FORCE)
-add_subdirectory(../../deps/FastNoise2 ${CMAKE_BINARY_DIR}/deps/FastNoise2 EXCLUDE_FROM_ALL)
-
-# Clang 17 crashes when compiling FastNoise with -march=native that is added by the top-level list.
-# Don't care enough to find out why so as a workaround, just strip them all here. (Also silences annoying warnings)
-set_target_properties(FastNoise PROPERTIES COMPILE_OPTIONS "")
-
-add_subdirectory(../../deps/fastgltf ${CMAKE_BINARY_DIR}/deps/fastgltf EXCLUDE_FROM_ALL)
-add_subdirectory(../../deps/bvh ${CMAKE_BINARY_DIR}/deps/bvh EXCLUDE_FROM_ALL)
-
 target_link_libraries(VoxelRT PRIVATE
-    glimpsw
+    common_compile_opts
+    havk
     FastNoise
     fastgltf::fastgltf
     bvh
 )
+
+if(CMAKE_HOST_WIN32)
+    add_custom_command(TARGET VoxelRT POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:VoxelRT> $<TARGET_FILE_DIR:VoxelRT>
+        COMMAND_EXPAND_LISTS
+    )
+endif()

@@ -6,8 +6,8 @@
 #include <Havk/Havk.h>
 
 #include <glm/glm.hpp>
-#include <Common/Camera.h>
-#include <Common/SettingStore.h>
+#include <Havx/Camera.h>
+#include <Havx/SettingStore.h>
 
 #include "../VoxelMap.h"
 #include "GBuffer.h"
@@ -32,8 +32,8 @@ struct Renderer {
     Renderer(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : _ctx(ctx), _map(map) { }
     virtual ~Renderer() {}
 
-    virtual void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) = 0;
-    virtual void DrawSettings(glim::SettingStore& settings) { }
+    virtual void RenderFrame(havx::Camera& cam, GBuffer* target, havk::CommandList& cmds) = 0;
+    virtual void DrawSettings(havx::SettingStore& settings) { }
 
     static std::unique_ptr<Renderer> Create(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map, RendererId id) {
         switch (id) {
@@ -55,7 +55,7 @@ struct Renderer {
 
     // Emit CPU -> GPU world synchronization commands.
     // *Must* be called at least once before RenderFrame().
-    virtual bool SyncMap(glim::Camera& cam, havk::CommandList& cmds) { return false; }
+    virtual bool SyncMap(havx::Camera& cam, havk::CommandList& cmds) { return false; }
 
 protected:
     havk::DeviceContext* _ctx;
@@ -129,7 +129,7 @@ protected:
     havk::ComputePipelinePtr _renderShader;
     havk::BufferPtr _paletteBuffer;
 
-    void DispatchRenderShader(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds, auto map) {
+    void DispatchRenderShader(havx::Camera& cam, GBuffer* target, havk::CommandList& cmds, auto map) {
         TimeQueryPool->CopyResults(cmds, *PerfCounterBuffer->DeviceBuffer, offsetof(FramePerfStats, Counters[FramePerfStats::Frame_StartTS]));
         memcpy(&LastFrameStats, PerfCounterBuffer->ReadBack(cmds), sizeof(FramePerfStats));
 

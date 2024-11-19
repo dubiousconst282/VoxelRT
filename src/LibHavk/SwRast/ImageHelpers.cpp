@@ -2,11 +2,7 @@
 
 #include <stdexcept>
 
-#define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb_image_write.h>
 
 namespace swr {
 
@@ -51,13 +47,6 @@ StbImage StbImage::Create(uint32_t width, uint32_t height) {
         .Type = PixelType::RGBA_U8,
         .Data = { (uint8_t*)std::malloc(width * height * 4), &std::free }
     };
-}
-
-void StbImage::SavePng(std::string_view path) {
-    if (Type != PixelType::RGBA_U8) {
-        throw std::runtime_error("Unsupported pixel format");
-    }
-    stbi_write_png(path.data(), (int)Width, (int)Height, 4, Data.get(), (int)Width * 4);
 }
 
 namespace texutil {

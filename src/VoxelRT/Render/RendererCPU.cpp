@@ -362,7 +362,7 @@ static void RenderRow(const FrameConstants& fc, RenderedTile* dest, uint32_t y) 
                 albedo |= (round2i(hit.Normal.y) + 1) << 26;
                 albedo |= (round2i(hit.Normal.z) + 1) << 28;
 
-                VFloat4 projPos = simd::TransformVector(fc.CurrentProj, { hit.Pos / 16.0f, 1.0f });  // scale down by 1/16 to minimize precision loss
+                VFloat4 projPos = simd::TransformVector(fc.CurrentProj, { hit.Pos, 1.0f });
                 depth = csel(missMask, -1.0f, projPos.z / projPos.w);
 
                 if (fc.NumLightBounces == 0) {
@@ -398,11 +398,11 @@ struct RendererCPU : public Renderer {
         _map->MarkAllDirty();
     }
 
-    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+    void RenderFrame(havx::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
         glm::uvec2 renderSize = target->RenderSize;
 
         #if !NDEBUG
-        renderSize /= 4; // debug builds are unusable without this
+        //renderSize /= 4; // debug builds are unusable without this
         #endif
 
         _storage->SyncBuffers(*_map);

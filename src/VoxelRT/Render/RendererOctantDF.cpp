@@ -34,13 +34,13 @@ struct RendererOctantDF : public GpuRenderer {
         _map->MarkAllDirty();
     }
 
-    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+    void RenderFrame(havx::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
         GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
             .Storage = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
         });
     }
 
-    bool SyncMap(glim::Camera& cam, havk::CommandList& cmds) override {
+    bool SyncMap(havx::Camera& cam, havk::CommandList& cmds) override {
         if (StorageBuffer != nullptr && _map->DirtyLocs.size() == 0) return false;
         _map->DirtyLocs.clear();
         
@@ -98,7 +98,7 @@ struct RendererOctantDF : public GpuRenderer {
             tileGrid->Tiles[tileGridIdx] = StorageBuffer->DeviceAddress + tileStorageOffset;
 
             struct UpdateParams {
-                uint Axis;
+                uint32_t Axis;
                 VkDeviceAddress Tile;
             };
 
@@ -115,7 +115,7 @@ struct RendererOctantDF : public GpuRenderer {
         return true;
     }
 
-    void DrawSettings(glim::SettingStore& settings) override {
+    void DrawSettings(havx::SettingStore& settings) override {
         GpuRenderer::DrawSettings(settings);
 
         if (StorageBuffer != nullptr) {

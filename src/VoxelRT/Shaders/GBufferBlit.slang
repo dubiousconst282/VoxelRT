@@ -19,7 +19,6 @@ SamplerState g_LinearSampler;
 // TODO: Port to compute
 [shader("fragment")]
 float4 FragmentMain(float2 uv: TEXCOORD0) {
-    uv.y = 1.0-uv.y;
     int2 pos = int2(uv * pc.GBuffer->RenderSize);
     // float3 albedo = pc.GBuffer->AlbedoTex.Instance[pos].rgb;
     // float3 irradiance = pc.GBuffer.IrradianceTex.Instance[pos].rgb;

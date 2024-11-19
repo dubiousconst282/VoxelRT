@@ -131,6 +131,7 @@ public struct VoxelMap : IRayCastable {
 
     private HitInfo Traversal_OctMirror(float3 origin, float3 dir, bool coarse) {
         uint groupId = spirv_asm {
+            OpCapability VariablePointers;
             result:$$uint = OpLoad builtin(LocalInvocationIndex:uint);
         };
         static groupshared uint gs_stack[64][11];

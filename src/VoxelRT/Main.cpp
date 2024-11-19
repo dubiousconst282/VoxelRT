@@ -12,8 +12,8 @@
 #include "Brush.h"
 
 class Application {
-    glim::Camera _cam = {};
-    glim::SettingStore _settings;
+    havx::Camera _cam = {};
+    havx::SettingStore _settings;
 
     std::shared_ptr<VoxelMap> _map;
 
@@ -145,7 +145,7 @@ public:
 
             double elapsedMs = (stats.Counters[FramePerfStats::Frame_EndTS] - stats.Counters[FramePerfStats::Frame_StartTS]) / 1000000.0;
 
-            static glim::TimeStat renderTimeHist;
+            static havx::TimeStat renderTimeHist;
             double elapsedDevMs;
             renderTimeHist.AddSample(elapsedMs);
             renderTimeHist.GetElapsedMs(elapsedMs, elapsedDevMs);
@@ -309,7 +309,7 @@ public:
     bool ApplyBrush() {
         ImVec2 mousePos = ImGui::GetMousePos();
         ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-        glm::vec2 mouseUV = glm::vec2(mousePos.x / displaySize.x, 1 - mousePos.y / displaySize.y) * 2.0f - 1.0f;
+        glm::vec2 mouseUV = glm::vec2(mousePos.x / displaySize.x, mousePos.y / displaySize.y) * 2.0f - 1.0f;
 
         glm::mat4 invProj = glm::inverse(_cam.GetProjMatrix() * _cam.GetViewMatrix(false));
         glm::vec4 nearPos = invProj * glm::vec4(mouseUV, 0, 1);

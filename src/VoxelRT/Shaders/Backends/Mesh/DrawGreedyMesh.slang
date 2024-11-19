@@ -2,7 +2,7 @@ import "../BackendCommon";
 
 struct StorageData {
     Material Palette[256];
-    uint64_t QuadData[];
+    uint64_t QuadData[1];
 };
 struct DispatchParams {
     StorageData* Storage;

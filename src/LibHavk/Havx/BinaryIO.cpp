@@ -1,9 +1,36 @@
-#include <cassert>
-#include <zstd.h>
-
 #include "BinaryIO.h"
 
-namespace glim::io {
+#include <zstd.h>
+
+#include <cassert>
+#include <filesystem>
+
+namespace havx::io {
+
+std::vector<uint8_t> ReadFile(std::string_view path) {
+    std::ifstream fs;
+    fs.exceptions(std::ios::failbit);
+    fs.open(path.data(), std::ios::binary | std::ios::ate);
+
+    std::vector<uint8_t> buffer((size_t)fs.tellg());
+
+    fs.seekg(0);
+    fs.read((char*)buffer.data(), (std::streamsize)buffer.size());
+
+    return buffer;
+}
+void WriteFile(std::string_view path, const void* data, size_t length) {
+    auto fs_path = std::filesystem::path(path);
+    if (fs_path.has_parent_path()) {
+        std::filesystem::create_directories(fs_path.parent_path());
+    }
+    
+    std::ofstream fs;
+    fs.exceptions(std::ios::failbit);
+    fs.open(fs_path, std::ios::binary | std::ios::trunc);
+
+    fs.write((char*)data, (std::streamsize)length);
+}
 
 void WriteCompressed(std::ostream& os, const void* ptr, size_t size) {
     ZSTD_CCtx* zst = ZSTD_createCCtx();
@@ -64,4 +91,4 @@ void ReadCompressed(std::istream& is, void* ptr, size_t size) {
     }
 }
 
-};  // namespace glim::io
+};  // namespace havx::io

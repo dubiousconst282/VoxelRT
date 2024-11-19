@@ -5,7 +5,7 @@
 #include <chrono>
 #include <cmath>
 
-namespace glim {
+namespace havx {
 
 void TimeStat::Begin() {
     auto ts = std::chrono::high_resolution_clock::now();
@@ -35,7 +35,7 @@ void TimeStat::GetElapsedMs(double& mean, double& stdDev) const {
     stdDev = sqrt((sum2 / n) - (mean * mean));
 }
 
-static const uint64_t SerMagic = 0x02'74'65'73'6d'69'6c'67;  // glimset\2
+static const uint64_t SerMagic = 0x02'74'65'73'6d'69'6c'67;  // havxset\2
 
 bool SettingStore::Load(std::string_view filename, bool autoSave) {
     _autoSavePath = autoSave ? filename : "";
@@ -73,4 +73,4 @@ void SettingStore::Save(std::string_view filename) {
     }
 }
 
-};  // namespace glim
+};  // namespace havx

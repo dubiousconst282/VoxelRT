@@ -183,14 +183,14 @@ struct RendererBrickMap : public GpuRenderer {
         _map->MarkAllDirty();
     }
 
-    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+    void RenderFrame(havx::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
         GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
             .Storage = cmds.GetDeviceAddress(*Storage->StorageBuffer, havk::UseBarrier::ComputeRead),
             .VoxelOccupancy = cmds.GetDeviceAddress(*Storage->OccupancyStorage, havk::UseBarrier::ComputeRead),
         });
     }
 
-    bool SyncMap(glim::Camera& cam, havk::CommandList& cmds) override {
+    bool SyncMap(havx::Camera& cam, havk::CommandList& cmds) override {
         if (ImGui::IsKeyPressed(ImGuiKey_F9)) {
             Storage->SlotAllocator = BrickSlotAllocator(ViewSize);
         }
@@ -198,7 +198,7 @@ struct RendererBrickMap : public GpuRenderer {
         return Storage->SyncBuffers(*_map, cmds);
     }
     
-    void DrawSettings(glim::SettingStore& settings) override {
+    void DrawSettings(havx::SettingStore& settings) override {
         GpuRenderer::DrawSettings(settings);
 
         if (Storage->StorageBuffer != nullptr) {

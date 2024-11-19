@@ -1,7 +1,11 @@
 #include <cstdint>
 #include <fstream>
+#include <vector>
 
-namespace glim::io {
+namespace havx::io {
+    
+std::vector<uint8_t> ReadFile(std::string_view path);
+void WriteFile(std::string_view path, const void* data, size_t length);
 
 template<typename T>
 static void Write(std::ostream& os, const T& ptr) {
@@ -46,4 +50,4 @@ inline size_t BytesAvail(std::istream& is) {
     return (size_t)(end - curr);
 }
 
-};  // namespace glim::io
+};  // namespace havx::io

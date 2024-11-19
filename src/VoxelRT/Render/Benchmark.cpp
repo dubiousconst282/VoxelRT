@@ -50,7 +50,7 @@ struct RendererBenchmark : public Renderer {
 
     RendererBenchmark(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : Renderer(ctx, map) { }
 
-    void RenderFrame(glim::Camera& cam, GBuffer* gbuffer, havk::CommandList& cmds) override {
+    void RenderFrame(havx::Camera& cam, GBuffer* gbuffer, havk::CommandList& cmds) override {
         ImGui::Begin("Benchmark Runner", nullptr, ImGuiWindowFlags_NoCollapse);
 
         if (ImGui::Button(_state == RunnerState::Idle ? "Run" : "Cancel")) {

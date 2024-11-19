@@ -35,14 +35,14 @@ struct RendererDistField : public GpuRenderer {
         _map->MarkAllDirty();
     }
 
-    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+    void RenderFrame(havx::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
         GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
             .DistField = cmds.GetDescriptorHandle(*StorageImage, havk::UseBarrier::ComputeRead, VK_IMAGE_LAYOUT_GENERAL),
             .OccupancyMap = cmds.GetDeviceAddress(*OcmStorageBuffer, havk::UseBarrier::ComputeRead),
         });
     }
 
-    bool SyncMap(glim::Camera& cam, havk::CommandList& cmds) override {
+    bool SyncMap(havx::Camera& cam, havk::CommandList& cmds) override {
         if (StorageImage == nullptr) {
             // An early prototype used sparse residency images but it was scrapped because:
             // - Binding pages grows proportionally slower to the number of already bound pages (seems to be a well known issue)

@@ -23,7 +23,7 @@ namespace ImGui {
     template<> constexpr inline ImGuiDataType DataTypeEnum<double>   = ImGuiDataType_Double;
 };  // namespace ImGui
     
-namespace glim {
+namespace havx {
 
 struct SettingStore {
     using Key = std::pair<std::string, ImGuiID>;
@@ -86,7 +86,7 @@ struct SettingStore {
             changed = true;
         }
 
-        if (_pendingSave && !_autoSavePath.empty() && ImGui::GetTime() > _lastSaveTime + 15.0) {
+        if (_pendingSave && !_autoSavePath.empty() && ImGui::GetTime() > _lastSaveTime + 5.0) {
             Save(_autoSavePath);
             _lastSaveTime = ImGui::GetTime();
             _pendingSave = false;
@@ -124,4 +124,4 @@ private:
     int64_t _measureStart;
 };
 
-};  // namespace glim
+};  // namespace havx

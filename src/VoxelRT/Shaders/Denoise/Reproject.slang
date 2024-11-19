@@ -113,7 +113,7 @@ bool IsValidSample(int2 samplePos, float3 centerWorldPos, AlbedoData centerSurfa
 
 float3 GetWorldPos(int2 screenPos, float depth, float4x4 invProj) {
     float4 worldPos = mul(invProj, float4(screenPos, depth, 1.0));
-    return worldPos.xyz * (16.0 / worldPos.w);
+    return worldPos.xyz / worldPos.w;
 }
 float2 GetHistoryPos(float3 worldPos) {
     float4 prevNDC = mul(pc.GBuffer->HistoryProjMat, float4(worldPos + pc.GBuffer->OriginDelta, 1.0));

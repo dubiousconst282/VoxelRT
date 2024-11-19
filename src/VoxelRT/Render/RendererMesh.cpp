@@ -69,9 +69,10 @@ struct RendererMesh : public Renderer {
     RendererMesh(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : Renderer(ctx, map) {
         DrawShader = ctx->PipeBuilder->CreateGraphics("Backends/Mesh/DrawGreedyMesh.slang", {
             .CullMode = VK_CULL_MODE_BACK_BIT,
-            .FrontFace = VK_FRONT_FACE_CLOCKWISE,
+            .FrontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
             .EnableDepthTest = true,
             .EnableDepthWrite = true,
+            .DepthCompareOp = VK_COMPARE_OP_GREATER,
             .OutputFormats = { VK_FORMAT_R8G8B8A8_UNORM }, // TODO: render directly to swapchain ctx->Swapchain->SurfaceFormat.format
             .DepthFormat = VK_FORMAT_D32_SFLOAT,
         });
@@ -81,7 +82,7 @@ struct RendererMesh : public Renderer {
 
     uint32_t _numDrawnQuads = 0;
 
-    void RenderFrame(glim::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
+    void RenderFrame(havx::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
         if (DepthBuffer == nullptr || DepthBuffer->Desc.Width != target->RenderSize.x || DepthBuffer->Desc.Height != target->RenderSize.y) {
             DepthBuffer = _ctx->CreateImage({
                 .Format = VK_FORMAT_D32_SFLOAT,
@@ -146,7 +147,7 @@ struct RendererMesh : public Renderer {
                 .Target = DepthBuffer.get(),
                 .LoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .StoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .ClearValue = { 1.0f },
+                .ClearValue = { 0.0f },
             },
         }, true);
         cmds.BindIndexBuffer(*IndexBuffer, VK_INDEX_TYPE_UINT32);
@@ -156,12 +157,12 @@ struct RendererMesh : public Renderer {
         target->DebugChannelView = GBuffer::DebugChannel::Albedo;
     }
 
-    void DrawSettings(glim::SettingStore& settings) override {
+    void DrawSettings(havx::SettingStore& settings) override {
         ImGui::Checkbox("Show triangles", &EnableTriangleColoring);
         ImGui::Text("Quads: %.2fK", _numDrawnQuads/1000.0);
     }
 
-    bool SyncMap(glim::Camera& cam, havk::CommandList& cmds) override {
+    bool SyncMap(havx::Camera& cam, havk::CommandList& cmds) override {
         if (StorageBuffer == nullptr) {
             StorageBuffer = _ctx->CreateBuffer({
                 .Size = sizeof(uint64_t) * RangeAllocator.Capacity,

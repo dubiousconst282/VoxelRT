@@ -8,8 +8,8 @@ public struct ImageHandle<T> {
 }
 
 __generic<E, Shape: __ITextureShape, let isArray: int, let isMS: int, let sampleCount: int, let access: int, let isShadow: int, let isCombined: int, let format: int>
-public extension ImageHandle<__TextureImpl<E, Shape, isArray, isMS, sampleCount, access, isShadow, isCombined, format>> {
-    typealias TextureType = __TextureImpl<E, Shape, isArray, isMS, sampleCount, access, isShadow, isCombined, format>;
+public extension ImageHandle<_Texture<E, Shape, isArray, isMS, sampleCount, access, isShadow, isCombined, format>> {
+    typealias TextureType = _Texture<E, Shape, isArray, isMS, sampleCount, access, isShadow, isCombined, format>;
 
     public property TextureType Instance {
         get { return (access != 0 ? havk__RWTextureHeap : havk__TextureHeap)[DescriptorIndex].as<TextureType>(); }
@@ -21,7 +21,7 @@ public typealias TextureHandle3D<F = float4> = ImageHandle<Texture3D<F>>;
 public typealias ImageHandle2D<F = float4> = ImageHandle<RWTexture2D<F>>;
 public typealias ImageHandle3D<F = float4> = ImageHandle<RWTexture3D<F>>;
 
-public typealias RWTextureCube<F = float4> = __TextureImpl<F, __ShapeCube, 0, 0, 0, 1, 0, 0, 0>;
+public typealias RWTextureCube<F = float4> = _Texture<F, __ShapeCube, 0, 0, 0, 1, 0, 0, 0>;
 
 public typealias TextureHandleCube<F = float4> = ImageHandle<TextureCube<F>>;
 public typealias ImageHandleCube<F = float4> = ImageHandle<RWTextureCube<F>>;
@@ -34,7 +34,7 @@ public typealias ImageHandleArray2D<F = float4> = ImageHandle<RWTexture2DArray<F
 
 #define DEF_TEXTURE_SIZE_EXT(shape, isArray, dim) \
     __generic<T, let access : int, let isShadow : int, let isCombined : int, let format : int> \
-    public extension __TextureImpl<T, shape, isArray, 0, 0, access, isShadow, isCombined, format> { \
+    public extension _Texture<T, shape, isArray, 0, 0, access, isShadow, isCombined, format> { \
         public property uint##dim Size { \
             get { \
                 uint##dim res; \
