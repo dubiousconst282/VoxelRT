@@ -11,29 +11,28 @@ Voxel rendering experiments
 - OctantDF: Space skipping over tiled 256³ 8-directional distance fields at 1:4 resolution + 4³ occupancy bitmasks
 - ESVO: Port of "Efficient Sparse Voxel Octrees", no contours, no beam optimization
 - Tree64: Sparse voxel 4³-tree
-- BrickBVH: Binary BVH as TLAS + DDA over 8³ brick leafs (software impl)
-- GreedyMesh: Rasterized greedy mesh
+- StdBVH: Standard binary BVH + DDA over 8³ brick leafs
 
-Maybe TODO:
-- HybridBVH: BVH2 _or_ CWBVH as TLAS + XBrickMap(32³ sectors) _or_ Tree64 leafs + partial splits
+TODO:
+- CWBVH: Compressed 8-wide BVH + DDA over 8³ brick leafs
 
 ### Characteristics
 
 | Method    | Accel method  | Mem cost (impl) |Edit cost | Advantages            | Drawbacks         |
 |-----------|---------------|---------------|---------------|-----------------------|-------------------|
 | PlainDDA  | none          | 1 bit per 1³  | O(1)          | good start point      |not fast enough    |
-| MultiDDA  | space part    | 1 bit per 1³ +<br>1 bit per 8³  | O(1)          | ?                     |simd divergence    |
+| MultiDDA  | space part    | 1 bit per 1³ +<br>1 bit per 8³  | O(1)          | good perf rel.<br> simplicity |simd divergence    |
 | XBrickMap | space part    | 8³ bits per brick +<br> 12 bytes per sector | ~O(1), *1| ? | ?   |
-| ManhattanDF| ray march     | 1 byte per 4³ +<br> 1 bit per 1³ | O(m)       | ?                     | ? |
-| EuclideanDF| ray march     | 2 bytes per 4³ +<br> 1 bit per 1³ | O(m)       | ?                     | ? |
-| OctantDF   | ray march     | 8 bytes per 4³ +<br> 1 bit per 1³ | O(m)       | ?                     | ? |
-| ESVO      | space part    | ~4 bytes per node | ~O(log m), *2  | contours?        | hard to edit      |
-| Tree64    | space part    | 12 bytes per node | ~O(log m), *2  | lower overhead<br>vs octrees | hard to edit |
-| BrickBVH  | geom part     | 16 bytes per node +<br> 8³ bits per brick | varies    | flexible, hw accel,<br>well researched | ?       |
-| Meshing   | raster        | 8 bytes per quad | O(m)     | flexible               | hard to scale,<br>only primary rendering,<br>indirect |
+| ManhattanDF| ray march    | 1 byte per 4³ +<br> 1 bit per 1³ | O(m)    | ?     | mem/gen cost |
+| EuclideanDF| ray march    | 2 bytes per 4³ +<br> 1 bit per 1³ | O(m)    | ?     | mem/gen cost |
+| OctantDF   | ray march    | 8 bytes per 4³ +<br> 1 bit per 1³ | O(m)    | ?     | mem/gen cost |
+| ESVO      | space part    | ~4 bytes per node | ~O(log m), *2   | contours?        | ~~hard to edit~~      |
+| Tree64    | space part    | 12 bytes per node | ~O(log m), *2   | lower overhead<br>vs octrees | ~~hard to edit~~ |
+| StdBVH  | geom part       | 16 bytes per node +<br> 8³ bits per brick | ?         | flexible, <br>widely researched | ?       |
+| CWBVH   | geom part       | 80 bytes per node +<br> 8³ bits per brick | ?         | TBD                    | ?       |
 
 - *1: XBrickMap supports arbitrary edits within a brick, but insertions and deletions may require reallocations at sector level to make space for new bricks.
-- *2: Tree edits may require reallocations up to the root node to make space for new children nodes.  This is not currently implemented.
+- *2: Sparse trees can be more easily edited by [path copying](https://en.wikipedia.org/wiki/Persistent_data_structure#Path_copying), taking logarithmic time complexity. This is not implemented in this project.
 
 ---
 
@@ -68,7 +67,7 @@ All tests were run on an integrated GPU. I guesstimate at least 5-10x throughput
 |XBrickMap   |165.6       |125.1 (0.76x)|19.2        |186.9       |171.8 ms    |150.5 ms    |
 |ESVO        |95.0        |66.2 (0.70x)|46.9        |148.3       |0.0 ms      |652.7 ms    |
 |Tree64      |182.6       |124.2 (0.68x)|19.9        |170.7       |0.0 ms      |1318.2 ms   |
-|BrickBVH    |175.0       |102.5 (0.59x)|27.3        |123.6       |0.0 ms      |490.3 ms    |
+|StdBVH    |175.0       |102 (0.59x)|27.3        |123.6       |0.0 ms      |490.3 ms    |
 |ManhattanDF |166.3       |93.2 (0.56x)|34.3        |106.7       |1003.1 ms   |608.3 ms    |
 |EuclideanDF |174.3       |30.0 (0.17x)|39.7        |97.2        |1476.6 ms   |755.0 ms    |
 |OctantDF    |129.0       |84.9 (0.66x)|31.1        |168.5       |475.9 ms    |656.5 ms    |
@@ -83,7 +82,7 @@ All tests were run on an integrated GPU. I guesstimate at least 5-10x throughput
 |XBrickMap   |96.3        |76.5 (0.79x)|27.8        |239.1       |117.7 ms    |129.6 ms    |
 |ESVO        |67.1        |52.7 (0.79x)|59.9        |170.8       |0.0 ms      |651.2 ms    |
 |Tree64      |107.5       |93.9 (0.87x)|26.8        |231.1       |0.0 ms      |1371.3 ms   |
-|BrickBVH    |91.5        |63.4 (0.69x)|33.2        |212.6       |0.0 ms      |510.4 ms    |
+|StdBVH    |91.5        |63 (0.69x)|33.2        |212.6       |0.0 ms      |510.4 ms    |
 |ManhattanDF |132.0       |55.8 (0.42x)|34.3        |149.5       |638.3 ms    |379.0 ms    |
 |EuclideanDF |84.5        |12.5 (0.15x)|45.2        |196.0       |1041.3 ms   |446.6 ms    |
 |OctantDF    |99.3        |69.0 (0.69x)|28.4        |225.2       |316.0 ms    |423.8 ms    |
@@ -98,7 +97,7 @@ All tests were run on an integrated GPU. I guesstimate at least 5-10x throughput
 |XBrickMap   |109.6       |87.0 (0.79x)|27.9        |205.6       |216.9 ms    |191.9 ms    |
 |ESVO        |67.9        |52.5 (0.77x)|71.1        |141.3       |0.0 ms      |1308.4 ms   |
 |Tree64      |109.7       |92.6 (0.84x)|30.9        |193.3       |0.0 ms      |2011.6 ms   |
-|BrickBVH    |88.3        |63.0 (0.71x)|50.4        |146.0       |0.0 ms      |1109.2 ms   |
+|StdBVH    |88.3        |63 (0.71x)|50.4        |146.0       |0.0 ms      |1109.2 ms   |
 |ManhattanDF |109.8       |47.4 (0.43x)|53.8        |115.2       |2119.2 ms   |1331.7 ms   |
 |EuclideanDF |101.1       |28.5 (0.28x)|66.6        |105.4       |2897.5 ms   |1235.0 ms   |
 |OctantDF    |87.8        |53.0 (0.60x)|41.4        |192.0       |1101.6 ms   |1486.3 ms   |
@@ -113,7 +112,7 @@ All tests were run on an integrated GPU. I guesstimate at least 5-10x throughput
 |XBrickMap   |109.8       |95.7 (0.87x)|25.2        |226.0       |168.6 ms    |152.4 ms    |
 |ESVO        |67.9        |54.5 (0.80x)|68.4        |147.1       |0.0 ms      |818.1 ms    |
 |Tree64      |112.1       |99.5 (0.89x)|28.8        |205.7       |0.7 ms      |1453.9 ms   |
-|BrickBVH    |88.0        |62.9 (0.71x)|42.7        |171.3       |0.0 ms      |717.8 ms    |
+|StdBVH    |88.0        |62 (0.71x)|42.7        |171.3       |0.0 ms      |717.8 ms    |
 |ManhattanDF |105.0       |60.1 (0.57x)|48.3        |132.3       |819.2 ms    |774.2 ms    |
 |EuclideanDF |99.0        |16.9 (0.17x)|60.9        |115.6       |1905.2 ms   |661.4 ms    |
 |OctantDF    |82.2        |65.8 (0.80x)|37.7        |217.4       |593.9 ms    |753.2 ms    |
@@ -128,7 +127,7 @@ All tests were run on an integrated GPU. I guesstimate at least 5-10x throughput
 |XBrickMap   |88.8        |71.6 (0.81x)|26.2        |278.1       |170.4 ms    |218.7 ms    |
 |ESVO        |57.4        |43.5 (0.76x)|63.3        |189.3       |0.0 ms      |1202.1 ms   |
 |Tree64      |93.1        |83.3 (0.89x)|27.4        |262.6       |0.0 ms      |1692.5 ms   |
-|BrickBVH    |68.7        |46.6 (0.68x)|41.5        |238.9       |0.0 ms      |957.4 ms    |
+|StdBVH    |68.7        |46 (0.68x)|41.5        |238.9       |0.0 ms      |957.4 ms    |
 |ManhattanDF |88.4        |50.7 (0.57x)|43.3        |179.4       |1131.9 ms   |767.6 ms    |
 |EuclideanDF |80.2        |10.1 (0.13x)|56.7        |158.4       |1997.2 ms   |692.3 ms    |
 |OctantDF    |71.0        |48.6 (0.69x)|35.0        |282.8       |605.5 ms    |786.3 ms    |
@@ -143,7 +142,7 @@ All tests were run on an integrated GPU. I guesstimate at least 5-10x throughput
 |XBrickMap   |115.2       |88.5 (0.77x)|31.3        |181.9       |136.1 ms    |144.7 ms    |
 |ESVO        |136.9       |86.4 (0.63x)|33.2        |139.0       |0.0 ms      |719.0 ms    |
 |Tree64      |208.9       |137.4 (0.66x)|16.0        |186.8       |0.0 ms      |1433.0 ms   |
-|BrickBVH    |215.9       |154.0 (0.71x)|14.2        |174.1       |0.0 ms      |571.7 ms    |
+|StdBVH    |215.9       |154 (0.71x)|14.2        |174.1       |0.0 ms      |571.7 ms    |
 |ManhattanDF |100.3       |53.0 (0.53x)|26.2        |250.2       |916.4 ms    |943.8 ms    |
 |EuclideanDF |27.4        |11.1 (0.41x)|29.0        |870.8       |2477.6 ms   |814.6 ms    |
 |OctantDF    |131.2       |87.8 (0.67x)|24.9        |198.1       |723.5 ms    |915.5 ms    |

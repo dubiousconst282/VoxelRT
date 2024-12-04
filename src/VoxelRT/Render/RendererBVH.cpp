@@ -1,25 +1,8 @@
 #include "Renderer.h"
-
-#include <bvh/v2/bvh.h>
-#include <bvh/v2/default_builder.h>
-
-using BNode = bvh::v2::Node<float, 3, 32>;
-using BBox = bvh::v2::BBox<float, 3>;
-using BVec = bvh::v2::Vec<float, 3>;
-using BvhBuilder = bvh::v2::DefaultBuilder<BNode>;
-using Bvh = bvh::v2::Bvh<BNode>;
+#include "BVHCommon.h"
 
 namespace {
 
-// TODO: Implement custom BVH builder to take advantage of our use case:
-// - overlaps never happen
-// - bvh_v2 does not compile with integer scalars, pointless templatization syndrome
-// - could minimize number of boxes via greedy merging? might complicate leaf indexing
-// also read this stuff:
-// - https://meistdan.github.io/publications/bvh_star/paper.pdf
-// - https://research.nvidia.com/sites/default/files/publications/ylitie2017hpg-paper.pdf
-
-//
 struct PackedNode {
     glm::i16vec3 Min, Max;
     uint32_t IsLeaf : 1;
@@ -121,48 +104,71 @@ struct GpuVoxelMap {
     uint32_t RootIdx;
 };
 
-struct RendererBVH : public GpuRenderer {
-    havk::BufferPtr StorageBuffer;
-    uint32_t RootIdx;
-    size_t BrickDataOffset;
+class RendererBVH : public GpuRenderer {
+    havk::BufferPtr _storageBuffer;
+    uint32_t _rootIdx;
+    size_t _brickDataOffset;
+    RendererId _type;
 
-    RendererBVH(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) : GpuRenderer(ctx, map, RendererId::BrickBVH) {
+public:
+    RendererBVH(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map, RendererId type) : GpuRenderer(ctx, map, type) {
         _map->MarkAllDirty();
+        _type = type;
     }
 
     void RenderFrame(havx::Camera& cam, GBuffer* target, havk::CommandList& cmds) override {
         GpuRenderer::DispatchRenderShader(cam, target, cmds, GpuVoxelMap {
-            .Nodes = cmds.GetDeviceAddress(*StorageBuffer, havk::UseBarrier::ComputeRead),
-            .Bricks = StorageBuffer->DeviceAddress + BrickDataOffset,
-            .RootIdx = RootIdx,
+            .Nodes = cmds.GetDeviceAddress(*_storageBuffer, havk::UseBarrier::ComputeRead),
+            .Bricks = _storageBuffer->DeviceAddress + _brickDataOffset,
+            .RootIdx = _rootIdx,
         });
     }
 
-    [[clang::optnone]]
     bool SyncMap(havx::Camera& cam, havk::CommandList& cmds) override {
-        if (StorageBuffer != nullptr && _map->DirtyLocs.size() == 0) return false;
+        if (_storageBuffer != nullptr && _map->DirtyLocs.size() == 0) return false;
         _map->DirtyLocs.clear();
 
-        std::vector<PackedNode> nodes;
-        std::vector<PackedBrick> bricks;
-        
-        auto bvh = GenerateBVH(*_map, bricks);
-        auto root = RepackNode(bvh, bvh.get_root(), nodes);
-        RootIdx = nodes.size();
-        nodes.push_back(root);
+        if (_type == RendererId::StdBVH) {
+            std::vector<PackedNode> nodes;
+            std::vector<PackedBrick> bricks;
+            
+            auto bvh = GenerateBVH(*_map, bricks);
+            auto root = RepackNode(bvh, bvh.get_root(), nodes);
+            _rootIdx = nodes.size();
+            nodes.push_back(root);
 
-        StorageBuffer = _ctx->CreateBuffer({
-            .Size = nodes.size() * sizeof(PackedNode) + bricks.size() * sizeof(PackedBrick),
-            .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-            .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        });
+            _storageBuffer = _ctx->CreateBuffer({
+                .Size = nodes.size() * sizeof(PackedNode) + bricks.size() * sizeof(PackedBrick),
+                .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            });
+            _storageBuffer->Write(nodes.data(), 0, nodes.size() * sizeof(PackedNode));
 
-        // TODO: make this copy staged to ensure device_local memory on non-UMA hardware
-        StorageBuffer->Write(nodes.data(), 0, nodes.size() * sizeof(PackedNode));
+            _brickDataOffset = nodes.size() * sizeof(PackedNode);
+            _storageBuffer->Write(bricks.data(), _brickDataOffset, bricks.size() * sizeof(PackedBrick));
+        } else {
+            assert(_type == RendererId::CWBVH);
 
-        BrickDataOffset = nodes.size() * sizeof(PackedNode);
-        StorageBuffer->Write(bricks.data(), BrickDataOffset, bricks.size() * sizeof(PackedBrick));
+            std::vector<PackedBrick> bricks;
+
+            auto bvh = GenerateBVH(*_map, bricks);
+            auto converter = BVH8Converter(bvh);
+            converter.convert();
+
+            auto& nodes = converter.bvh8_nodes;
+
+            _storageBuffer = _ctx->CreateBuffer({
+                .Size = nodes.size() * sizeof(CwbvhNode) + bricks.size() * sizeof(PackedBrick),
+                .Usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                .AllocFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .AllocType = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            });
+            _storageBuffer->Write(nodes.data(), 0, nodes.size() * sizeof(CwbvhNode));
+
+            _brickDataOffset = nodes.size() * sizeof(CwbvhNode);
+            _storageBuffer->Write(bricks.data(), _brickDataOffset, bricks.size() * sizeof(PackedBrick));
+        }
 
         return true;
     }
@@ -170,8 +176,8 @@ struct RendererBVH : public GpuRenderer {
     void DrawSettings(havx::SettingStore& settings) override {
         GpuRenderer::DrawSettings(settings);
 
-        if (StorageBuffer != nullptr) {
-            ImGui::Text("Storage: %.1fMB", StorageBuffer->Size / 1048576.0);
+        if (_storageBuffer != nullptr) {
+            ImGui::Text("Storage: %.1fMB", _storageBuffer->Size / 1048576.0);
         }
     }
 };
@@ -179,6 +185,11 @@ struct RendererBVH : public GpuRenderer {
 };  // namespace
 
 template<>
-std::unique_ptr<Renderer> Renderer::Create<RendererId::BrickBVH>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
-    return std::make_unique<RendererBVH>(ctx, map);
+std::unique_ptr<Renderer> Renderer::Create<RendererId::StdBVH>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
+    return std::make_unique<RendererBVH>(ctx, map, RendererId::StdBVH);
+}
+
+template<>
+std::unique_ptr<Renderer> Renderer::Create<RendererId::CWBVH>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map) {
+    return std::make_unique<RendererBVH>(ctx, map, RendererId::CWBVH);
 }

@@ -23,7 +23,8 @@ enum class RendererId {
     OctantDF = 6,
     ESVO = 7,
     Tree64 = 8,
-    BrickBVH = 9,
+    StdBVH = 9,
+    CWBVH = 10,
     Mesh,
     Benchmark,
 };
@@ -46,7 +47,8 @@ struct Renderer {
             case RendererId::OctantDF: return Create<RendererId::OctantDF>(ctx, map);
             case RendererId::ESVO: return Create<RendererId::ESVO>(ctx, map);
             case RendererId::Tree64: return Create<RendererId::Tree64>(ctx, map);
-            case RendererId::BrickBVH: return Create<RendererId::BrickBVH>(ctx, map);
+            case RendererId::StdBVH: return Create<RendererId::StdBVH>(ctx, map);
+            case RendererId::CWBVH: return Create<RendererId::CWBVH>(ctx, map);
             case RendererId::Mesh: return Create<RendererId::Mesh>(ctx, map);
             case RendererId::Benchmark: return Create<RendererId::Benchmark>(ctx, map);
             default: throw std::runtime_error("Unknown renderer ID");
@@ -74,7 +76,8 @@ private:
     template<> std::unique_ptr<Renderer> Create<RendererId::OctantDF>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::ESVO>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::Tree64>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
-    template<> std::unique_ptr<Renderer> Create<RendererId::BrickBVH>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
+    template<> std::unique_ptr<Renderer> Create<RendererId::StdBVH>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
+    template<> std::unique_ptr<Renderer> Create<RendererId::CWBVH>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::Mesh>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
     template<> std::unique_ptr<Renderer> Create<RendererId::Benchmark>(havk::DeviceContext* ctx, std::shared_ptr<VoxelMap> map);
 };

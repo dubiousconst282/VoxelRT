@@ -16,6 +16,7 @@ add_executable(
     Render/RendererESVO.cpp
     Render/RendererTree64.cpp
     Render/RendererBVH.cpp
+    Render/BVH8Converter.cpp
     Render/RendererMesh.cpp
     Render/Benchmark.cpp
     

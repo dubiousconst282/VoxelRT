@@ -34,8 +34,11 @@ import Utilities;
     import Tree64.Map;
     typealias TVoxelMap = backend::tree64::VoxelMap;
 #elif BACKEND_ID == 9
-    import BVH.Map;
+    import BVH.StdBVH;
     typealias TVoxelMap = backend::bvh::VoxelMap;
+#elif BACKEND_ID == 10
+    import BVH.CWBVH;
+    typealias TVoxelMap = backend::cwbvh::VoxelMap;
 #else
     static_assert(false, "Unknown renderer backend ID");
 #endif
@@ -67,11 +70,6 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
 
     float3 irradiance = pc.MaxBounces == 0 ? 1.0 : 0.0;
     float3 throughput = 1.0;
-
-    // very non PBR parameters
-    const float3 sunDir = normalize(float3(0.3,0.9,-0.28));
-    const float sunIntensity = 12;
-    const float3 sunColor = float3(1.0, 0.9, 0.7);
 
     for (int bounceNo = 0; bounceNo <= pc.MaxBounces; bounceNo++) {
         PERF_STAT_INC(RayCasts, 1);
@@ -115,12 +113,7 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
         }
         
         irradiance += throughput * emission;
-        
-        //float fuzziness = getMaterialMetalFuzziness(hit.mat);
-        //if (fuzziness < 1.0) {
-        //    rayDir = normalize(reflect(rayDir, hit.normal) + (fuzziness * random_dir(u_FrameNo, i)));
-        //    if (dot(rayDir, hit.normal) <= 0.0) break;
-        //} else 
+
         rayDir = normalize(hit.Normal + GetSphereDir(blueNoise.GetSample()));
         rayPos = hit.Pos + hit.Normal * 0.01;
     }

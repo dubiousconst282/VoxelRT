@@ -103,8 +103,7 @@ public struct VoxelMap : IRayCastable {
             if (node.IsLeaf) {
                 node._bounds = Nodes[currIdx]._bounds; // fetch bounds only when needed
 
-                // TODO: rewrite this to work properly and look less awful somehow
-                // - https://github.com/jan-van-bergen/GPU-Raytracer/blob/master/Src/CUDA/Raytracing/BVH4.h
+                // FIXME: this doesn't always work with secondary bounces for some reason
                 float3 t0 = fma(node._bounds[0], invDir, invOriginT);
                 float3 t1 = fma(node._bounds[1], invDir, invOriginT);
                 t0 = min(t0, t1);
