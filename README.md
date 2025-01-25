@@ -32,7 +32,7 @@ TODO:
 | CWBVH   | geom part       | 80 bytes per node +<br> 8³ bits per brick | ?         | TBD                    | ?       |
 
 - *1: XBrickMap supports arbitrary edits within a brick, but insertions and deletions may require reallocations at sector level to make space for new bricks.
-- *2: Sparse trees can be more easily edited by [path copying](https://en.wikipedia.org/wiki/Persistent_data_structure#Path_copying), taking logarithmic time complexity. This is not implemented in this project.
+- *2: Sparse trees can be more easily edited by [path copying](https://en.wikipedia.org/wiki/Persistent_data_structure#Path_copying), taking logarithmic time complexity. This is not implemented in this project, but a Rust implementation is available here: https://github.com/expenses/tree64
 
 ---
 
