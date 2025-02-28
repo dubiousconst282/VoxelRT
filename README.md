@@ -242,7 +242,7 @@ Build requirements: CMake, Clang, Vulkan SDK. (clang-cl shipped with Visual Stud
 Run requirements: Vulkan 1.3 and AVX2.
 
 ```
-cmake -S ./src -B ./build -DCMAKE_CXX_COMPILER=clang-18 -DCMAKE_C_COMPILER=clang-18 -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake -S ./src -B ./build -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18 -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build ./build
 
 ./build/VoxelRT/VoxelRT.exe
