@@ -2,7 +2,7 @@ import "../BackendCommon";
 
 struct StorageData {
     Material Palette[256];
-    uint64_t QuadData[1];
+    uint64_t QuadData[];
 };
 struct DispatchParams {
     StorageData* Storage;
@@ -31,7 +31,9 @@ static const float3 g_NormalLookup[6] = {
 static const int g_FlipLookup[6] = { 1, -1, -1, 1, -1, 1 };
 
 [shader("vertex")]
-ShadedVertex VertexMain(uint vertexId: SV_VertexID, uint instanceId: SV_InstanceID) {
+ShadedVertex VertexMain(uint vertexId: SV_VertexID, uint baseVertex: SV_StartVertexLocation, uint instanceId: SV_StartInstanceLocation) {
+    vertexId += baseVertex;
+
     int3 chunkOffsetPos = (instanceId >> int3(0, 8, 16) & 255) * 62;
     uint face = instanceId >> 24;
 

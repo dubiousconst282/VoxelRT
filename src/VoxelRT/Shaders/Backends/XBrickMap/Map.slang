@@ -1,5 +1,5 @@
 import "../BackendCommon";
-import "../ParametricTraversal";
+import "../SparseRayMarch";
 import RayMaskOptimizationLUT;
 
 namespace backend::xbrickmap {
@@ -74,7 +74,7 @@ public struct VoxelMap : IRayCastable, ITraversalStepper {
         
         if ((allocMask >> brickIdx & 1) != 0) {
             SectorInfo sector = Storage->Sectors[sectorIdx];
-            return sector.BaseAddress + popcnt_var64(allocMask, brickIdx) * sector.BrickStride;
+            return sector.BaseAddress + prefix_popcnt64(allocMask, brickIdx) * sector.BrickStride;
         }
         return 0;
     }
@@ -101,7 +101,7 @@ public struct VoxelMap : IRayCastable, ITraversalStepper {
     }
 
     public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {
-        return ParametricRayCast(this, worldOrigin, rayPos, rayDir, coarse);
+        return SparseRayMarch(this, worldOrigin, rayPos, rayDir, coarse);
     }
 
     public bool GetStepPos(inout int3 ipos, float3 dir, bool coarse) {
@@ -113,12 +113,12 @@ public struct VoxelMap : IRayCastable, ITraversalStepper {
         uint maskIdx = GetLinearIndex(brickPos, 4, 4);
         int scale = BRICK_SIZE;
 
-        if ((occMask >> maskIdx & 1) != 0) {
+        if (BitTestHalf64(occMask, maskIdx, 1) != 0) {
             occMask = GetVoxelMask(pos);
             maskIdx = GetLinearIndex(pos, 4, 4);
             scale = 1;
 
-            if ((occMask >> maskIdx & 1) != 0) return false;
+            if (BitTestHalf64(occMask, maskIdx, 1)) return false;
         } else if (occMask == 0) {
             occMask = GetSectorMask(sectorPos);
             maskIdx = GetLinearIndex(sectorPos, 4, 4);

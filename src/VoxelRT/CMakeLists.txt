@@ -4,7 +4,6 @@ add_executable(
     Main.cpp
     VoxelMap.cpp
     TerrainGenerator.cpp
-    GenerateLOD.cpp
     Voxelize.cpp
     Brush.cpp
     

@@ -65,7 +65,7 @@ public struct VoxelMap : IRayCastable {
             // Descend
             while ((node.PopMask >> childIdx & 1) != 0 && !node.IsLeaf && scaleExp >= 2) {
                 stack[scaleExp >> 1] = nodeIdx;
-                nodeIdx = node.ChildPtr + popcnt_var64(node.PopMask, childIdx);
+                nodeIdx = node.ChildPtr + prefix_popcnt64(node.PopMask, childIdx);
                 node = TreeNodes[nodeIdx];
                 
                 scaleExp -= 2;
@@ -119,7 +119,7 @@ public struct VoxelMap : IRayCastable {
         
         if (node.IsLeaf) {
             int childIdx = GetNodeCellIndex(pos, scaleExp);
-            hit.MaterialId = LeafData[node.ChildPtr + popcnt_var64(node.PopMask, childIdx)];
+            hit.MaterialId = LeafData[node.ChildPtr + prefix_popcnt64(node.PopMask, childIdx)];
             hit.Pos = pos;
 
             float tmax = min(min(sideDist.x, sideDist.y), sideDist.z);
@@ -163,20 +163,20 @@ public struct VoxelMap : IRayCastable {
             childIdx = GetNodeCellIndex(pos, scaleExp) ^ mirrorMask;
 
             // Descend
-            while ((node.PopMask >> childIdx & 1) != 0 && !node.IsLeaf) {
+            while (BitTestHalf64(node.PopMask, childIdx, 1) && !node.IsLeaf) {
                 stack[scaleExp >> 1] = nodeIdx;
-                nodeIdx = node.ChildPtr + popcnt_var64(node.PopMask, childIdx);
+                nodeIdx = node.ChildPtr + prefix_popcnt64(node.PopMask, childIdx);
                 node = TreeNodes[nodeIdx];
-                
+
                 scaleExp -= 2;
                 childIdx = GetNodeCellIndex(pos, scaleExp) ^ mirrorMask;
             }
-            if ((node.PopMask >> childIdx & 1) != 0 && node.IsLeaf) break;
+            if (BitTestHalf64(node.PopMask, childIdx, 1) && node.IsLeaf) break;
 
             int advScaleExp = scaleExp;
 
             // 2³ steps
-            if ((node.PopMask >> (childIdx & 0b101010) & 0x00330033) == 0) advScaleExp++;
+            if (!BitTestHalf64(node.PopMask, childIdx & 0b101010, 0x00330033)) advScaleExp++;
 
             // Compute next pos by intersecting with max cube edges
             float3 edgePos = FloorScale(pos, advScaleExp);
@@ -189,8 +189,7 @@ public struct VoxelMap : IRayCastable {
 
             // Find carry bit to tell which node we should ascend to
             uint3 diffPos = asuint(pos) ^ asuint(edgePos);
-            int diffExp = firstbithigh(diffPos.x | diffPos.y | diffPos.z); // 31 - lzcnt
-            if (diffExp % 2 == 0) diffExp--;
+            int diffExp = firstbithigh((diffPos.x | diffPos.y | diffPos.z) & 0xFFAAAAAA); // 31 - lzcnt
 
             if (diffExp > scaleExp) {
                 scaleExp = diffExp;
@@ -208,7 +207,7 @@ public struct VoxelMap : IRayCastable {
         if (node.IsLeaf && scaleExp <= 21) {
             pos = GetMirroredPos(pos, dir, false);
 
-            hit.MaterialId = LeafData[node.ChildPtr + popcnt_var64(node.PopMask, childIdx)];
+            hit.MaterialId = LeafData[node.ChildPtr + prefix_popcnt64(node.PopMask, childIdx)];
             hit.Pos = pos;
 
             float tmax = min(min(sideDist.x, sideDist.y), sideDist.z);
@@ -315,7 +314,7 @@ public struct VoxelMap : IRayCastable {
                 stack[scale_exp >> 1] = uint(uint64_t(node) - uint64_t(TreeNodes)); // push
                 scale_exp = child_scale_exp;
                 
-                node = &TreeNodes[node->ChildPtr + popcnt_var64(node->PopMask, currIdx)];
+                node = &TreeNodes[node->ChildPtr + prefix_popcnt64(node->PopMask, currIdx)];
             } else {
                 uint3 parentPos = asuint(pos);
                 
@@ -353,7 +352,7 @@ public struct VoxelMap : IRayCastable {
         hit.MaterialId = 0;
         
         if (node->IsLeaf) {
-            hit.MaterialId = LeafData[node->ChildPtr + popcnt_var64(node->PopMask, currIdx)];
+            hit.MaterialId = LeafData[node->ChildPtr + prefix_popcnt64(node->PopMask, currIdx)];
             hit.Pos = origin + tmin * dir;
 
             bool3 sideMask = stepIdx == int3(1, 16, 4);

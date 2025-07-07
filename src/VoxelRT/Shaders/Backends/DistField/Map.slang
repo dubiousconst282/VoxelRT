@@ -1,5 +1,5 @@
 import "../BackendCommon";
-import "../ParametricTraversal";
+import "../SparseRayMarch";
 import Havk.Core;
 
 namespace backend::distfield {
@@ -18,7 +18,7 @@ public struct VoxelMap<let Metric = 1> : IRayCastable, ITraversalStepper {
         return kDefaultOpaqueMaterialId;
     }
     public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {
-        return ParametricRayCast(this, worldOrigin, rayPos, rayDir, coarse);
+        return SparseRayMarch(this, worldOrigin, rayPos, rayDir, coarse);
     }
 
     public bool GetStepPos(inout int3 pos, float3 dir, bool coarse) {

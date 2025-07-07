@@ -122,7 +122,6 @@ struct Brick {
     Voxel Data[NumVoxels] = {};
 
     bool IsEmpty() const;
-    void GenerateLOD(Voxel* dest, uint32_t level) const;
 
     struct DispatchResult {
         bool Changed = false;

@@ -138,8 +138,10 @@ struct GpuStorageManager {
                 for (uint32_t brickIdx : BitIter(updateMask)) {
                     Brick* brick = sector.GetBrick(brickIdx);
 
-                    brick->GenerateLOD((Voxel*)updateData, sectorAlloc->LevelOfDetail);
-                    updateData += SectorAllocInfo::GetBrickStride(sectorAlloc->LevelOfDetail);
+                    assert(sectorAlloc->LevelOfDetail == 0);
+                    uint32_t brickSize = SectorAllocInfo::GetBrickStride(sectorAlloc->LevelOfDetail);
+                    memcpy(updateData, brick->Data, brickSize);
+                    updateData += brickSize;
                 }
             }
         }

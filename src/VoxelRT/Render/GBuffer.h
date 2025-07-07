@@ -40,7 +40,6 @@ struct GBuffer {
     uint32_t FrameNo = 0, NumSteadyFrames = 0;
 
     DebugChannel DebugChannelView = DebugChannel::None;
-    uint32_t NumDenoiserPasses = 5;
     uint32_t NumLightBounces = 1;
     bool EnableTAA = true;
     glm::vec2 HeatmapRange = { 0, 256 };
@@ -147,7 +146,7 @@ struct GBuffer {
         uint32_t groupsX = (RenderSize.x + 7) / 8;
         uint32_t groupsY = (RenderSize.y + 7) / 8;
 
-        if (DebugChannelView != DebugChannel::HeatMap && DebugChannelView != DebugChannel::Albedo) {
+        if (EnableTAA && DebugChannelView != DebugChannel::HeatMap && DebugChannelView != DebugChannel::Albedo) {
             struct ReprojParams {
                 VkDeviceAddress GBuffer;
             };
@@ -155,34 +154,6 @@ struct GBuffer {
             ReprojShader->Dispatch(cmds, { groupsX, groupsY, 1 }, ReprojParams {
                 .GBuffer = cmds.GetDeviceAddress(*UniformBuffer, havk::UseBarrier::ComputeRead),
             });
-
-            /*if (NumDenoiserPasses > 0) {
-                // Variance estimation
-                SetUniforms(*FilterShader);
-                FilterShader->SetUniform("u_PassNo", -1);
-                FilterShader->SetUniform("u_TempIrradianceTex", *TempIrradianceTex);
-                FilterShader->DispatchCompute(groupsX, groupsY, 1);
-
-                // A-trous filter
-                for (int32_t i = 0; i < NumDenoiserPasses; i++) {
-                    ogl::Texture2D& inputTex = i == 1 ? *PrevIrradianceTex : (i % 2 == 0 ? *TempIrradianceTex : *IrradianceTex);
-                    ogl::Texture2D& outputTex = i % 2 == 0 ? *IrradianceTex : *TempIrradianceTex;
-
-                    FilterShader->SetUniform("u_PassNo", i);
-                    FilterShader->SetUniform("u_TempIrradianceTex", inputTex);
-                    FilterShader->SetUniform("u_IrradianceTex", outputTex);
-                    FilterShader->DispatchCompute(groupsX, groupsY, 1);
-
-                    // Save output from first iteration as the history for the next frame
-                    if (i == 0) {
-                        std::swap(PrevIrradianceTex, IrradianceTex);
-                    }
-                }
-                // FIXME: lag when NumPasses == 2
-                if (NumDenoiserPasses % 2 != 0) {
-                    std::swap(TempIrradianceTex, IrradianceTex);
-                }
-            }*/
         }
 
         // Blit to screen
@@ -202,9 +173,7 @@ struct GBuffer {
         PresentShader->Draw(cmds, { .NumVertices = 3 }, pc);
         cmds.EndRendering();
 
-        if (NumDenoiserPasses == 0) {
-            std::swap(PrevIrradianceTex, IrradianceTex);
-        }
+        std::swap(PrevIrradianceTex, IrradianceTex);
     }
 
     // Computes inverse projection matrix, scaled to take coordinates in range [0..viewSize] rather than [-1..1]

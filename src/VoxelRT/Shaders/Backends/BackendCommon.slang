@@ -73,7 +73,7 @@ public bool CheckBounds(uint3 pos, uint sizeXZ, uint sizeY) {
 
 
 // Count number of set bits in variable range [0..width]
-public uint popcnt_var64(uint64_t mask, uint width) {
+public uint prefix_popcnt64(uint64_t mask, uint width) {
     // return popcnt64(mask & ((1ull << mask) - 1));
     uint himask = uint(mask);
     uint count = 0;
@@ -97,6 +97,16 @@ public uint tzcnt64(uint64_t mask) {
     uint b = uint(mask >> 32);
     uint c = firstbitlow(a != 0 ? a : b);
     return a != 0 ? c : c + 32;
+}
+
+// Cheaper approximation of `(value >> shift & mask) != 0` that gives
+// correct results for single bits and tile octant tests.
+// Some GPUs don't support native 64-bit shifts and correct emulation
+// is noticeably slow (this improves traversal by as much as 20% on Intel Xe1).
+public bool BitTestHalf64(uint64_t value, uint shift, uint mask) {
+    // return (value >> shift & mask) != 0;
+    uint low = shift < 32 ? uint(value) : uint(value >> 32);
+    return (low >> (shift & 31) & mask) != 0;
 }
 
 public void InterlockedSetBit(__ref uint64_t dest, uint index, bool value) {

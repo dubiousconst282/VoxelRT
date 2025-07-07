@@ -9,13 +9,13 @@ public interface ITraversalStepper {
     uint GetVoxelId(int3 pos);
 }
 
-// "Parametric" traversal that uses the slab method to efficiently step
-// into arbitrary positions along the ray.
+// Sparse voxel ray-marching using the slab method to efficiently step
+// into arbitrary voxels along the ray.
 //
 // This by itself is not much more expansive than DDA, but this naive  
 // implementation is far more prone to float precision issues, which
 // are currently mitigated by biasing the intersection distances.
-public HitInfo ParametricRayCast<TMap : ITraversalStepper>(TMap map, int3 worldOrigin, float3 rayOrigin, float3 rayDir, bool coarse) {
+public HitInfo SparseRayMarch<TMap : ITraversalStepper>(TMap map, int3 worldOrigin, float3 rayOrigin, float3 rayDir, bool coarse) {
     float3 invDir = 1.0 / rayDir;
     float3 tStart = (step(0.0, rayDir) - rayOrigin) * invDir;
     
@@ -45,11 +45,7 @@ public HitInfo ParametricRayCast<TMap : ITraversalStepper>(TMap map, int3 worldO
         if (!CheckBounds(voxelPos, map.GridSize.x, map.GridSize.y)) { i = 0; }
         else if (!map.GetStepPos(voxelPos, rayDir, coarse && i < 60)) break;
     }
-
     PERF_STAT_INC(TraversalIters, perf_NumIters);
-    #if PERF_TRACK_LEVEL >= PERF_LEVEL_HIGH
-        InterlockedAdd(g_PerfTracker->RayCastItersHistogram[min(perf_NumIters, 32)], 1);
-    #endif
 
     HitInfo hit;
     hit.MaterialId = 0;

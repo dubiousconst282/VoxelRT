@@ -40,6 +40,8 @@ public:
             // auto model = "logs/assets/models/ship_pinnace_4k/ship_pinnace_4k.gltf";
 
             _map->VoxelizeModel(model, glm::ivec3(0), glm::ivec3(2048));
+
+            std::filesystem::create_directories("logs/");
             _map->Serialize("logs/voxels_2k_sponza.dat");
         }
 
@@ -74,8 +76,6 @@ public:
     }
 
     void Render(havk::Image* target, havk::CommandList& cmds) {
-        ImGui::ShowMetricsWindow();
-
         _cam.Update();
         DrawBrushParams();
 
@@ -127,7 +127,6 @@ public:
         }
 
         _settings.Slider("Light Bounces", &_gbuffer->NumLightBounces, 1, 0u, 5u);
-        _settings.Slider("Denoiser Passes", &_gbuffer->NumDenoiserPasses, 1, 0u, 5u);
         _settings.Checkbox("Temporal AA", &_gbuffer->EnableTAA);
 
         if (_gbuffer->DebugChannelView == GBuffer::DebugChannel::HeatMap) {
@@ -150,31 +149,25 @@ public:
             renderTimeHist.AddSample(elapsedMs);
             renderTimeHist.GetElapsedMs(elapsedMs, elapsedDevMs);
 
-            double raysPerSec = stats.Counters[FramePerfStats::RayCasts] * (1000.0 / elapsedMs);
-            ImGui::Text("Render time: %.2fms (%.2fmrays/s)", elapsedMs, raysPerSec / 1000000.0);
+            float framerate = ImGui::GetIO().Framerate;
+            ImGui::Text("Frame: %.2fms (%.1f FPS)", 1000.0 / framerate, framerate);
 
+            double raysPerSec = stats.Counters[FramePerfStats::RayCasts] * (1000.0 / elapsedMs);
+            ImGui::Text("Render: %.2fms (%.2fmrays/s)", elapsedMs, raysPerSec / 1000000.0);
+            
             double avgItersPerRay = stats.Counters[FramePerfStats::TraversalIters] / (double)stats.Counters[FramePerfStats::RayCasts];
             double avgClocksPerIter = stats.Counters[FramePerfStats::ClocksPerRay] / (double)(stats.Counters[FramePerfStats::TraversalIters] + stats.Counters[FramePerfStats::RayCasts]);
             ImGui::Text("Traversal: %.2f iters/ray, %.2f clocks/iter", avgItersPerRay, avgClocksPerIter);
 
             static double savedRefElapsedMs = 0;
-            ImGui::Text("Diff: %.1f%% (%.2fms)", (elapsedMs - savedRefElapsedMs) / savedRefElapsedMs * 100, elapsedMs - savedRefElapsedMs);
+            static double elapsedMsAvg = 0;
+            elapsedMsAvg = (elapsedMsAvg * 19 + elapsedMs) / 20;
+            
+            ImGui::Text("Diff: %.1f%% (%.2fms)", (elapsedMsAvg - savedRefElapsedMs) / savedRefElapsedMs * 100, elapsedMsAvg - savedRefElapsedMs);
 
             ImGui::SameLine();
             if (ImGui::Button("Save Ref", ImVec2(0, ImGui::GetTextLineHeight()))) {
-                savedRefElapsedMs = elapsedMs;
-            }
-
-            std::vector<float> iterBins;
-            bool hasHistogramData = false;
-            for (uint32_t bin : stats.RayCastItersHistogram) {
-                iterBins.push_back(bin / 1000.0);
-                hasHistogramData |= bin > 0;
-            }
-
-            if (hasHistogramData) {
-                ImGui::PlotHistogram("##TraversalItersHistogram", iterBins.data(), iterBins.size(), 0, nullptr, FLT_MAX, FLT_MAX,
-                                     ImVec2(0, 80));
+                savedRefElapsedMs = elapsedMsAvg;
             }
         }
 
@@ -211,6 +204,7 @@ public:
 
     void DrawBrushParams() {
         if (ImGui::Begin("Brush")) {
+            ImGui::TextDisabled("Input Key: Ctrl");
             _settings.Combo("Action", &_brush.Pars.Action);
             _settings.Drag("Radius", &_brush.Pars.Radius, 1, 1.0f, 200.0f);
             _settings.Drag("Probability", &_brush.Pars.Probability, 1, 0.0f, 1.0f, 0.005f);

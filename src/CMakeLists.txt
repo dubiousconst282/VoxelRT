@@ -34,7 +34,7 @@ if(NOT DEFINED ENV{CPM_SOURCE_CACHE})
     set(CPM_SOURCE_CACHE "${CMAKE_BINARY_DIR}/deps/")  # speeds up cmake configures
 endif()
 
-CPMUsePackageLock("package-lock.cmake")
+include("packages.cmake")
 
 # Sub projects
 add_subdirectory("LibHavk/")

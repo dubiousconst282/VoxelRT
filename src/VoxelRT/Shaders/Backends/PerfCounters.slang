@@ -7,8 +7,7 @@ public enum PerfKey {
     Count_ = 16,
 };
 public struct PerfStats {
-    public uint64_t Counters[16]; // enum value not constexpr? int(PerfKey.Count_)
-    public uint32_t RayCastItersHistogram[32];
+    public uint64_t Counters[int(PerfKey.Count_)];
 };
 
 public static PerfStats* g_PerfTracker = nullptr;

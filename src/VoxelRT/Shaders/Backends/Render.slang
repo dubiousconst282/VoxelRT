@@ -131,8 +131,7 @@ void ComputeMain(uint2 pos: SV_DispatchThreadID) {
 void GetPrimaryRay(int2 screenPos, out float3 rayPos, out float3 rayDir) {
     float2 pos = float2(screenPos) + 0.5;
     if (pc.GBuffer->NumSteadyFrames > 0) {
-        float easeWeight = max(1, 10.0 - pc.GBuffer->NumSteadyFrames);
-        pos += (MartinR2(pc.GBuffer->NumSteadyFrames) - 0.5) / easeWeight;
+        pos += (MartinR2(pc.GBuffer->NumSteadyFrames) - 0.5);
     }
     float4 far = mul(pc.GBuffer->InvProjMat, float4(pos, 1, 1));
     rayPos = pc.GBuffer->OriginFrac;

@@ -1,5 +1,5 @@
 import "../BackendCommon";
-import "../ParametricTraversal";
+import "../SparseRayMarch";
 import Havk.Core;
 
 #include "../PerfCounters.h.slang"
@@ -16,7 +16,7 @@ public struct FieldTile {
     public uint64_t OccMasks[(TILE_SIZE * TILE_SIZE * TILE_SIZE) / 64];
 }
 public struct VoxelMap : IRayCastable, ITraversalStepper {
-    public FieldTile** Tiles;
+    public uint64_t* Tiles;
 
     public static const uint2 GridSize = uint2(GRID_SIZE_XZ, GRID_SIZE_Y);
 
@@ -24,12 +24,12 @@ public struct VoxelMap : IRayCastable, ITraversalStepper {
         return kDefaultOpaqueMaterialId;
     }
     public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {
-        return ParametricRayCast(this, worldOrigin, rayPos, rayDir, coarse);
+        return SparseRayMarch(this, worldOrigin, rayPos, rayDir, coarse);
     }
 
     public bool GetStepPos(inout int3 pos, float3 dir, bool coarse) {
         int distToNearest = 1024;
-        FieldTile* tile = Tiles[GetTileIndex(pos)];
+        FieldTile* tile = (FieldTile*)Tiles[GetTileIndex(pos)];
 
         if (tile != nullptr) {
             uint oct = (dir.x < 0 ? 0 : 1) + (dir.y < 0 ? 0 : 2) + (dir.z < 0 ? 0 : 4);

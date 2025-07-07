@@ -40,11 +40,15 @@ else()
     message(FATAL_ERROR "Unsupported host")
 endif()
 
-CPMAddPackage(
-    NAME slang
-    URL "https://github.com/shader-slang/slang/releases/download/v2024.14.5/slang-2024.14.5-${SLANG_BIN_PACKAGE_NAME}"
-    DOWNLOAD_ONLY true
-)
+# Slang
+if (NOT slang_SOURCE_DIR) # allow user override by -Dslang_SOURCE_DIR=xxx
+    CPMAddPackage(
+        NAME slang
+        URL "https://github.com/shader-slang/slang/releases/download/v2025.6.2/slang-2025.6.2-${SLANG_BIN_PACKAGE_NAME}"
+        DOWNLOAD_ONLY true
+    )
+endif()
+
 add_library(slang::slang SHARED IMPORTED)
 add_library(slang::slang-glslang SHARED IMPORTED)
 
@@ -53,28 +57,14 @@ if(CMAKE_HOST_WIN32)
         INTERFACE_INCLUDE_DIRECTORIES   "${slang_SOURCE_DIR}/include/"
         IMPORTED_IMPLIB                 "${slang_SOURCE_DIR}/lib/slang.lib"
         IMPORTED_LOCATION               "${slang_SOURCE_DIR}/bin/slang.dll"
-        INTERFACE_LINK_LIBRARIES        "slang::slang-glslang"
     )
-    set_target_properties(slang::slang-glslang PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES   "${slang_SOURCE_DIR}/include/"
-        IMPORTED_IMPLIB                 "${slang_SOURCE_DIR}/lib/slang.lib"
-        IMPORTED_LOCATION               "${slang_SOURCE_DIR}/bin/slang-glslang.dll"
-    )
-    target_link_libraries(slang::slang PUBLIC INTERFACE slang::slang-glslang)
 elseif(CMAKE_HOST_LINUX)
     set_target_properties(slang::slang PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES   "${slang_SOURCE_DIR}/include/"
         IMPORTED_LOCATION               "${slang_SOURCE_DIR}/lib/libslang.so"
-        #INTERFACE_LINK_LIBRARIES        "slang::slang-glslang"
     )
-    # set_target_properties(slang::slang-glslang PROPERTIES
-    #     INTERFACE_INCLUDE_DIRECTORIES   "${slang_SOURCE_DIR}/include/"
-    #     IMPORTED_LOCATION               "${slang_SOURCE_DIR}/lib/libslang-glslang.so"
-    #     IMPORTED_SONAME                 "libslang-glslang.so"
-    # )
     target_link_libraries(slang::slang PUBLIC INTERFACE
         "${slang_SOURCE_DIR}/lib/libslang.so"
-        "${slang_SOURCE_DIR}/lib/libslang-glslang.so"
     )
 endif()
 

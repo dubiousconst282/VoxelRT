@@ -95,7 +95,6 @@ struct FramePerfStats {
     };
     static_assert(int(Key::Count_) <= 16); // keep in sync with PerfCounters.slang
     int64_t Counters[16];
-    uint32_t RayCastItersHistogram[32];
 };
 
 struct GpuRenderer : public Renderer {
@@ -158,7 +157,7 @@ protected:
             VkDeviceAddress PerfCounters;
         };
 
-        TimeQueryPool->WriteTimestamp(cmds, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+        TimeQueryPool->WriteTimestamp(cmds, 0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
 
         uint32_t groupsX = (target->RenderSize.x + 7) / 8, groupsY = (target->RenderSize.y + 7) / 8;
 
@@ -173,7 +172,7 @@ protected:
             .PerfCounters = cmds.GetDeviceAddress(*PerfCounterBuffer->DeviceBuffer, havk::UseBarrier::ComputeReadWrite),
         });
 
-        TimeQueryPool->WriteTimestamp(cmds, 1, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+        TimeQueryPool->WriteTimestamp(cmds, 1, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     }
 
     void SyncPalette(havk::CommandList& cmds) {

@@ -193,13 +193,13 @@ static bool3 GetStepMask(float3 sideDist) {
     return mask;
 }
 
-import "../ParametricTraversal";
+import "../SparseRayMarch";
 
 public struct VoxelMap_ParamBrickStepping : VoxelMap, ITraversalStepper {
     public static const uint2 GridSize = uint2(GRID_SIZE_XZ, GRID_SIZE_Y);
 
     public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {
-        return ParametricRayCast(this, worldOrigin, rayPos, rayDir, coarse);
+        return SparseRayMarch(this, worldOrigin, rayPos, rayDir, coarse);
     }
     public bool GetStepPos(inout int3 pos, float3 dir, bool coarse) {
         

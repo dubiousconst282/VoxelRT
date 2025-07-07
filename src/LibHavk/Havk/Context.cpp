@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 #include "Havk.h"
 #include "Internal.h"
 
@@ -81,9 +83,20 @@ static DeviceInfo SelectPhysicalDevice(VkInstance instance, VkSurfaceKHR surface
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
-    DeviceInfo bestDevice;
-    int32_t bestScore = 0;
+    const char* userDeviceId = std::getenv("HAVK_SELECT_DEVICE");
+    if (userDeviceId != nullptr) {
+        uint32_t selectedId = std::stoul(userDeviceId, nullptr, 16);
 
+        std::erase_if(devices, [&](auto& device) {
+            VkPhysicalDeviceProperties props;
+            vkGetPhysicalDeviceProperties(device, &props);
+            printf("[havk] Device 0x%04X: %s%s\n", props.deviceID, props.deviceName, props.deviceID == selectedId ? " *" : "");
+            return props.deviceID != selectedId;
+        });
+        fflush(stdout);
+    }
+
+    // Pick first suitable device (this allows OS to override choice depending on e.g. power settings)
     for (auto& device : devices) {
         if (!CheckDeviceExtensionSupport(device, pars.RequiredDeviceExtensions)) continue;
 
@@ -99,22 +112,10 @@ static DeviceInfo SelectPhysicalDevice(VkInstance instance, VkSurfaceKHR surface
         // Skip if user wants surface but no support
         if (surface && !CheckSwapchainSupport(device, surface)) continue;
 
-        int32_t score = 1;
-
-        // Discrete GPUs have a significant performance advantage
-        if (info.Props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-            score += 1000;
-        }
-        if (score > bestScore) {
-            bestDevice = std::move(info);
-            bestScore = score;
-        }
+        return info;
     }
 
-    if (bestDevice.Handle == nullptr) {
-        throw std::runtime_error("Could not find suitable Vulkan device");
-    }
-    return bestDevice;
+    throw std::runtime_error("Could not find suitable Vulkan device");
 }
 static VkDevice CreateLogicalDevice(const DeviceInfo& devInfo, const DeviceCreateParams& pars) {
     float queuePriority = 1.0f;
@@ -141,6 +142,7 @@ static VkDevice CreateLogicalDevice(const DeviceInfo& devInfo, const DeviceCreat
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = &vulkan13Features,
 
+        .storageBuffer8BitAccess = VK_TRUE,
         .uniformAndStorageBuffer8BitAccess = VK_TRUE,
         .storagePushConstant8 = VK_TRUE,
         .shaderBufferInt64Atomics = VK_TRUE,
@@ -166,10 +168,12 @@ static VkDevice CreateLogicalDevice(const DeviceInfo& devInfo, const DeviceCreat
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
         .pNext = &vulkan12Features,
 
+        .storageBuffer16BitAccess = VK_TRUE,
         .uniformAndStorageBuffer16BitAccess = VK_TRUE,
         .storagePushConstant16 = VK_TRUE,
         .variablePointersStorageBuffer = VK_TRUE,
         .variablePointers = VK_TRUE,
+        .shaderDrawParameters = VK_TRUE,
     };
     VkDeviceCreateInfo createInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -191,7 +195,10 @@ static VkDevice CreateLogicalDevice(const DeviceInfo& devInfo, const DeviceCreat
 static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
     VkDebugUtilsMessageTypeFlagsEXT type,
-    const VkDebugUtilsMessengerCallbackDataEXT* data, void* pUserData) {
+    const VkDebugUtilsMessengerCallbackDataEXT* data, void* pUserData
+) {
+    if (severity <= VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT && data->pMessageIdName && strcmp(data->pMessageIdName, "Loader Message") == 0) return VK_FALSE;
+
     // clang-format on
     auto ctx = (DeviceContext*)pUserData;
 
@@ -200,15 +207,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
                      (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)   ? LogLevel::Error :
                                                                                     LogLevel::Debug;
 
-    std::string tags = "";
-
-    if (type & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) tags += "validation";
-    if (type & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT) tags += "perf";
-    if (type & VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT) tags += "dev-addr";
-
-    if (!tags.empty()) tags += ": ";
-
-    ctx->Log(level, "%s%s", tags.data(), data->pMessage);
+    ctx->Log(level, "%s", data->pMessage);
 
     if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         //__builtin_debugtrap();
@@ -253,12 +252,15 @@ DeviceContextPtr Create(DeviceCreateParams pars) {
         .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
                            VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
         .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT,
+                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
         .pfnUserCallback = DebugCallback,
         .pUserData = ctx.get(),
     };
 
-    if (pars.EnableDebugLayers && IsSupportedLayer("VK_LAYER_KHRONOS_validation")) {
+    if (!IsSupportedLayer("VK_LAYER_KHRONOS_validation")) {
+        pars.EnableDebugLayers = false;
+    }
+    if (pars.EnableDebugLayers) {
         enabledLayers.push_back("VK_LAYER_KHRONOS_validation");
         pars.RequiredInstanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
