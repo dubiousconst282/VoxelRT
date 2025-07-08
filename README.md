@@ -5,16 +5,13 @@ Voxel rendering experiments
 
 ### Implementations
 - PlainDDA: Incremental DDA over flat grid
-- MultiDDA: Incremental DDA over 2-level grid (8³ bricks)
-- eXtendedBrickMap: Space skipping over 3-level grid + 4³ occupancy bitmasks (4³ sectors -> 8³ bricks)
+- MultiDDA: Incremental DDA over 2-level grid (top grid contains bricks, bricks contain 8³ voxels)
+- eXtendedBrickMap: Space skipping over 3-level grid + 4³ occupancy bitmasks (sectors contain 4³ bricks, bricks contain 8³ voxels)
 - ManhattanDF/EuclideanDF: Space skipping over tiled 256³ distance fields at 1:4 resolution + 4³ occupancy bitmasks
 - OctantDF: Space skipping over tiled 256³ 8-directional distance fields at 1:4 resolution + 4³ occupancy bitmasks
 - ESVO: Port of "Efficient Sparse Voxel Octrees", no contours, no beam optimization
-- Tree64: Sparse voxel 4³-tree
+- Tree64: Sparse voxel tree with 4³ branching factor (aka. contree)
 - StdBVH: Standard binary BVH + DDA over 8³ brick leafs
-
-TODO:
-- CWBVH: Compressed 8-wide BVH + DDA over 8³ brick leafs
 
 ### Characteristics
 
@@ -22,17 +19,20 @@ TODO:
 |-----------|---------------|---------------|---------------|-----------------------|-------------------|
 | PlainDDA  | none          | 1 bit per 1³  | O(1)          | good start point      |not fast enough    |
 | MultiDDA  | space part    | 1 bit per 1³ +<br>1 bit per 8³  | O(1)          | good perf rel.<br> simplicity |simd divergence    |
-| XBrickMap | space part    | 8³ bits per brick +<br> 12 bytes per sector | ~O(1), *1| ? | ?   |
-| ManhattanDF| ray march    | 1 byte per 4³ +<br> 1 bit per 1³ | O(m)    | ?     | mem/gen cost |
-| EuclideanDF| ray march    | 2 bytes per 4³ +<br> 1 bit per 1³ | O(m)    | ?     | mem/gen cost |
-| OctantDF   | ray march    | 8 bytes per 4³ +<br> 1 bit per 1³ | O(m)    | ?     | mem/gen cost |
-| ESVO      | space part    | ~4 bytes per node | ~O(log m), *2   | contours?        | ~~hard to edit~~      |
-| Tree64    | space part    | 12 bytes per node | ~O(log m), *2   | lower overhead<br>vs octrees | ~~hard to edit~~ |
-| StdBVH  | geom part       | 16 bytes per node +<br> 8³ bits per brick | ?         | flexible, <br>widely researched | ?       |
-| CWBVH   | geom part       | 80 bytes per node +<br> 8³ bits per brick | ?         | TBD                    | ?       |
+| XBrickMap | space part    | 8³ bits per brick +<br> 12 bytes per sector | ~O(1), *1|good perf rel.<br> simplicity| ?   |
+| ManhattanDF| ray march    | 1 byte per 4³ +<br> 1 bit per 1³ | O(m)    | ?     | mem/build cost |
+| EuclideanDF| ray march    | 2 bytes per 4³ +<br> 1 bit per 1³ | O(m)    | ?     | mem/build cost |
+| OctantDF   | ray march    | 8 bytes per 4³ +<br> 1 bit per 1³ | O(m)    | ?     | mem/build cost |
+| ESVO      | space part    | ~4 bytes per node | ~O(log m), *2 | contours?| ?      |
+| Tree64    | space part    | 12 bytes per node | ~O(log m), *2 | lower overhead<br>vs octrees | ? |
+| StdBVH  | geom part       | 16 bytes per node +<br> 8³ bits per brick | ? | out of grid transforms,<br>instancing, <br>widely researched | build cost |
 
 - *1: XBrickMap supports arbitrary edits within a brick, but insertions and deletions may require reallocations at sector level to make space for new bricks.
-- *2: Sparse trees can be more easily edited by [path copying](https://en.wikipedia.org/wiki/Persistent_data_structure#Path_copying), taking logarithmic time complexity. This is not implemented in this project, but a Rust implementation is available here: https://github.com/expenses/tree64
+- *2: Sparse trees can be more easily edited by [path copying](https://en.wikipedia.org/wiki/Persistent_data_structure#Path_copying), taking logarithmic time complexity. A Rust implementation of this is available here: https://github.com/expenses/tree64  
+  - On a separate project, a simpler pointer-based tree structure with even wider leaf nodes has shown little drawbacks over compressed nodes, and additional opportunities in material compression (palettes and tile hashing). However, this implementation remains using a brickmap as the main storage, and backends simply convert from it.
+  - The Tree64 backend uses a traditional chunk hierarchy for bookkeeping, and trees within each chunk are fully rebuilt upon changes.
+
+In general, trees and BVHs are better suited for LODs, because chunks can be more easily scaled and are not fixed to a top-level grid.
 
 ---
 
@@ -164,7 +164,7 @@ Scene refs:
 ### Cursory overview and observations
 MultiDDA is a simple brickmap implementation that uses two nested DDA traversal loops to perform space skipping, one at 8³ scale and the other at voxel scale. Despite its simplicity, it performs surprisingly well relative to other techniques when considering only primary rays, and even though skips are limited to only one scale.
 
-The poor performance with incoherent rays happens due to control-flow divergence when entering the inner traversal loop, since not all SIMD lanes will hit a brick at the same time as the others and thus become "stalled" for the duration of the inner loop. Other methods are not immune to incoherent rays due to poor memory access patterns, but divergence in this particular case has a significant impact.
+The poor performance with incoherent rays happens due to control-flow divergence when entering the inner traversal loop, since not all SIMD lanes will hit a brick at the same time as the others and thus become "stalled" for the duration of the inner loop. Other methods are not immune to incoherent rays due to poor memory access patterns, but divergence in this particular case has a significant impact (indicating compute is a bottleneck).
 
 I tried to mitigate divergence in two ways by following ideas from BVH traversal literature, without much success. The first attempt was to use wave intrinsics to postpone the inner traversal until enough lanes were active; the second, was to un-nest and pair the DDA loops, such that the inner DDA runs only after the brick DDA finds a hit, following control flow re-convergence.
 
@@ -172,13 +172,13 @@ I tried to mitigate divergence in two ways by following ideas from BVH traversal
 
 XBrickMap attempts to improve on the idea of skipping through multiple grid levels by taking advantage of tiled bitmasks to perform more general hierarchical skips, using bitwise tests to identify sub-sections of empty voxels (as in 4³, 2³, 1³ cuboids). The bitmasks are also used to omit empty bricks within each sector (left-packing) for additional memory savings. Random access is made possible by using _popcnt_ instructions to count the number of preeceding entries at any given index.
 
-Traversal was implemented using an algorithm similar to ray marching. At each iteration, voxel positions are computed by intersecting with the three back-facing cube planes, then the brickmap layers are queried in order to determine the step size. This is simpler and more efficient than DDA variants for stepping by arbitrary amounts, but requires workarounds such as biasing the intersection distances to prevent infinite backtracking due to floating-point limitations.
+Traversal was implemented using an algorithm similar to ray marching. At each iteration, voxel positions are computed by intersecting with the three front-facing cube planes, then the brickmap layers are queried in order to determine the step size. This is simpler and more efficient than DDA variants for stepping by arbitrary amounts, but requires workarounds such as biasing the intersection distances to prevent infinite backtracking due to floating-point limitations.
 
 ---
 
 Ray marching through distance fields is another very simple and intuitive traversal method, but the naive approach of storing one distance value per voxel is impractical for bigger grids due to the associated memory and especially bandwidth costs, the latter which becomes problematic even for primary rays as they lose coherence the furthest they get from origin. Moreover, traversal is not considerably shorter than that of methods relying on space partitioning (~8%), and pre-processing has a significant cost (10x more GPU time than XBrickMap).
 
-Memory costs can be reduced by lowering the field resolution, without much detriment to traversal efficiency. Following the theme of 64-bit masks, I picked 1:4 scale (one distance value per 64 voxels) combined with occupancy masks for the final implementation. The masks are queried whenever sampled distance values are zero.
+Memory costs can be reduced by lowering the field resolution, without much detriment to traversal efficiency. Following the theme of 64-bit masks, 1:4 scale (one distance value per 64 voxels) was chosen and combined with occupancy masks for the final implementation. The masks are queried whenever sampled distance values are zero.
 
 Dense areas with fine geometry (like foliage) are worst cases for ray traversal because they cause grazing rays to advance slowly, motivating the idea of "directional" or "anisotropic" distance fields. OctantDF implements this idea by creating 8 separate manhattan fields that each consider only voxels ahead of the associated ray octant direction (in other words, distances are only propagated across rows of opposing axis directions in respect to the octant). Compared to traditional distance fields, it lowers the overall number of iterations by ~20-25%, and increases throughput for incoherent rays by ~30-50% (why though?) - but ultimately it is still much worse than space-partitioning methods.
 
@@ -198,11 +198,9 @@ Traversal was at first implemented using top-down recursive DDA over bitmasks of
 
 Like in XBrickMap, I found that a ray marching algorithm was both simpler and faster, as it benefits from bitmasks for longer ray steps and is less prone to divergence. Initially, this performed very close to XBrickMap but did not surpass it until the two following optimizations (which combined, summed up to an 18% improvement).
 
-Further using group-shared memory for the ancestor node stack resulted in ~9% speedup compared to a "local" array variable (this trick had a surprisingly negative impact when applied to ESVO which was 120% slower, presumably due to its 4x bigger stack).
+Further using group-shared memory for the ancestor node stack resulted in ~9% speedup compared to a "local" array variable (this trick had a surprisingly negative impact when applied to ESVO, slowing it down by 120%, presumably due to its much bigger stack).
 
 Mirroring the coordinate system to the negative ray octant resulted in another 11% bump due to simplified intersection calculations (no need to offset face planes, simplified node bounds clamping).
-
-Apart from increased memory efficiency due to sparseness, the most interesting advantage trees have over grids might be support for arbitrary voxel scales and sub-divisions, as in dynamic details. Apart from LOD streaming, this could also be useful for things like instancing and animations, which can be implemented by simply indirecting leafs to different subtrees.
 
 ---
 
@@ -238,12 +236,22 @@ TODO: provide actual numbers, adhoc impl does not integrate with benchmark runne
 _Early screenshots of the CPU(bottom) and GPU(top) renderers, with 2-bounce diffuse lighting._
 
 ## Building
-Build requirements: CMake, Clang, Vulkan SDK. (clang-cl shipped with Visual Studio might also work.)  
-Run requirements: Vulkan 1.3 and AVX2.
+Build requirements: CMake, Clang, Vulkan SDK.  
+System requirements: Vulkan 1.3, AVX2, ReBAR or unified memory.
 
-```
+```bash
+# Windows
+cmake -S ./src -B ./build -DCMAKE_BUILD_TYPE=RelWithDebInfo -G Ninja
+cmake --build ./build
+
+# Linux
 cmake -S ./src -B ./build -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18 -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build ./build
 
+# Must launch from root folder, otherwise app will crash due to being unable to locate assets.
 ./build/VoxelRT/VoxelRT.exe
 ```
+
+Alternatively, open repository in VS Code with CMake Tools extension installed and press F5 to launch.
+
+Controls: `WASD`/`Space`/`LShift`/mouse drag for camera, `LCtrl` for brush editing.

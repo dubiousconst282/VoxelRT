@@ -11,7 +11,7 @@ public struct Node {
         get { return (PackedData[0] & 1) != 0; }
     }
     property uint ChildPtr {
-        get { return PackedData[0] >> 1; }
+        get { return PackedData[0] >> 2; }
     }
     property uint64_t PopMask {
         get { return PackedData[1] | uint64_t(PackedData[2]) << 32; }
@@ -21,7 +21,6 @@ public struct Node {
 public struct VoxelMap : IRayCastable {
     public uint TreeScale;
     public Node* TreeNodes;
-    public uint8_t* LeafData;
 
     public HitInfo RayCast(int3 worldOrigin, float3 rayPos, float3 rayDir, bool coarse) {
         // Multiply world origin separately to minimize float rounding errors.
@@ -119,7 +118,7 @@ public struct VoxelMap : IRayCastable {
         
         if (node.IsLeaf) {
             int childIdx = GetNodeCellIndex(pos, scaleExp);
-            hit.MaterialId = LeafData[node.ChildPtr + prefix_popcnt64(node.PopMask, childIdx)];
+            hit.MaterialId = ReadMaterialId(node, childIdx);
             hit.Pos = pos;
 
             float tmax = min(min(sideDist.x, sideDist.y), sideDist.z);
@@ -156,6 +155,24 @@ public struct VoxelMap : IRayCastable {
         float3 sideDist;
         int childIdx;
         int i;
+        bool skipNextHit = true; // true on first iteration so that self-intersections are ignored
+
+        // Clip rays starting outside tree
+        if (any(pos != origin)) {
+            float3 t0 = (float3(2.0f) - origin) * invDir;
+            float3 t1 = (float3(1.0f) - origin) * invDir;
+            float tmin = max(max(t0.x, t0.y), max(t0.z, 0.0f));
+            float tmax = min(min(t1.x, t1.y), t1.z);
+
+            pos = clamp(origin - abs(dir) * tmin, 1.0f, 1.9999999f);
+            sideDist = -t0; // negation corrects for normal calculation
+
+            // The first hit may be valid if we start outside the tree and
+            // there are voxels at the edges.
+            // By coincidence, setting this flag to false works to reject rays
+            // that do not intersect the tree without extra code.
+            skipNextHit = tmin >= tmax;
+        }
 
         for (i = 0; i < 256; i++) {
             if (coarse && i > 20 && node.IsLeaf) break;
@@ -171,7 +188,7 @@ public struct VoxelMap : IRayCastable {
                 scaleExp -= 2;
                 childIdx = GetNodeCellIndex(pos, scaleExp) ^ mirrorMask;
             }
-            if (BitTestHalf64(node.PopMask, childIdx, 1) && node.IsLeaf) break;
+            if (BitTestHalf64(node.PopMask, childIdx, 1) && node.IsLeaf && !skipNextHit) break;
 
             int advScaleExp = scaleExp;
 
@@ -198,6 +215,7 @@ public struct VoxelMap : IRayCastable {
                 nodeIdx = stack[scaleExp >> 1];
                 node = TreeNodes[nodeIdx];
             }
+            skipNextHit = false;
         }
         PERF_STAT_INC(TraversalIters, i);
         
@@ -207,7 +225,7 @@ public struct VoxelMap : IRayCastable {
         if (node.IsLeaf && scaleExp <= 21) {
             pos = GetMirroredPos(pos, dir, false);
 
-            hit.MaterialId = LeafData[node.ChildPtr + prefix_popcnt64(node.PopMask, childIdx)];
+            hit.MaterialId = ReadMaterialId(node, childIdx);
             hit.Pos = pos;
 
             float tmax = min(min(sideDist.x, sideDist.y), sideDist.z);
@@ -352,7 +370,7 @@ public struct VoxelMap : IRayCastable {
         hit.MaterialId = 0;
         
         if (node->IsLeaf) {
-            hit.MaterialId = LeafData[node->ChildPtr + prefix_popcnt64(node->PopMask, currIdx)];
+            hit.MaterialId = ReadMaterialId(*node, currIdx);
             hit.Pos = origin + tmin * dir;
 
             bool3 sideMask = stepIdx == int3(1, 16, 4);
@@ -362,6 +380,10 @@ public struct VoxelMap : IRayCastable {
         return hit;
     }
 
+    uint8_t ReadMaterialId(Node node, uint childIdx) {
+        uint8_t* data = (uint8_t*)TreeNodes;
+        return data[node.ChildPtr * 4 + prefix_popcnt64(node.PopMask, childIdx)];
+    }
     static int GetNodeCellIndex(float3 pos, int scale_exp) {
         uint3 cellPos = asuint(pos) >> scale_exp & 3;
         return cellPos.x + cellPos.z * 4 + cellPos.y * 16;

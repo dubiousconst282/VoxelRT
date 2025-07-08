@@ -238,7 +238,7 @@ struct VoxelMap {
     static constexpr glm::ivec3 MaxPos = WorldSectorIndexer::MaxPos * MaskIndexer::Size * BrickIndexer::Size;
 
     std::unordered_map<uint32_t, Sector> Sectors;
-    std::map<uint32_t, uint64_t> DirtyLocs;         // 4x4x4 masks of dirty bricks
+    std::unordered_map<uint32_t, uint64_t> DirtyLocs;         // 4x4x4 masks of dirty bricks
 
     Material Palette[256] {};
 

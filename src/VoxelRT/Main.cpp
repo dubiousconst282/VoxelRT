@@ -137,9 +137,11 @@ public:
         _renderer->DrawSettings(_settings);
         ImGui::PopID();
 
-        if (auto gpur = dynamic_cast<GpuRenderer*>(_renderer.get())) {
-            ImGui::SeparatorText("Stats");
+        ImGui::SeparatorText("Stats");
+        float framerate = ImGui::GetIO().Framerate;
+        ImGui::Text("Frame: %.2fms (%.1f FPS)", 1000.0 / framerate, framerate);
 
+        if (auto gpur = dynamic_cast<GpuRenderer*>(_renderer.get())) {
             auto stats = gpur->LastFrameStats;
 
             double elapsedMs = (stats.Counters[FramePerfStats::Frame_EndTS] - stats.Counters[FramePerfStats::Frame_StartTS]) / 1000000.0;
@@ -148,9 +150,6 @@ public:
             double elapsedDevMs;
             renderTimeHist.AddSample(elapsedMs);
             renderTimeHist.GetElapsedMs(elapsedMs, elapsedDevMs);
-
-            float framerate = ImGui::GetIO().Framerate;
-            ImGui::Text("Frame: %.2fms (%.1f FPS)", 1000.0 / framerate, framerate);
 
             double raysPerSec = stats.Counters[FramePerfStats::RayCasts] * (1000.0 / elapsedMs);
             ImGui::Text("Render: %.2fms (%.2fmrays/s)", elapsedMs, raysPerSec / 1000000.0);
