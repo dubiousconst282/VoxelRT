@@ -39,13 +39,16 @@ uint64_t GetClusterKey(glm::ivec3 pos) {
     return _pdep_u64(u.x, 0x00C30C30C30C30C3ull) |  // 0b0_000...00_00_11
            _pdep_u64(u.z, 0x030C30C30C30C30Cull) |  // 0b0_000...00_11_00
            _pdep_u64(u.y, 0x0C30C30C30C30C30ull);   // 0b0_000...11_00_00
-#endif
+#else
     // https://forceflow.be/2013/10/07/morton-encodingdecoding-through-bit-interleaving-implementations/
-    u = (u | (u << 32ull)) & 0x000F00000000FFFFull;
-    u = (u | (u << 16ull)) & 0x000F0000FF0000FFull;
-    u = (u | (u << 8ull))  & 0x000F00F00F00F00Full;
-    u = (u | (u << 4ull))  & 0x00C30C30C30C30C3ull;
+    for (int i = 0; i < 3; i++) {
+          u[i] = (u[i] | (u[i] << 32ull)) & 0x000F00000000FFFFull;
+          u[i] = (u[i] | (u[i] << 16ull)) & 0x000F0000FF0000FFull;
+          u[i] = (u[i] | (u[i] << 8ull))  & 0x000F00F00F00F00Full;
+          u[i] = (u[i] | (u[i] << 4ull))  & 0x00C30C30C30C30C3ull;
+    }
     return u.x | (u.z << 2) | (u.y << 4);
+#endif
 }
 
 // Left-pack bytes according to mask. Leading values are undefined.
